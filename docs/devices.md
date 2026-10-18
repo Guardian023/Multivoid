@@ -392,6 +392,7 @@ state it shows, and the first rows a world takes play no sound.
 
 | Limit | Evidence |
 |---|---|
+| Cord links are read from keyed `prop_corded_C` actors; the host relays each change and replays a snapshot for a joiner. This lane has not yet been exercised in a two-peer game run | `[RD]` the cord and socket Blueprint call surface; `[?]` `coop/interactables/cord_sync`, `ue_wrap/devices/cord` |
 | A client's light-group index has been reported dropping to zero after a join; not reproduced | `[?]` [issue 11](https://github.com/VOTV-MP/Multivoid/issues/11) |
 
 ## Code map
@@ -399,6 +400,7 @@ state it shows, and the first rows a world takes play no sound.
 | Concept | Files |
 |---|---|
 | the engine and the adapters | `coop/interactables/interactable_channel.h`, `coop/interactables/interactable_sync`, `coop/interactables/door_verb_intent`, `coop/interactables/door_state_verbs`, `coop/interactables/toggle_verbs`, `coop/interactables/verb_lanes`, `ue_wrap/devices/door`, `ue_wrap/devices/door_box`, `ue_wrap/devices/lightswitch`, `ue_wrap/devices/garage`, `ue_wrap/devices/appliance` |
+| cords and sockets | `coop/interactables/cord_sync`, `ue_wrap/devices/cord` |
 | security cameras | `coop/interactables/camera_toggle_intent`, `coop/interactables/toggle_verbs`, `coop/interactables/interactable_sync`, `ue_wrap/devices/security_camera` |
 | keypads | `coop/interactables/keypad_sync`, `ue_wrap/devices/passwordlock` |
 | power, turbine, windows, grime | `coop/world/power_panel`, `coop/world/power_grid`, `ue_wrap/devices/generator`, `coop/interactables/turbine_sync`, `coop/interactables/window_sync`, `coop/interactables/grime_sync`, `ue_wrap/devices/power_control`, `ue_wrap/devices/windturbine`, `ue_wrap/devices/base_window`, `ue_wrap/devices/grime` |

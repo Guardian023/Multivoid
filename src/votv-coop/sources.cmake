@@ -80,6 +80,7 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/engine/engine_playerragdoll.cpp
     src/ue_wrap/engine/engine_attach.cpp
     src/ue_wrap/devices/door.cpp
+    src/ue_wrap/devices/cord.cpp
     src/ue_wrap/devices/base_window.cpp
     src/ue_wrap/devices/window_canvas.cpp
     src/ue_wrap/devices/grime.cpp
@@ -232,6 +233,7 @@ set(VOTVCOOP_SOURCES
     src/coop/interactables/turbine_sync.cpp
     src/coop/interactables/upgrade_sync.cpp
     src/coop/interactables/interactable_sync.cpp
+    src/coop/interactables/cord_sync.cpp
     src/coop/creatures/kerfur_convert.cpp
     src/coop/creatures/kerfur_convert_client.cpp
     src/coop/creatures/kerfur_convert_host.cpp

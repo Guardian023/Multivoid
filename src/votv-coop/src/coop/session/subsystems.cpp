@@ -87,6 +87,7 @@
 #include "coop/session/join_beacon.h"
 #include "coop/interactables/grime_sync.h"
 #include "coop/interactables/interactable_sync.h"
+#include "coop/interactables/cord_sync.h"
 #include "coop/interactables/atv_sync.h"
 #include "coop/interactables/drone_sync.h"
 #include "coop/items/coingun_sync.h"
@@ -218,6 +219,7 @@ void Install(coop::net::Session& session) {
     coop::player_damage::Install(&session);  // the refusals on a peer's puppet: its impacts, damage, fire and hit verbs
     coop::weather_sync::Install(&session);  // weather
     coop::interactable_sync::Install(&session);  // doors + lights + container lids
+    coop::cord_sync::Install(&session);  // corded props and socket links
     coop::keypad_sync::Install(&session);  // the password keypads' index and wire (its own module)
     coop::time_sync::Install(&session);  // host-authoritative world clock (time-of-day / dark-world fix)
     coop::sky_sync::Install(&session);  // host-authoritative night-sky orientation, moon phase and eye
@@ -367,6 +369,7 @@ void ConnectReplayForSlot(int slot) {
     coop::item_activate::QueueConnectBroadcastForSlot(slot);
     coop::weather_sync::QueueConnectBroadcastForSlot(slot);
     coop::interactable_sync::QueueConnectBroadcastForSlot(slot);  // door/light/container states
+    coop::cord_sync::QueueConnectBroadcastForSlot(slot);
     coop::keypad_sync::QueueConnectBroadcastForSlot(slot);  // keypad states
     coop::sky_sync::QueueConnectBroadcastForSlot(slot);  // night-sky orientation, moon phase, eye
     coop::power_grid::QueueConnectBroadcastForSlot(slot);  // the generators' rows, before the panel they gate
@@ -553,6 +556,7 @@ DisconnectStats DisconnectAll() {
     coop::explosion_sync::OnDisconnect();  // the class table and the counters, and the request lane's queues, shot tables and client state
     coop::explosion_parking::OnDisconnect();  // the counters, after a summary
     coop::interactable_sync::OnDisconnect();
+    coop::cord_sync::OnDisconnect();
     coop::keypad_sync::OnDisconnect();
     coop::time_sync::OnDisconnect();
     coop::sky_sync::OnDisconnect();
@@ -684,6 +688,7 @@ void TickGameplay(coop::net::Session& session, bool isConnected, bool isHost,
       coop::prop_element_tracker::InstallReseedScanConsumer();
       coop::prop_element_tracker::DrainReseedQueue(); }
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:interactable"}; coop::interactable_sync::Tick(); }  // retry deferred door/light/container applies (still streaming in)
+    { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:cord"}; coop::cord_sync::Tick(); }
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:keypad"}; coop::keypad_sync::Tick(); }  // a keypad state that arrived before its keypad was indexed
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:time"}; coop::time_sync::Tick(); }  // the world clock: the host hands the net thread a sample when one is due; the client applies at its cycle's own tick
     { PP::Scope _s{PP::Bucket::Interactable}; ue_wrap::ScopedWalkTimer _w{"sync:sky"}; coop::sky_sync::Tick(); }  // night-sky: the eye gate's name (both roles), then the host's throttled push

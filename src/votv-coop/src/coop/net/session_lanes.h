@@ -274,6 +274,7 @@ constexpr bool IsClientRelayableReliableKind(ReliableKind k) {
     // as DoorVerbIntent, an intent addressed to the host alone. PowerControlState likewise: a press
     // reaches the host alone and the host authors the canonical.
     case ReliableKind::LightState:
+    case ReliableKind::CordLinkState:
     case ReliableKind::ContainerState:
     case ReliableKind::GarageDoorState:   // symmetric
     case ReliableKind::ApplianceState:    // symmetric
