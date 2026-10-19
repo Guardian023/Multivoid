@@ -17,6 +17,9 @@
 
 #include "coop/net/protocol.h"
 
+#include <cstdint>
+#include <string>
+
 namespace coop::net { class Session; }
 
 namespace coop::swinger_join_pose {
@@ -35,5 +38,12 @@ void Tick();
 
 // Session end: forgets every parked pose.
 void OnDisconnect();
+
+namespace dev {   // called only from src/coop/dev/ (the swinger drill); compiled always, inert unless called
+// How the last rest pose for `key` stands: None (none arrived), Pending (parked), Applied (the lid was placed) or
+// Dropped (a stream or a local drag owned the lid, or the wait ran out).
+enum class State : uint8_t { None, Pending, Applied, Dropped };
+State Outcome(const std::wstring& key);
+}  // namespace dev
 
 }  // namespace coop::swinger_join_pose

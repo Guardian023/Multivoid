@@ -9,6 +9,7 @@
 #include "coop/dev/director/director.h"
 #include "coop/dev/director/routes.h"
 #include "coop/dev/drill_chat_pace.h"
+#include "coop/dev/swinger_drill_join.h"
 #include "coop/element/portable_identity.h"
 #include "coop/dev/toggle_drill.h"
 #include "coop/interactables/interactable_sync.h"
@@ -49,22 +50,28 @@ namespace R  = ue_wrap::reflection;
 namespace E  = ue_wrap::engine;
 namespace PR = ue_wrap::prop;
 namespace SW = ue_wrap::swinger;
+namespace J  = coop::dev::swinger_drill_join;
 using Clock = std::chrono::steady_clock;
+// The tolerances and the distance are shared with the joiner arm (swinger_drill_join.h).
+using J::Dist; using J::kRestDeg; using J::kRestCm; using J::kSettleDeg; using J::kSettleCm;
+using J::kSampleEvery; using J::kClientBound;
 
-enum class Arm { Off, Measure, Observe };
+enum class Arm { Off, Measure, Observe, Rejoin };
 enum class Step { Pick, WalkTo, Grab, Drag, Release, Tail, Echo, Done, Invalid };
 
 Arm ArmOf() {
     static const Arm a = [] {
         const std::string v = coop::config::ResolveEnum(::coop::config_registry::rows::swinger_drill);
-        return v == "measure" ? Arm::Measure : v == "observe" ? Arm::Observe : Arm::Off;
+        return v == "measure" ? Arm::Measure : v == "observe" ? Arm::Observe : v == "rejoin" ? Arm::Rejoin : Arm::Off;
     }();
     return a;
 }
 
-// The acting peer: the first client of the measure arm. The host, the observe arm and any later client only watch.
+bool Rejoin() { return ArmOf() == Arm::Rejoin; }   // measure for life 1, then the joiner arm (swinger_drill_join.h)
+
+// The acting peer: the first client of the measure and rejoin arms. The host, the observe arm and any later client only watch.
 bool Acts() {
-    return ArmOf() == Arm::Measure && !coop::roster::LocalIsHost() &&
+    return (ArmOf() == Arm::Measure || Rejoin()) && !coop::roster::LocalIsHost() &&
            coop::players::Registry::Get().LocalPeerId() <= 1;
 }
 const char* Role() {
@@ -84,25 +91,14 @@ constexpr int   kFeedEveryFirst = 30;
 constexpr int   kFeedEveryLater = 10;
 constexpr int   kHoldAfterSwingTicks = 60;
 constexpr auto  kScanEvery      = std::chrono::milliseconds(100);
-constexpr auto  kSampleEvery    = std::chrono::milliseconds(250);
 constexpr auto  kTail           = std::chrono::seconds(5);   // how long a lid that stopped moving is still sampled
 constexpr float kMovedDeg       = 0.5f;   // a mesh rotation that changed by more than this has moved
-constexpr float kRestDeg        = 0.3f;   // two reads this close in orientation and in place are the same: at rest
-constexpr float kRestCm         = 0.5f;
-constexpr auto  kClientBound    = std::chrono::seconds(60);   // a client step that waits on an edge fails after this
 constexpr const char* kTag      = "[swing-drill] ";   // the chat lines: grab, settled, verdict
 // The verdict. The client's door must turn kSwingDeg or the run is INVALID; a peer passes when its own door turned
 // kFollowDeg during the drag and rests within kSettleDeg of where the client's door rested.
 constexpr float kSwingDeg       = 15.f;
 constexpr float kFollowDeg      = 10.f;
-constexpr float kSettleDeg      = 3.f;
-constexpr float kSettleCm       = 5.f;    // and within this of where the client's door came to rest
 constexpr auto  kJudgeBound     = std::chrono::seconds(60);   // a watcher that hears nothing new this long judges as it stands
-
-float Dist(const ue_wrap::FVector& a, const ue_wrap::FVector& b) {
-    const float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
-    return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
 
 // ---- The lids: every peer watches every non-lockable lid its world holds ------------------------------
 
@@ -206,7 +202,7 @@ void PrintRx() {
 // carry no phase, so a watching peer judges on these lines and never on a gap in the stream. The host admits a
 // client's chat at a fixed rate, so a peer's lines go out one per kTalkEveryMs.
 
-enum class Phase { Grab, Settled, Verdict };
+enum class Phase { Grab, Settled, Verdict, Go, Rest };
 struct ChatEvent {
     unsigned long long key;
     Phase what;
@@ -220,6 +216,7 @@ size_t g_outNext = 0;
 uint64_t g_nextSayMs = 0;
 unsigned long long g_chatMark = 0;   // the feed's newest row when the drill armed: older rows are another run's
 bool g_hostVerdict = false;   // the client has seen the host's verdict line
+bool g_go = false;            // the client has heard the host's `go` (the rejoin arm picks no lid before)
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(
@@ -246,11 +243,12 @@ std::vector<ChatEvent> NewChat() {
     unsigned long long top = g_chatMark;
     coop::chat_feed::ForEachRow([&](const coop::chat_feed::RowView& r) {
         const size_t at = r.line.find(kTag);
-        if (r.key <= g_chatMark || at == std::string_view::npos) return;
+        if (r.key <= g_chatMark || at == std::string_view::npos || (Rejoin() && r.retained)) return;   // a past life's row
         top = (std::max)(top, r.key);
         const std::string rest(r.line.substr(at + std::strlen(kTag)));
         ChatEvent e{r.key, Phase::Verdict, {}, {}, {}};
-        // "grab <lane key> <game Key>", "settled <pitch> <yaw> <roll>", "verdict <role> <PASS|FAIL|INVALID>".
+        // "grab <lane key> <game Key>", "settled <p> <y> <r> <x> <y> <z>", "verdict <role> <PASS|FAIL|INVALID>", and the
+        // host's word for a client that became world-ready: "go", or "rest <lane key> <p> <y> <r> <x> <y> <z>".
         std::vector<std::string> word;
         for (size_t from = 0; from < rest.size();) {
             const size_t sp = rest.find(' ', from);
@@ -258,8 +256,9 @@ std::vector<ChatEvent> NewChat() {
             from = sp == std::string::npos ? rest.size() : sp + 1;
         }
         float v[6] = {};
-        if (word.size() == 7 && word[0] == "settled")
-            for (int i = 0; i < 6; ++i) v[i] = std::strtof(word[static_cast<size_t>(i) + 1].c_str(), nullptr);
+        const bool isRest = word.size() == 8 && word[0] == "rest";
+        if ((word.size() == 7 && word[0] == "settled") || isRest)
+            for (int i = 0; i < 6; ++i) v[i] = std::strtof(word[static_cast<size_t>(i) + (isRest ? 2 : 1)].c_str(), nullptr);
         if (word.size() == 3 && word[0] == "grab") {
             if (word[1].empty() || word[2].empty()) {   // an empty key would match the first lid that has none
                 UE_LOGW("[SWING-DRILL] %s refuses a grab line with an empty key", Role());
@@ -272,6 +271,9 @@ std::vector<ChatEvent> NewChat() {
             e.what = Phase::Settled;
             e.rot = {v[0], v[1], v[2]};
             e.at = {v[3], v[4], v[5]};
+        } else if (isRest || (word.size() == 1 && word[0] == "go")) {
+            e.what = isRest ? Phase::Rest : Phase::Go;
+            if (isRest) { e.mv = word[1]; e.rot = {v[0], v[1], v[2]}; e.at = {v[3], v[4], v[5]}; }
         } else if (word.size() == 3 && word[0] == "verdict") {
             e.mv = word[1];
             e.gameKey = word[2];
@@ -370,6 +372,8 @@ void CheckKey(const ChatEvent& e) {
 }
 
 void OnChat(const ChatEvent& e) {
+    if (e.what == Phase::Go) { g_go = true; return; }   // the host has no verdict yet: the life-1 sequence
+    if (e.what == Phase::Rest) { if (Acts()) J::Begin(e.mv, e.rot, e.at); return; }   // its verdict is given: judge
     if (e.what == Phase::Verdict) {   // the client is done once the host has judged
         if (Acts() && e.mv == "host") g_hostVerdict = true;
         return;
@@ -555,6 +559,7 @@ void TickActor(Clock::time_point now) {
     if (!player || !R::IsLive(player) || !E::GetController(player)) return;
     switch (g_step) {
     case Step::Pick: {
+        if (Rejoin() && !g_go) return;   // the host's word first: a `rest` ends this life's drag before it starts
         const char* why = "";
         if (!PickTarget(player, why)) { Invalid(why); return; }
         g_walk = coop::director::StartBackgroundWalk(g_targetAt, kReachCm, kWalkDeadlineS, /*carry=*/false);
@@ -684,7 +689,7 @@ void TickActor(Clock::time_point now) {
             return;
         }
         PrintRx();
-        UE_LOGI("[SWING-DRILL] client DONE: the door turned %.1f deg at its peak", g_peakDev);
+        UE_LOGI("[SWING-DRILL] client %s: the door turned %.1f deg at its peak", Rejoin() ? "LIFE DONE" : "DONE", g_peakDev);
         g_step = Step::Done;
         g_walk.reset();
         g_grab.reset();
@@ -709,12 +714,15 @@ void Tick(coop::net::Session* session) {
              coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle))
             return;
         ArmWatch();
-        MarkChat();
+        if (!Rejoin()) MarkChat();   // the rejoin arm tells a past life's rows by their tier instead
     }
     const Clock::time_point now = Clock::now();
     PumpOutbox();
+    if (Rejoin() && coop::roster::LocalIsHost())   // the host's word to each client that became world-ready
+        J::GreetReadySlots(*session, g_v.said && g_v.lid >= 0 ? g_lids[static_cast<size_t>(g_v.lid)].laneKey : std::wstring(), &SayLine);
     TickWatch(now);
-    if (Acts()) TickActor(now);
+    if (Acts() && !J::Active()) TickActor(now);
+    J::Tick(now);
 }
 
 void OnDisconnect() {
@@ -731,7 +739,8 @@ void OnDisconnect() {
     g_outNext = 0;
     g_nextSayMs = 0;
     g_chatMark = 0;
-    g_hostVerdict = false;
+    g_hostVerdict = g_go = false;
+    J::Reset();
     g_haveRead = g_releaseEdge = false;
     g_target.Reset();
     g_walk.reset();

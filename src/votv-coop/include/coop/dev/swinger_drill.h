@@ -1,13 +1,13 @@
 // coop/dev/swinger_drill.h -- [dev] what a dragged hinge door (prop_swinger_C) shows on the other peers: the game
 // leaves a dragged swinger in the player's grabbing_actor, so the held-item stream carries its pose.
-//   ini swinger_drill=off|measure|observe / env VOTVCOOP_SWINGER_DRILL.
+//   ini swinger_drill=off|measure|observe|rejoin / env VOTVCOOP_SWINGER_DRILL.
 //   measure -- the host and the acting client (the first client). The client walks (bot director) to a non-lockable
 //              lid its NavMesh reaches, one whose game Key differs between processes first, and grabs it through the
 //              player's own grab chain. It feeds the player's input_mouseXY dispatcher, the delta doubling to a cap
 //              on each sign in turn ((-,-), (+,-), (-,+), (+,+): a lid's spring holds it at its open limit) until the
 //              door has turned. It lets go and, once its door has come to rest (the stream releases it only then),
 //              says so in the lobby chat with the rotation and place it rests at; its DONE follows the host's verdict.
-//   observe -- a second client (any later client does the same), which only watches.
+//   observe -- a second client (any later client does the same), which only watches. rejoin -- measure, then the joiner arm (swinger_drill_join.h).
 // The client's chat lines (grab with the lid's two keys, settled, each on a state edge) and the poses a watching
 // peer takes are what it judges on: PASS when its copy of the door turned 10 degrees during the drag and, once at rest,
 // lies within 3 degrees (the angle between the two quaternions) and 5 cm of where the client's door rests; a client door that

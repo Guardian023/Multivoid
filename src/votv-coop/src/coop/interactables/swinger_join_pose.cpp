@@ -44,22 +44,25 @@ constexpr size_t kPendingCap = 256;
 std::unordered_map<std::wstring, Pending> g_pending;
 uint64_t g_lastPass = 0;
 bool g_capSaid = false;
+// How each key's last pose ended: true placed, false dropped (a stream or a drag owned the lid, or the wait ran
+// out). Read by the dev query only; bounded by the keys the host sends, and cleared with the session.
+std::unordered_map<std::wstring, bool> g_ended;
 
-enum class Outcome { Applied, Owned, Wait };
+enum class Try { Applied, Owned, Wait };
 
 // Puts the lid at the host's place when it resolves and reads open: a physics teleport with zero velocity that
 // leaves it simulating, so it rests where the host's copy does.
-Outcome TryApply(const std::wstring& key, const Rest& rest) {
+Try TryApply(const std::wstring& key, const Rest& rest) {
     void* const lid = coop::interactable_sync::ContainerActor(key);
     bool open = false;
-    if (!lid || !ue_wrap::swinger::TryReadOpen(lid, open) || !open) return Outcome::Wait;
-    if (coop::remote_prop::IsOwnedHere(lid)) return Outcome::Owned;
+    if (!lid || !ue_wrap::swinger::TryReadOpen(lid, open) || !open) return Try::Wait;
+    if (coop::remote_prop::IsOwnedHere(lid)) return Try::Owned;
     const bool moved = ue_wrap::engine::SetActorLocation(lid, rest.loc) &&
                        ue_wrap::engine::SetActorRotation(lid, rest.rot);
     ue_wrap::engine::SetActorRootPhysicsVelocity(lid, ue_wrap::FVector{}, ue_wrap::FVector{});
     UE_LOGI("swinger_join_pose: '%ls' placed at (%.1f, %.1f, %.1f) rot(%.1f, %.1f, %.1f) ok=%d", key.c_str(),
             rest.loc.X, rest.loc.Y, rest.loc.Z, rest.rot.Pitch, rest.rot.Yaw, rest.rot.Roll, moved ? 1 : 0);
-    return Outcome::Applied;
+    return Try::Applied;
 }
 
 }  // namespace
@@ -97,14 +100,16 @@ void OnReliable(const coop::net::SwingerRestPosePayload& p) {
     const std::wstring key = coop::net::StringFromWireKey(p.key);
     const Rest rest{ue_wrap::FVector{p.locX, p.locY, p.locZ}, ue_wrap::FRotator{p.rotPitch, p.rotYaw, p.rotRoll}};
     switch (TryApply(key, rest)) {
-    case Outcome::Applied:
+    case Try::Applied:
         g_pending.erase(key);
+        g_ended[key] = true;
         return;
-    case Outcome::Owned:
+    case Try::Owned:
         g_pending.erase(key);
+        g_ended[key] = false;
         UE_LOGI("swinger_join_pose: '%ls' is driven here now -- its stream owns it, the rest pose is dropped", key.c_str());
         return;
-    case Outcome::Wait:
+    case Try::Wait:
         break;
     }
     if (g_pending.size() >= kPendingCap && g_pending.find(key) == g_pending.end()) {
@@ -114,6 +119,7 @@ void OnReliable(const coop::net::SwingerRestPosePayload& p) {
         }
         return;
     }
+    g_ended.erase(key);
     g_pending[key] = Pending{rest, coop::interactable_sync::ContainerIndexPasses(),
                              std::chrono::steady_clock::now() + coop::interactable_sync::ContainerWaitBackstop()};
 }
@@ -126,15 +132,18 @@ void Tick() {
     g_lastPass = pass;
     const auto now = std::chrono::steady_clock::now();
     for (auto it = g_pending.begin(); it != g_pending.end();) {
-        if (TryApply(it->first, it->second.rest) != Outcome::Wait) {
+        if (const Try t = TryApply(it->first, it->second.rest); t != Try::Wait) {
+            g_ended[it->first] = t == Try::Applied;
             it = g_pending.erase(it);
         } else if (coop::interactable_sync::ContainerWaitSettled(it->second.queuedAt)) {
             UE_LOGW("swinger_join_pose: '%ls' rest pose dropped -- the container index settled and this peer's lid "
                     "is absent or never read open", it->first.c_str());
+            g_ended[it->first] = false;
             it = g_pending.erase(it);
         } else if (now >= it->second.deadline) {
             UE_LOGW("swinger_join_pose: '%ls' rest pose hit the backstop -- the container index never settled",
                     it->first.c_str());
+            g_ended[it->first] = false;
             it = g_pending.erase(it);
         } else {
             ++it;
@@ -142,8 +151,17 @@ void Tick() {
     }
 }
 
+namespace dev {
+State Outcome(const std::wstring& key) {
+    if (g_pending.count(key)) return State::Pending;
+    const auto it = g_ended.find(key);
+    return it == g_ended.end() ? State::None : it->second ? State::Applied : State::Dropped;
+}
+}  // namespace dev
+
 void OnDisconnect() {
     g_pending.clear();
+    g_ended.clear();
     g_lastPass = 0;
     g_capSaid = false;
 }
