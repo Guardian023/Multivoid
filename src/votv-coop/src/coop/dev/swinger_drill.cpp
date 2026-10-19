@@ -69,11 +69,13 @@ constexpr int   kPickRoutes     = 6;      // the nearest lids whose route is ask
 constexpr float kRouteEndReachCm = 160.f; // a route that ends further from the lid reaches no lid
 constexpr float kReachCm        = 130.f;  // the director's stop distance from the lid, level
 constexpr int   kWalkDeadlineS  = 300;    // a long first walk from a New Game start (the fireext drill's)
-// The drag: the client turns its own door, held, kTurnDeg about its hinge over kTurnTime, and holds it there for
-// kHoldTime before it lets go.
-constexpr float kTurnDeg        = 30.f;
-constexpr auto  kTurnTime       = std::chrono::milliseconds(1500);
-constexpr auto  kHoldTime       = std::chrono::milliseconds(1000);
+// The feed (see the drag below): it starts at kFeedStart per axis and doubles every kFeedEvery* ticks, kFeedDoublings
+// times, to the cap; once the client's own door has turned kSwingDeg it holds for kHoldAfterSwingTicks more.
+constexpr float kFeedStart      = 3.f;
+constexpr int   kFeedDoublings  = 11;     // 3 * 2^11 = 6144
+constexpr int   kFeedEveryFirst = 30;
+constexpr int   kFeedEveryLater = 10;
+constexpr int   kHoldAfterSwingTicks = 60;
 constexpr int   kSettleTicks    = 30;     // the second hold's ticks: the client's settled pose crosses
 constexpr auto  kLastWait       = std::chrono::seconds(1);
 constexpr auto  kScanEvery      = std::chrono::milliseconds(100);
@@ -352,75 +354,25 @@ void LogTarget(const char* what) {
 
 // ---- The drag --------------------------------------------------------------------------------------------
 //
-// The drill turns the client's own door itself while the client holds it: an injected mouse feed was measured not
-// to swing this door (its own graph's torque never moved it), and what is proved here is that the held-item
-// stream carries a dragged door's motion and the receivers follow it. The game's own drag with a real mouse is a
-// hands-on check. The mesh goes kinematic and is turned about its hinge from its rest pose; the held-item stream
-// then carries those poses as it carries any held actor's.
+// The client feeds the player's input_mouseXY dispatcher while it holds the door. A non-lockable lid reads
+// `opened 1` and its spring holds it at the open limit, so a feed that pushes into that limit moves nothing: the
+// sign is searched. The first sign ramps slowly from kFeedStart to kFeedCap; each later one ramps faster. The
+// door's physics stays on throughout, since the grab's physics handle needs a simulating body. The held-item
+// stream then carries the door's motion as it carries any held actor's.
 
-struct Turn {
-    bool on = false;                          // the mesh is kinematic, and turned by this drill
-    ue_wrap::FVector restLoc{}, pivot{}, axis{0.f, 0.f, 1.f};
-    ue_wrap::FRotator restRot{};
-    Clock::time_point start{};
-};
-Turn g_turn;
+struct FeedSign { float x, y; };
+constexpr FeedSign kSigns[] = {{-1.f, -1.f}, {1.f, -1.f}, {-1.f, 1.f}, {1.f, 1.f}};
+constexpr int kSignCount = static_cast<int>(sizeof(kSigns) / sizeof(kSigns[0]));
 
-Quat Mul(const Quat& a, const Quat& b) {   // Hamilton product: b first, then a
-    return {a.w * b.x + b.w * a.x + a.y * b.z - a.z * b.y, a.w * b.y + b.w * a.y + a.z * b.x - a.x * b.z,
-            a.w * b.z + b.w * a.z + a.x * b.y - a.y * b.x, a.w * b.w - a.x * b.x - a.y * b.y - a.z * b.z};
-}
-ue_wrap::FVector Rotate(const Quat& q, const ue_wrap::FVector& v) {
-    const float tx = 2.f * (q.y * v.Z - q.z * v.Y), ty = 2.f * (q.z * v.X - q.x * v.Z),
-                tz = 2.f * (q.x * v.Y - q.y * v.X);
-    return {v.X + q.w * tx + (q.y * tz - q.z * ty), v.Y + q.w * ty + (q.z * tx - q.x * tz),
-            v.Z + q.w * tz + (q.x * ty - q.y * tx)};
-}
+int   g_sign = 0, g_signTicks = 0;   // the sign being fed, and how long
+bool  g_swung = false;
+int   g_swungAtTick = 0;
+float g_feedX = 0.f, g_feedY = 0.f;  // the feed now
 
-// Take the door's rest pose and its hinge, then stop its simulation. The pivot is the PhysicsConstraint component's
-// world location and the axis the door's own getAxis() (ue_wrap/actors/swinger); a hinge part that does not read
-// falls back to the root's own origin and the root's up vector, said in the log.
-bool BeginTurn(void* door, Clock::time_point now) {
-    void* mesh = PR::GetStaticMesh(door);
-    if (!mesh || !E::TryGetActorLocation(door, g_turn.restLoc) || !E::TryGetActorRotation(door, g_turn.restRot))
-        return false;
-    SW::HingeFrame h;
-    SW::ReadHinge(door, h);
-    g_turn.pivot = h.pivotRead ? h.pivot : g_turn.restLoc;
-    g_turn.axis = h.axisRead ? h.axis : E::GetActorUpVector(door);
-    UE_LOGI("[SWING-DRILL] client hinge: pivot (%.1f, %.1f, %.1f) from %s | axis (%.3f, %.3f, %.3f) from %s",
-            g_turn.pivot.X, g_turn.pivot.Y, g_turn.pivot.Z,
-            h.pivotRead ? "the PhysicsConstraint component" : "NOTHING READ: the root's own origin",
-            g_turn.axis.X, g_turn.axis.Y, g_turn.axis.Z,
-            h.axisRead ? "getAxis()" : "NOTHING READ: the root's up vector");
-    E::SetComponentSimulatePhysics(mesh, false);
-    g_turn.on = true;
-    g_turn.start = now;
-    return true;
-}
-
-// The door `deg` degrees about its hinge from its rest pose: the root's location swings round the pivot and its
-// rotation takes the same turn.
-void ApplyTurn(void* door, float deg) {
-    const float half = deg * (3.14159265f / 360.f), s = std::sin(half);
-    const ue_wrap::FVector a = g_turn.axis;
-    const float len = std::sqrt(a.X * a.X + a.Y * a.Y + a.Z * a.Z);
-    if (len < 1e-4f) return;
-    const Quat turn{a.X / len * s, a.Y / len * s, a.Z / len * s, std::cos(half)};
-    const Quat q = Mul(turn, QuatOf(g_turn.restRot));
-    const ue_wrap::FVector rel{g_turn.restLoc.X - g_turn.pivot.X, g_turn.restLoc.Y - g_turn.pivot.Y,
-                               g_turn.restLoc.Z - g_turn.pivot.Z};
-    const ue_wrap::FVector r = Rotate(turn, rel);
-    E::SetActorLocation(door, ue_wrap::FVector{g_turn.pivot.X + r.X, g_turn.pivot.Y + r.Y, g_turn.pivot.Z + r.Z});
-    E::SetActorRotation(door, E::QuatToRotator(q.x, q.y, q.z, q.w));
-}
-
-// Physics back on, so the door's own spring settles it from where it was let go.
-void EndTurn(void* door) {
-    if (!g_turn.on) return;
-    g_turn.on = false;
-    if (void* mesh = door ? PR::GetStaticMesh(door) : nullptr) E::SetComponentSimulatePhysics(mesh, true);
-}
+// Ticks per doubling of the feed on the sign now, and ticks the sign runs: the ramp to the cap, then one more
+// doubling's worth at the cap.
+int FeedEvery() { return g_sign == 0 ? kFeedEveryFirst : kFeedEveryLater; }
+int FeedTicks() { return (kFeedDoublings + 1) * FeedEvery(); }
 
 // The nearest lid a NavMesh route reaches, by route length among the nearest few by straight line.
 bool PickTarget(void* player, const char*& why) {
@@ -503,6 +455,8 @@ void TickActor(Clock::time_point now) {
         l.lastMoveAt = l.nextSample = now;
         g_grabRot = Read(g_target.Get()).meshWorld;
         g_peakDev = 0.f;
+        g_sign = g_signTicks = g_swungAtTick = 0;
+        g_swung = false;
         LogTarget("grabbed");
         g_dragTicks = 0;
         Go(Step::Drag);
@@ -515,26 +469,51 @@ void TickActor(Clock::time_point now) {
             Go(Step::Release);
             return;
         }
-        if (!g_turn.on && !BeginTurn(d, now)) { Invalid("the door has no mesh or no readable transform to turn"); return; }
-        const auto elapsed = now - g_turn.start;
-        const float frac = elapsed >= kTurnTime ? 1.f
-            : std::chrono::duration<float>(elapsed).count() / std::chrono::duration<float>(kTurnTime).count();
-        ApplyTurn(d, kTurnDeg * frac);
+        // The feed on this sign now: the ramp, or the value the door turned at once it has.
+        if (!g_swung) {
+            const float mag = (std::min)(kFeedStart * std::exp2(static_cast<float>(g_signTicks / FeedEvery())),
+                                         kFeedStart * std::exp2(static_cast<float>(kFeedDoublings)));
+            g_feedX = kSigns[g_sign].x * mag;
+            g_feedY = kSigns[g_sign].y * mag;
+        }
+        int delivered = 0;
+        if (!E::BroadcastMainPlayerMouseXY(player, g_feedX, g_feedY, &delivered)) {
+            Invalid("the player's input_mouseXY dispatcher did not resolve");
+            return;
+        }
+        if (g_signTicks == 0 || g_signTicks % 30 == 0)
+            UE_LOGI("[SWING-DRILL] client feed (%+.0f, %+.0f) tick %d: (%.1f, %.1f) ran %d bound entr%s, the door has "
+                    "turned %.1f deg", kSigns[g_sign].x, kSigns[g_sign].y, g_signTicks, g_feedX, g_feedY, delivered,
+                    delivered == 1 ? "y" : "ies", g_peakDev);
         if (void* mesh = PR::GetStaticMesh(d))
             g_peakDev = (std::max)(g_peakDev, AngleDeg(E::GetComponentWorldRotation(mesh), g_grabRot));
         g_lids[g_targetLid].lastMoveAt = now;
         ++g_dragTicks;
-        if (elapsed >= kTurnTime + kHoldTime) Go(Step::Release);
+        ++g_signTicks;
+        if (!g_swung && g_peakDev >= kSwingDeg) {
+            g_swung = true;
+            g_swungAtTick = g_dragTicks;
+            UE_LOGI("[SWING-DRILL] client SWUNG: sign (%+.0f, %+.0f) moved the door %.1f deg at (%.1f, %.1f), tick %d "
+                    "of that sign", kSigns[g_sign].x, kSigns[g_sign].y, g_peakDev, g_feedX, g_feedY, g_signTicks);
+        }
+        if (g_swung) {
+            if (g_dragTicks >= g_swungAtTick + kHoldAfterSwingTicks) Go(Step::Release);
+        } else if (g_signTicks >= FeedTicks()) {
+            UE_LOGI("[SWING-DRILL] client sign (%+.0f, %+.0f) did not move the door (peak %.1f deg)", kSigns[g_sign].x,
+                    kSigns[g_sign].y, g_peakDev);
+            if (g_sign + 1 < kSignCount) { ++g_sign; g_signTicks = 0; }
+            else Go(Step::Release);
+        }
         return;
     }
     case Step::Release: {
         coop::director::CallOnPlayer(player, L"dropGrabObject");
-        EndTurn(g_target.Get());
         LogTarget("released");
         g_lids[g_targetLid].lastMoveAt = g_tailStart = now;
-        if (g_peakDev < kSwingDeg) {
+        if (!g_swung) {
             char why[160];
-            snprintf(why, sizeof(why), "the client's own door turned only %.1f deg (need %.0f)", g_peakDev, kSwingDeg);
+            snprintf(why, sizeof(why), "no feed sign moved the client's own door: it turned only %.1f deg (need %.0f)",
+                     g_peakDev, kSwingDeg);
             Invalid(why);
             return;
         }
@@ -607,7 +586,9 @@ void OnDisconnect() {
     g_step = Step::WaitReady;
     g_stepTicks = g_dragTicks = 0;
     g_peakDev = 0.f;
-    g_turn = Turn{};
+    g_sign = g_signTicks = g_swungAtTick = 0;
+    g_swung = false;
+    g_feedX = g_feedY = 0.f;
     g_target.Reset();
     g_walk.reset();
     g_grab.reset();

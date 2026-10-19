@@ -3,10 +3,11 @@
 // door's pose; the drill judges what the receivers make of it.
 //   ini swinger_drill=off|measure|observe / env VOTVCOOP_SWINGER_DRILL.
 //   measure -- the host and the acting client (the first client). The client walks (bot director) to the nearest
-//              non-lockable lid its NavMesh reaches and grabs it through the player's own grab chain. It then
-//              turns the door itself, 30 degrees about its hinge, because the game's mouse path was measured not
-//              to swing it from an injected feed; the game's own drag is a hands-on check. It lets go, and after
-//              the door has settled grabs it once more so the pose it rests at crosses on the stream.
+//              non-lockable lid its NavMesh reaches and grabs it through the player's own grab chain. It then feeds
+//              the player's input_mouseXY dispatcher (what the player's tick broadcasts from the mouse axes, and
+//              the grabbed door binds mouseAssign to), the delta doubling from 3 to a cap, until the door has
+//              turned. A lid's spring holds it at its open limit, so the sign is searched: (-,-), (+,-), (-,+),
+//              (+,+). It lets go, and after the door has settled grabs it again so its resting pose crosses.
 //   observe -- a second client (any later client does the same), which only watches.
 // A watching peer reads the client's door from the poses it takes. PASS when its own copy of the door turned at
 // least 10 degrees during the drag and rests within 3 degrees of the client's resting rotation; else FAIL. A

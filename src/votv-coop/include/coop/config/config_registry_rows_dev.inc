@@ -703,9 +703,10 @@ CFG_STRING(toggle_drill, "toggle_drill", "dev", "", "VOTVCOOP_TOGGLE_DRILL", fal
 CFG_ENUM(swinger_drill, "swinger_drill", "dev", "off", "off|measure|observe", "VOTVCOOP_SWINGER_DRILL",
     "Drill (host and clients): what a dragged hinge door shows on the other peers. measure: the host and "
     "the acting client; the client walks to the nearest non-lockable lid its NavMesh reaches, grabs it "
-    "through the player's own grab chain and turns the door itself 30 degrees about its hinge (the game's "
-    "mouse path does not swing it from an injected feed), then lets go and, once the door has settled, grabs "
-    "it again; a door that did not turn ends the run INVALID. observe: a second client, which only "
+    "through the player's own grab chain and feeds the player's input_mouseXY dispatcher, the delta doubling "
+    "to a cap on each of four signs in turn until its own door has turned 15 degrees (a lid's spring holds it "
+    "at its open limit), then lets go and, once the door has settled, grabs it again; no sign moving it ends "
+    "the run INVALID. observe: a second client, which only "
     "watches. A watching peer prints PASS when its copy of the door turned at least 10 degrees during the "
     "drag and rests within 3 degrees of the client's resting rotation, else FAIL. Every peer prints a "
     "baseline line per lid, then every 250 ms a sample line for each lid that moved (actor and mesh "

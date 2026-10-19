@@ -12,7 +12,6 @@
 #include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/sdk_profile.h"
-#include "ue_wrap/engine/engine_component.h"
 
 #include <atomic>
 #include <cstdint>
@@ -104,30 +103,6 @@ bool TryReadMeshRelativeRotation(void* swinger, FRotator& out) {
     std::memcpy(&out, static_cast<const uint8_t*>(mesh) + profile::off::USceneComponent_RelativeRotation,
                 sizeof(out));
     return true;
-}
-
-bool ReadHinge(void* swinger, HingeFrame& out) {
-    out = HingeFrame{};
-    if (!swinger || !R::IsLive(swinger)) return false;
-    static R::InstanceOffset sConstraint{L"PhysicsConstraint"};
-    const int32_t off = sConstraint.Of(swinger);
-    void* const comp = off >= 0 ? *reinterpret_cast<void**>(static_cast<uint8_t*>(swinger) + off) : nullptr;
-    if (comp && R::IsLive(comp)) {
-        out.pivot = engine::GetComponentLocation(comp);
-        out.pivotRead = true;
-    }
-    if (void* const fn = VerbFor(swinger, L"getAxis")) {
-        ParamFrame f(fn);
-        if (f.valid() && Call(swinger, f)) {
-            const FVector v = f.Get<FVector>(L"ReturnValue");
-            const float len2 = v.X * v.X + v.Y * v.Y + v.Z * v.Z;
-            if (len2 > 0.25f) {   // a unit vector; a zero is an unread one
-                out.axis = v;
-                out.axisRead = true;
-            }
-        }
-    }
-    return out.pivotRead || out.axisRead;
 }
 
 bool CallOpen(void* swinger, bool damage) {
