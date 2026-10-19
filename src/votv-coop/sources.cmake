@@ -201,6 +201,7 @@ set(VOTVCOOP_SOURCES
     src/coop/props/prop_hold.cpp
     src/coop/props/remover_request.cpp
     src/coop/props/remote_prop.cpp
+    src/coop/props/remote_prop_drive.cpp
     src/coop/props/unresolved_pose_ledger.cpp
     src/coop/props/remote_prop_convert.cpp
     src/coop/props/remote_prop_destroy.cpp
