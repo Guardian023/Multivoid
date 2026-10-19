@@ -67,9 +67,10 @@ bool StickHoldsPhysicsOff(void* actor);
 bool LocalDragsDoor(void* door, int slot, uint16_t gen);
 
 // The live actor a wire key names, or null. A portable key (`mv_`, a container-lane swinger) goes to that
-// lane's index alone: the portable token is minted only by element::PortableWireKey, so no prop's game Key
-// starts with it, and the prop key index would answer a miss with a catch-up drain on every call. Any
-// other key asks the prop key index first and the container lane second. Game thread.
+// lane's index alone: the portable token is minted only by element::PortableWireKey and the other keys this mod
+// mints start differently, so such a key is not one we made for a prop, and the prop key index would answer a miss
+// with a catch-up drain on every call. Any other key asks the prop key index first and the container lane second.
+// Game thread.
 void* ResolveKeyedActor(const std::wstring& keyW);
 
 // Resolve the pose's prop and start the slot's drive on it (the grab's prelude, park, drive cache).

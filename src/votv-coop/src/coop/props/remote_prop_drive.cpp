@@ -133,7 +133,9 @@ bool LocalDragsDoor(void* door, int slot, uint16_t gen) {
 void* ResolveKeyedActor(const std::wstring& keyW) {
     // A dragged swinger streams under the container lane's key, and as a child actor it is not in the prop
     // key index. The portable token is minted only by element::PortableWireKey ("mv_" + hex, portable_identity.cpp),
-    // so a key that starts with it never names a prop and skips that index, whose miss runs a catch-up drain.
+    // and the other keys this mod mints start differently (cs_ and rk_ in prop_synth_key.cpp, mvhook_ in hook_anchor.cpp),
+    // so a key that starts with it is not one we made for a prop and skips that index, whose miss runs a catch-up drain.
+    // A game Key is the game's own and could in principle start with it; the skip trades that for the miss's drain.
     if (keyW.rfind(L"mv_", 0) == 0) return coop::interactable_sync::ContainerActor(keyW);
     void* prop = coop::prop_key_index::Find(keyW);
     return prop ? prop : coop::interactable_sync::ContainerActor(keyW);
@@ -167,8 +169,9 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     if (!prop) {
         coop::dev::swinger_drill::NotePropUnresolved(slot, pose);
         // The ledger separates the ordinary pose-before-spawn race from a sustained stream this
-        // peer never got a spawn for: one WARN per sustained stream, not per packet.
-        if (coop::unresolved_pose_ledger::Note(slot, keyW, pose.elementId, NowMs())) {
+        // peer never got a spawn for: one WARN per sustained stream, and the INFO once per burst, not per packet.
+        bool newBurst = false;
+        if (coop::unresolved_pose_ledger::Note(slot, keyW, pose.elementId, NowMs(), &newBurst)) {
             UE_LOGW("remote_prop: slot %d key '%ls' eid=%u -- SUSTAINED unresolved pose stream "
                     "(>=%u packets over >=%llu ms). This is NOT the ordinary pose-before-spawn "
                     "race: the sender is streaming an item this peer never received a spawn for. "
@@ -177,7 +180,7 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
                     slot, keyW.c_str(), pose.elementId,
                     static_cast<unsigned>(coop::unresolved_pose_ledger::kSustainedCount),
                     static_cast<unsigned long long>(coop::unresolved_pose_ledger::kSustainedMs));
-        } else {
+        } else if (newBurst) {
             UE_LOGI("remote_prop: slot %d incoming PropPose key '%ls' eid=%u -- no local match "
                     "(key or eid); usually the pose overtaking its own spawn broadcast",
                     slot, keyW.c_str(), pose.elementId);

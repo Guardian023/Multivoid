@@ -3,7 +3,7 @@
 // the slot and rack verb watches and forwards rack marks to drive_rack_sync.
 //
 // The design's slotted latch is SATISFIED BY the existing frozen/static pose gate in
-// remote_prop.cpp: a slotted drive is frozen by putDriveIn on every peer, so straggler poses are
+// remote_prop_drive.cpp (ResolveAndStartDrive): a slotted drive is frozen by putDriveIn on every peer, so straggler poses are
 // already dropped and a second mechanism would be redundant. Game thread throughout.
 
 #pragma once

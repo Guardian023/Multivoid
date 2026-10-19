@@ -6,7 +6,7 @@
 // CClientVehicle::UpdateTargetPosition, whose fAlpha is Unlerp(start, now, finish).
 //
 // TWO consumers, same primitive:
-//   * remote_prop.cpp -- a std::array<ActiveDrive, kMaxPeers> g_drives, ONE per peer slot,
+//   * remote_prop_drive.cpp -- a std::array<ActiveDrive, kMaxPeers> g_drives, ONE per peer slot,
 //                        each client kinematically driving its own held prop.
 //   * trash_clump_pose_stream.cpp -- a std::unordered_map<eid, ActiveDrive>, ONE per
 //                        host-driven trash clump.

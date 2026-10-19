@@ -133,7 +133,7 @@ void DestroyResolvedLocalActor_(void* actor, const std::wstring& keyW,
                 "matching the host)", payload.elementId, actor);
     }
     // Clear any slot's drive on this prop, so nothing drives a destroyed actor next tick (the
-    // drive table lives in remote_prop.cpp).
+    // drive table lives in remote_prop_drive.cpp).
     ClearAnyDriveFor(actor);
     // If this peer's local player is grabbing the doomed actor, tear the grab down cleanly first
     // (a no-op when not grabbed).

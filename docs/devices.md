@@ -65,8 +65,8 @@ held-item stream carries its pose and the host relays it to the other clients. T
 lid differs between peers for most lids (a barrel's or crate's cap), so the pose and the release go under
 this lane's key for the lid, the portable `mv_` token; a lid the lane files under its game Key (no portable
 identity) streams under that key and is logged once, and one the lane has not indexed streams nothing and
-is logged. The receiving side asks the prop key index first and this lane's index
-(`interactable_sync::ContainerActor`) second, parks the lid's mesh and follows the pose as it follows any
+is logged. The receiving side resolves a portable `mv_` key through this lane's index alone, and any other key through the prop key index first and this lane's index
+(`interactable_sync::ContainerActor`) second; it parks the lid's mesh and follows the pose as it follows any
 held prop. A lid with nothing to hang on (a barrel's or crate's cap) falls when it is let go, so the holder
 keeps streaming its pose from its own copy, under the identity the hold streamed, until that copy is at rest,
 and only then sends the release (`PropRelease`): the others follow the same fall, parked, and the release puts
