@@ -7,6 +7,7 @@
 
 #include "coop/dev/swinger_drill.h"     // NotePropUnresolved
 #include "coop/interactables/interactable_sync.h"  // ContainerActor: a dragged swinger's key to its actor
+#include "coop/interactables/swinger_join_pose.h"   // Forget: a stream or release supersedes a parked connect pose
 #include "coop/props/active_drive.h"   // the fixed-delay snapshot interp, shared with the trash carry stream
 #include "coop/props/prop_sound.h"
 #include "coop/props/trash_mirror.h"   // WeMade
@@ -248,6 +249,7 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     // Simulation off so the per-packet SetActorLocation sticks: a kinematic follow, the clump
     // through the generic root toggle, and a Character welded on the prop stopped (prop_park.h).
     coop::prop_park::Park(prop, mesh);
+    coop::swinger_join_pose::Forget(keyW);   // the stream is newer than a connect pose parked for this lid
     g_drives[slot].actor = prop;
     g_drives[slot].actorIdx = R::InternalIndexOf(prop);  // live here; cache for LiveActor()
     g_drives[slot].mesh  = mesh;

@@ -32,6 +32,10 @@ void QueueConnectBroadcastForSlot(coop::net::Session* session, int peerSlot);
 // else parked for the tick.
 void OnReliable(const coop::net::SwingerRestPosePayload& p);
 
+// A remote drive started on the lid under `key`, or a release for it landed: the live stream and the release are
+// newer than the connect snapshot, so a pose still parked for it is dropped. No-op when none is parked.
+void Forget(const std::wstring& key);
+
 // Retries the parked poses once per container-index pass, and drops one by the lane's own rule for its parked
 // states. Free when nothing is parked.
 void Tick();

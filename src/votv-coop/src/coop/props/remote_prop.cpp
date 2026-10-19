@@ -8,6 +8,7 @@
 #include "remote_prop_drive.h"     // g_drives, g_holds, the hold gate, ResolveAndStartDrive
 
 #include "coop/dev/swinger_drill.h"     // NotePropPose, NotePropUnresolved
+#include "coop/interactables/swinger_join_pose.h"   // Forget: a release supersedes a parked connect pose
 #include "coop/props/active_drive.h"   // the fixed-delay snapshot interp, shared with the trash carry stream
 #include "coop/props/prop_sound.h"
 #include "coop/props/trash_mirror.h"   // Retire (a trash mirror retires whole, pin released after the destroy)
@@ -191,6 +192,7 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
     // Reads and clears the sender's drive; dispatched from event_feed on the game thread.
     UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnRelease)");
     const std::wstring keyW = KeyToWString(payload.key);
+    coop::swinger_join_pose::Forget(keyW);   // a release is newer than a connect pose parked for this lid
     const float linSpeedSq = payload.linVelX * payload.linVelX +
                              payload.linVelY * payload.linVelY +
                              payload.linVelZ * payload.linVelZ;

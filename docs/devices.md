@@ -88,7 +88,7 @@ snapshot the host sends each open lid's place (`SwingerRestPose`, under the lane
 joiner puts its copy there, with no velocity and still simulating, once the key resolves and its copy reads
 open. A lid without a portable key is skipped and counted in the host's log line. A place that cannot be applied
 yet is parked and retried once per index pass, and dropped by the lane's own rule for its parked states with one
-warning naming the key. A lid a remote stream drives, or the joiner's own player drags, is left to that owner. A
+warning naming the key. A lid a remote stream drives, or the joiner's own player drags, is left to that owner, and a stream or release that reaches a lid whose place is still parked drops the place, as newer. A
 joiner arriving mid-drag or mid-coast gets the place, then the live stream, then the release.
 `[?]` until the swinger drill has a two-peer proof.
 A client's own press, hit or pry of a door never runs on its copy either: the
