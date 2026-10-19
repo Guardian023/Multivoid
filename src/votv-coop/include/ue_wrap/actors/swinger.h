@@ -35,6 +35,19 @@ bool TryReadLockable(void* swinger, bool& lockable);
 // stale value the engine keeps once the mesh simulates detached. False for a lid with no live mesh. Game thread.
 bool TryReadMeshRelativeRotation(void* swinger, FRotator& out);
 
+// The hinge a lid turns about, in world space, read where it is now (read at rest, before the lid moves: the
+// constraint component rides the lid's root). `pivot` is the world location of the lid's PhysicsConstraint
+// component, which set() places at the lid's `axisLocation`; `axis` is the lid's own getAxis(), the unit vector
+// of its mesh axis the BP applies the mouse torque about and limits the constraint on. Each is read on its own,
+// and `pivotRead` / `axisRead` say which: a lid whose hinge reads neither returns false. Game thread.
+struct HingeFrame {
+    FVector pivot{};
+    FVector axis{};
+    bool pivotRead = false;
+    bool axisRead = false;
+};
+bool ReadHinge(void* swinger, HingeFrame& out);
+
 // Open(damage) / Close(). MUST run on the game thread. `damage` is the BP's
 // Open(bool Damage) param -- false for a normal (player/receiver) open. Return
 // false on null / unresolved UFunction.
