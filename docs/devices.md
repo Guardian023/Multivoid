@@ -68,9 +68,18 @@ identity) streams under that key and is logged once, and one the lane has not in
 is logged. The receiving side asks the prop key index first and this lane's index
 (`interactable_sync::ContainerActor`) second, parks the lid's mesh and follows the pose as it follows any
 held prop. A lid with nothing to hang on (a barrel's or crate's cap) falls when it is let go, so the holder
-keeps streaming its pose from its own copy until that copy is at rest, and only then sends the release
-(`PropRelease`): the others follow the same fall, parked, and the release puts the lid where it stopped and
-unparks it with no throw velocity, thrown event or whoosh. A peer whose own player is dragging the same lid
+keeps streaming its pose from its own copy, under the identity the hold streamed, until that copy is at rest,
+and only then sends the release (`PropRelease`): the others follow the same fall, parked, and the release puts
+the lid where it stopped and unparks it with no throw velocity, thrown event or whoosh. At rest is the body
+asleep, or within a quarter of a centimetre and a tenth of a degree of one pose for 30 ticks, so a slow creep is
+not rest. The coast is bounded at ten seconds: a lid that never rests (on a moving carrier, or jittering against
+its limit) is released at its current pose and each peer's own physics takes it from there. A grab of another
+item while a lid coasts sends the lid's release at once. A lid the lane has not indexed streams nothing, held or
+let go. One limit stays: a second player who drags the same lid during the first one's coast makes two slots
+stream one lid, and each receiver follows whichever pose came last, as for any prop two peers grab; the
+coasting peer, whose copy the other drag parks, ends its coast and sends its release, and a receiver that
+follows the other drag applies nothing for it. A
+peer whose own player is dragging the same lid
 does not apply the remote poses for it, whether its drag began before the stream or in the middle of it.
 The held-item broadcast never expresses a lid as a spawned prop. Mid-join: the connect snapshot carries a
 lid's `opened` and nothing else, so a joiner gets the live stream if a drag is in progress, then the
