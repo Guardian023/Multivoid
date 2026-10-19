@@ -204,7 +204,8 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     if (!prop && pose.elementId != 0)
         prop = ResolveLiveActorByEid(pose.elementId);
     if (!prop) {
-        coop::dev::swinger_drill::NotePropUnresolved(slot, keyW, pose.elementId);
+        coop::dev::swinger_drill::NotePropUnresolved(slot, keyW, pose.elementId,
+                                                     ue_wrap::FRotator{pose.pitch, pose.yaw, pose.roll});
         // The ledger separates the ordinary pose-before-spawn race from a sustained stream this
         // peer never got a spawn for: one WARN per sustained stream, not per packet.
         if (coop::unresolved_pose_ledger::Note(slot, keyW, pose.elementId, NowMs())) {

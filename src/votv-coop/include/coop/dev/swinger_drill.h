@@ -1,17 +1,18 @@
-// coop/dev/swinger_drill.h -- [dev] a MEASUREMENT drill, no verdict: what a dragged hinge door
-// (prop_swinger_C) shows on the other peers today. While a player drags a swinger the game leaves it in the
-// player's grabbing_actor, so the held-prop stream already treats the door as the held item; this drill
-// records what that stream and the receivers do with it.
+// coop/dev/swinger_drill.h -- [dev] what a dragged hinge door (prop_swinger_C) shows on the other peers. While a
+// player drags a swinger the game leaves it in the player's grabbing_actor, so the held-item stream carries the
+// door's pose; the drill judges what the receivers make of it.
 //   ini swinger_drill=off|measure|observe / env VOTVCOOP_SWINGER_DRILL.
-//   measure -- the host and the acting client. The client walks (bot director) to the nearest non-lockable lid
-//              its NavMesh reaches, grabs it through the player's own grab chain, feeds the player's
-//              input_mouseXY dispatcher (the one its tick broadcasts from the mouse axes, to which the grabbed
-//              door binds mouseAssign) for a few seconds in one direction, lets go, and watches the tail.
-//   observe -- a second client, which only watches.
-// Every peer prints a baseline line per lid, then every 250 ms a sample line for each lid that moved until five
-// seconds after its last move. The client also says once a second whether local_streams names the door as the
-// held actor and whether a held-item broadcast was made; the host and the observer count each PropPose they
-// take and say what it was applied to. Lines are tagged [SWING-DRILL]; each peer's DONE line ends its part.
+//   measure -- the host and the acting client (the first client). The client walks (bot director) to the nearest
+//              non-lockable lid its NavMesh reaches, grabs it through the player's own grab chain, and feeds the
+//              player's input_mouseXY dispatcher (the one its tick broadcasts from the mouse axes, to which the
+//              grabbed door binds mouseAssign), the delta doubling until its own door has turned 15 degrees, then
+//              lets go. After the door has settled it grabs it once more with no feed, so the pose it rests at
+//              crosses on the stream. A door that did not turn 15 degrees ends the run INVALID.
+//   observe -- a second client (any later client does the same), which only watches.
+// A watching peer reads the client's door from the poses it takes. PASS when its own copy of the door turned at
+// least 10 degrees during the drag and rests within 3 degrees of the client's resting rotation; else FAIL.
+// Every peer also prints a baseline line per lid, then a sample line every 250 ms for each lid that moved, until
+// five seconds after its last move. Lines are tagged [SWING-DRILL]; the client's DONE ends its part.
 
 #pragma once
 
@@ -45,6 +46,6 @@ void NoteHeldEdge(void* heldActor, bool broadcast, uint32_t eid);
 void NotePoseEmit(void* heldActor, const std::wstring& key, uint32_t eid);
 void NotePropPose(int slot, const std::wstring& key, uint32_t eid, void* actor, void* mesh,
                   const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot);
-void NotePropUnresolved(int slot, const std::wstring& key, uint32_t eid);
+void NotePropUnresolved(int slot, const std::wstring& key, uint32_t eid, const ue_wrap::FRotator& rot);
 
 }  // namespace coop::dev::swinger_drill

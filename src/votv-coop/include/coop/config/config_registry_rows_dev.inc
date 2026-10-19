@@ -701,15 +701,17 @@ CFG_STRING(toggle_drill, "toggle_drill", "dev", "", "VOTVCOOP_TOGGLE_DRILL", fal
     "host reads it) and oven_host (the host repairs it once a client's world is ready); the host puts "
     "back an oven its save had repaired before any client connects, and the reader's DONE line ends it.")
 CFG_ENUM(swinger_drill, "swinger_drill", "dev", "off", "off|measure|observe", "VOTVCOOP_SWINGER_DRILL",
-    "Measurement drill (host and clients), no verdict: what a dragged hinge door shows on the other peers. "
-    "measure: the host and the acting client; the client walks to the nearest non-lockable lid its NavMesh "
-    "reaches, grabs it through the player's own grab chain and feeds the player's input_mouseXY dispatcher "
-    "for about three seconds in one direction, then lets go. observe: a second client, which only watches. "
-    "Every peer prints a baseline line per lid, then every 250 ms a sample line for each lid that moved "
-    "(actor and mesh transform, opened, simulating) until five seconds after its last move; the client also "
-    "says each second whether its held-prop stream names the door, and the host and observer count each "
-    "PropPose they take and what it was applied to. Lines tagged [SWING-DRILL]; each peer's DONE line "
-    "ends its part, and there is no verdict.")
+    "Drill (host and clients): what a dragged hinge door shows on the other peers. measure: the host and "
+    "the acting client; the client walks to the nearest non-lockable lid its NavMesh reaches, grabs it "
+    "through the player's own grab chain and feeds the player's input_mouseXY dispatcher, the delta doubling "
+    "until its own door has turned 15 degrees, then lets go and, once the door has settled, grabs it again "
+    "with no feed; a door that did not turn ends the run INVALID. observe: a second client, which only "
+    "watches. A watching peer prints PASS when its copy of the door turned at least 10 degrees during the "
+    "drag and rests within 3 degrees of the client's resting rotation, else FAIL. Every peer prints a "
+    "baseline line per lid, then every 250 ms a sample line for each lid that moved (actor and mesh "
+    "transform, opened, simulating); the client says each second whether its held-item stream names the "
+    "door; the host and observer count each PropPose they take. Lines tagged [SWING-DRILL]; the client's "
+    "DONE line ends its part.")
 CFG_STRING(door_drill_door, "door_drill_door", "dev", "", "VOTVCOOP_DOOR_DRILL_DOOR", false,
     "With door_drill: the object name of the one door the walker walks to (e.g. "
     "door_GEN_VARIABLE_door_C_CAT_45); empty walks the nearest one its navmesh reaches.")
