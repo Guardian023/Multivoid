@@ -34,6 +34,7 @@
 #include "ue_wrap/core/game_thread.h"     // RegisterPreObserver (the InpActEvt_use pile-grab observer)
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/actors/prop.h"
+#include "ue_wrap/actors/swinger.h"       // IsSwinger: the held-item express leaves a dragged door alone
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/sdk_profile.h"     // MainPlayerClass + MainPlayerUseInputEventFn
 #include "ue_wrap/core/types.h"
@@ -230,6 +231,10 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     // here as a fresh-eid keyless spawn it would be a second cross-peer entity, so a stray clump is
     // carry-only.
     if (ue_wrap::prop::IsGarbageClump(heldActor)) return false;
+    // The swinger gate: a door or lid a player drags is a child actor every peer already holds, never a prop to
+    // spawn on the others. Its held pose crosses by its prop key, which the receiver finds in the swinger
+    // lane's index (coop/interactables/swinger_hold_index), and its release is the held stream's own.
+    if (ue_wrap::swinger::EnsureResolved() && ue_wrap::swinger::IsSwinger(heldActor)) return false;
     // Any keyed interactable, the Aprop_C items and the non-Aprop_C clump and pile alike. Crash
     // safety is on the receiver: GetStaticMesh is null for a non-Aprop_C, so the peer never runs
     // physics on a clump mirror, which is driven kinematically.

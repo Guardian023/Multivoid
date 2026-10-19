@@ -237,6 +237,7 @@ set(VOTVCOOP_SOURCES
     src/coop/interactables/cord_sync.cpp
     src/coop/interactables/cord_sync_sockets.cpp
     src/coop/interactables/cord_sync_watch.cpp
+    src/coop/interactables/swinger_hold_index.cpp
     src/coop/creatures/kerfur_convert.cpp
     src/coop/creatures/kerfur_convert_client.cpp
     src/coop/creatures/kerfur_convert_host.cpp

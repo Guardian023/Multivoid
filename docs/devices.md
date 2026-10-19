@@ -56,18 +56,17 @@ writer of Open past the load, and the appliance lane an appliance's bool at its 
 (a faucet's, sink's, shower's, oven's and tape unit's toggle) or a server box's `visual` (the kerfur
 Omega's call), the box lane a locker's `opened` at its `open` (its toggle's, a murder kerfur's) and the drone
 console's at its `actionOptionIndex`, and the container lane a lid's `opened` at its `open` or `close`
-(which its setup, grab, damage, padlock and resting swing, and a cremator's door, call). Swinger
-hinges also use `mouseAssign(FVector2D)` while a player drags the handle. That body converts the
-mouse sample into torque on `PhysicsConstraint` (`prop_swinger` graph, block 386); its post-gate
-observer sends each sample as `SwingerMotion` and receivers replay it through their own
-`mouseAssign` body. On release, the same channel sends the hinge's final rotation and linear and
-angular velocity and runs the swinger's `dropped` cleanup remotely. This covers the smooth, physical
-movement during the drag and corrects the receiving hinge at release for microwave, oven and other
-`prop_swinger_C` descendants. The sample stream is ordered and relayed, while the game still
-simulates each peer's physics locally, so matching hinge motion needs a two-peer in-game check. A
-joiner receives the channel's saved open/closed state, not the exact in-flight hinge angle.
-The oven lane an oven's `fixed` at its `fix()`, the repair widget's last step, which goes one way: a receiver
+(which its setup, grab, damage, padlock and resting swing, and a cremator's door, call), and the oven
+lane an oven's `fixed` at its `fix()`, the repair widget's last step, which goes one way: a receiver
 writes it and repaints on 1, `fix()`'s work without its screen, and refuses 0.
+A lid a player drags with the mouse (`mouseAssign`, bound to the player's `input_mouseXY` while the grab
+lasts) is not a verb of this lane: the game leaves the lid in the dragger's `grabbing_actor`, so the
+held-item stream carries its pose, keyed by the lid's prop key, and the host relays it to the other
+clients. A lid is a child actor, which the prop key index leaves out, so the receiving side finds it
+through `coop/interactables/swinger_hold_index`, parks its mesh and follows the pose as it follows any
+held prop; the holder's release (`PropRelease`) puts the lid at the release pose and its velocities and
+unparks it, and the lid's own spring settles from there. A lid is never expressed as a spawned prop by
+the held-item broadcast. `[?]` until the swinger drill has a two-peer proof.
 A client's own press, hit or pry of a door never runs on its copy either: the
 script-body gate refuses the door's entry verb there and sends it to the host
 (`coop/interactables/door_verb_intent`), which

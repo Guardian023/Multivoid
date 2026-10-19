@@ -7,6 +7,7 @@
 #include "remote_prop_internal.h"  // impl-private (src-local), NOT under include/
 
 #include "coop/dev/swinger_drill.h"     // NotePropPose, NotePropUnresolved
+#include "coop/interactables/swinger_hold_index.h"  // a child-actor swinger's key to its actor
 #include "coop/props/active_drive.h"   // the fixed-delay snapshot interp, shared with the trash carry stream
 #include "coop/props/prop_sound.h"
 #include "coop/props/trash_mirror.h"   // Retire (a trash mirror retires whole, pin released after the destroy)
@@ -195,8 +196,11 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     const std::wstring keyW = KeyToWString(pose.key);
     // Key first (an Aprop_C), then eid (the clump streams key None).
     void* prop = nullptr;
-    if (!keyW.empty() && keyW != L"None")
+    if (!keyW.empty() && keyW != L"None") {
         prop = coop::prop_key_index::Find(keyW);
+        // A swinger is a child actor, which that index leaves out: the swinger lane's own index answers.
+        if (!prop) prop = coop::swinger_hold_index::Find(keyW);
+    }
     if (!prop && pose.elementId != 0)
         prop = ResolveLiveActorByEid(pose.elementId);
     if (!prop) {
@@ -475,7 +479,9 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
         }
     }
     if (releasedSlot < 0) {
-        if (void* prop = coop::prop_key_index::Find(keyW)) {
+        void* prop = coop::prop_key_index::Find(keyW);
+        if (!prop) prop = coop::swinger_hold_index::Find(keyW);
+        if (prop) {
             // No drive entry carries this key and eid: a keyed prop resolves from the live world.
             propActor = prop;
             meshToActOn = ue_wrap::prop::GetStaticMesh(prop);

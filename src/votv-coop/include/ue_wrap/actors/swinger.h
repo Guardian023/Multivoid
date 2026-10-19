@@ -41,10 +41,4 @@ bool TryReadMeshRelativeRotation(void* swinger, FRotator& out);
 bool CallOpen(void* swinger, bool damage);
 bool CallClose(void* swinger);
 
-// Read and replay the Blueprint mouse input which applies torque to the physical hinge. The
-// parameter frame is supplied by script_gate at the mouseAssign body seam.
-bool TryReadMouseXY(void* function, const uint8_t* locals, FVector2D& xy);
-bool CallMouseAssign(void* swinger, const FVector2D& xy);
-bool CallDropped(void* swinger);
-
 }  // namespace ue_wrap::swinger

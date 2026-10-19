@@ -28,6 +28,7 @@
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/actors/prop.h"
 #include "ue_wrap/actors/puppet.h"
+#include "ue_wrap/actors/swinger.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/types.h"
 #include "ue_wrap/actors/vitals.h"
@@ -368,7 +369,10 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // the field, 91 poses in 1.5 s no peer could resolve, and an item invisible to everyone
             // but its holder). Reported once per held edge with the actor named, and not
             // suppressed: a key-only pose is legitimate when both peers share a save-loaded prop.
-            if (!mirrored && g_lastHeldEid == coop::element::kInvalidId) {
+            // A dragged swinger is the exception: its identity is its prop key, which the receiver finds in
+            // the swinger lane's index (EnsureHeldItemBroadcast leaves it alone by design).
+            if (!mirrored && g_lastHeldEid == coop::element::kInvalidId &&
+                !(ue_wrap::swinger::EnsureResolved() && ue_wrap::swinger::IsSwinger(heldActor))) {
                 UE_LOGW("local_streams: CARRY-ONLY WITH NO WIRE IDENTITY -- held actor %p "
                         "cls='%ls' key='%ls' is streaming a held pose with eid=0 and no spawn "
                         "broadcast, so a receiver can resolve NEITHER term. Every carry-only "

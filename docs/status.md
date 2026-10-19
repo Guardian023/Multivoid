@@ -33,7 +33,7 @@ host validates and commits contested writes), `local` (never shared).
 | Sleeping bags and mattresses | a client interaction action sent to the host; the host runs the Blueprint that replaces the packed bag or mattress with its deployed form, or folds it back | host | host save and prop snapshot contain the currently live form | built (see [props.md](props.md)) |
 | Chip piles and clumps | the grab, carry, throw and re-pile cycle, and a broom's sweep | host with client intents | snapshot, a spawn-time bind, and a bounded hold for a pile the save load has not reached; a clump rolling at the join arrives as the pile it lands as | works |
 | Trash-bits piles | the counter pair | presser and host | snapshot | built |
-| Containers | open and close, mouse-driven torque samples for physical swinger hinges, contents (a slice of the host's object stack) | presser; host for contents | saved open/closed state; active hinge motion is not replayed | built, two known breaks; hinge motion needs a two-peer physics check |
+| Containers | open and close, a dragged lid's pose (the held-item stream), contents (a slice of the host's object stack) | presser; host for contents | snapshot | works, two known breaks; a dragged lid is built, not yet proven on two peers |
 | NPCs | spawn, despawn, pose, state for the generic creatures | host | snapshot | works |
 | Kerfur | the prop-to-NPC conversion cycle, per-kerfur skins | host | snapshot plus adoption | works |
 | Owner-entity creatures | a creature whose AI reads the local player is owned per peer and mirrored to the rest | peer | keepalive | built |
