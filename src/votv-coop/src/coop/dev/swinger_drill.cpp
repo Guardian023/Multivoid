@@ -51,7 +51,7 @@ namespace SW = ue_wrap::swinger;
 using Clock = std::chrono::steady_clock;
 
 enum class Arm { Off, Measure, Observe };
-enum class Step { Pick, WalkTo, Grab, Drag, Release, Tail, Announce, Regrab, Settle, Last, Echo, Done, Invalid };
+enum class Step { Pick, WalkTo, Grab, Drag, Release, Tail, Echo, Done, Invalid };
 
 Arm ArmOf() {
     static const Arm a = [] {
@@ -88,14 +88,13 @@ constexpr auto  kTail           = std::chrono::seconds(5);   // how long a lid t
 constexpr auto  kReportEvery    = std::chrono::seconds(1);
 constexpr float kMovedDeg       = 0.5f;   // a mesh rotation that changed by more than this has moved
 constexpr float kRestDeg        = 0.05f;  // two reads this close are the same: the door has settled
-constexpr int   kSecondHoldPoses = 3;     // poses the second hold hands to the session before it ends
-constexpr const char* kTag      = "[swing-drill] ";   // the client's chat lines: grab, settled, end
+constexpr const char* kTag      = "[swing-drill] ";   // the chat lines: grab, settled, verdict
 // The verdict. The client's door must turn kSwingDeg or the run is INVALID; a peer passes when its own door turned
 // kFollowDeg during the drag and rests within kSettleDeg of where the client's door rested.
 constexpr float kSwingDeg       = 15.f;
 constexpr float kFollowDeg      = 10.f;
 constexpr float kSettleDeg      = 3.f;
-constexpr auto  kJudgeBound     = std::chrono::seconds(60);   // a failure bound: the client's end line never came
+constexpr auto  kJudgeBound     = std::chrono::seconds(60);   // a failure bound: the watcher heard nothing new, its door at rest or the client's settled line
 
 float Dist(const ue_wrap::FVector& a, const ue_wrap::FVector& b) {
     const float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
@@ -214,23 +213,24 @@ void PrintRx() {
 // ---- The client's chat lines ---------------------------------------------------------------------------
 //
 // The client marks its phases in the lobby chat, the one reliable channel every peer already reads: a line when it
-// grabs the door (the lane's key for it and the game's own Key), one when its door has settled after the release,
-// one when its second hold has ended. The poses are unreliable and carry no phase, so a watching peer judges on
-// these lines and never on a gap in the stream. The host admits a client's chat at a fixed rate, so the lines go
-// out one per kTalkEveryMs.
+// grabs the door (the lane's key for it and the game's own Key), and one when its door has settled after the
+// release, with the rotation it rests at. A watching peer answers with a verdict line. The poses are unreliable and
+// carry no phase, so a watching peer judges on these lines and never on a gap in the stream. The host admits a
+// client's chat at a fixed rate, so a peer's lines go out one per kTalkEveryMs.
 
-enum class Phase { Grab, Settled, End };
+enum class Phase { Grab, Settled, Verdict };
 struct ChatEvent {
     unsigned long long key;
     Phase what;
-    std::string mv, gameKey;   // a Grab line's two keys
+    std::string mv, gameKey;   // a Grab line's two keys; a Verdict line's role and result
+    ue_wrap::FRotator rot{};   // a Settled line's rotation: where the client's door came to rest
 };
 
 std::vector<std::string> g_outbox;
 size_t g_outNext = 0;
 uint64_t g_nextSayMs = 0;
 unsigned long long g_chatMark = 0;   // the feed's newest row when the drill armed: older rows are another run's
-bool g_echoSettled = false, g_echoEnd = false;   // the client has seen its own line come back
+bool g_hostVerdict = false;   // the client has seen the host's verdict line
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(
@@ -260,15 +260,26 @@ std::vector<ChatEvent> NewChat() {
         if (r.key <= g_chatMark || at == std::string_view::npos) return;
         top = (std::max)(top, r.key);
         const std::string rest(r.line.substr(at + std::strlen(kTag)));
-        ChatEvent e{r.key, Phase::End, {}, {}};
-        if (rest.rfind("grab ", 0) == 0) {
+        ChatEvent e{r.key, Phase::Verdict, {}, {}, {}};
+        // "grab <lane key> <game Key>", "settled <pitch> <yaw> <roll>", "verdict <role> <PASS|FAIL|INVALID>".
+        std::vector<std::string> word;
+        for (size_t from = 0; from < rest.size();) {
+            const size_t sp = rest.find(' ', from);
+            word.push_back(rest.substr(from, sp == std::string::npos ? std::string::npos : sp - from));
+            from = sp == std::string::npos ? rest.size() : sp + 1;
+        }
+        if (word.size() == 3 && word[0] == "grab") {
             e.what = Phase::Grab;
-            const size_t sp = rest.find(' ', 5);
-            e.mv = rest.substr(5, sp == std::string::npos ? std::string::npos : sp - 5);
-            if (sp != std::string::npos) e.gameKey = rest.substr(sp + 1);
-        } else if (rest.rfind("settled", 0) == 0) {
+            e.mv = word[1];
+            e.gameKey = word[2];
+        } else if (word.size() == 4 && word[0] == "settled") {
             e.what = Phase::Settled;
-        } else if (rest.rfind("end", 0) != 0) {
+            e.rot = {std::strtof(word[1].c_str(), nullptr), std::strtof(word[2].c_str(), nullptr),
+                     std::strtof(word[3].c_str(), nullptr)};
+        } else if (word.size() == 3 && word[0] == "verdict") {
+            e.mv = word[1];
+            e.gameKey = word[2];
+        } else {
             return;
         }
         out.push_back(std::move(e));
@@ -281,17 +292,20 @@ std::vector<ChatEvent> NewChat() {
 // ---- The verdict of a watching peer -------------------------------------------------------------------
 //
 // What the client's door did is read from the poses this peer takes for it (the held-item stream carries the
-// client's own door transform every tick). The poses before the client's `settled` line are its drag; the first
-// pose after it opens the second hold, which carries the client's resting rotation; the `end` line is the verdict.
+// client's own door transform every tick): the poses before the client's `settled` line are its drag. That line
+// carries the rotation the client's door came to rest at. This peer judges once its own copy has come to rest too:
+// simulating again (the stream's release unparked it) and the same on two scans in a row. The two orientations are
+// compared as the angle between their quaternions, never component by component: near pitch +-90 degrees the
+// pitch, yaw and roll of one orientation are not unique.
 
 struct Verdict {
-    bool started = false, said = false, settledSeen = false, secondSeen = false, hostRead = false, heard = false;
+    bool started = false, said = false, settledSeen = false, heard = false, haveRead = false;
     Clock::time_point lastEvent{};
-    ue_wrap::FRotator first{};          // the client's door at the first pose
-    ue_wrap::FRotator hostSettled{};    // this peer's door as it stood when the second hold's first pose came
-    ue_wrap::FRotator clientSettled{};  // the client's door at the second hold's newest pose
-    float clientDev = 0.f;              // the largest angle of the client's door from `first`
-    int lid = -1;                       // this peer's copy of the door, once a pose resolved to it
+    ue_wrap::FRotator first{};        // the client's door at the first pose
+    ue_wrap::FRotator clientRest{};   // where the client's `settled` line says its door came to rest
+    ue_wrap::FRotator lastRead{};     // this peer's door at the last settle scan
+    float clientDev = 0.f;            // the largest angle of the client's door from `first`
+    int lid = -1;                     // this peer's copy of the door, once a pose resolved to it
     uint32_t resolved = 0, unresolved = 0;
 };
 Verdict g_v;
@@ -299,22 +313,28 @@ Verdict g_v;
 void Judge(bool timedOut) {
     g_v.said = true;
     PrintRx();
+    const Lid* l = g_v.lid >= 0 ? &g_lids[static_cast<size_t>(g_v.lid)] : nullptr;
+    void* door = l ? l->ref.Get() : nullptr;
+    void* mesh = door ? PR::GetStaticMesh(door) : nullptr;
+    const ue_wrap::FRotator mine = mesh ? E::GetComponentWorldRotation(mesh) : ue_wrap::FRotator{};
+    const char* result = "INVALID";
     if (g_v.clientDev < kSwingDeg) {
         UE_LOGW("[SWING-DRILL] %s INVALID the client's door turned only %.1f deg on the stream (need %.0f)", Role(),
                 g_v.clientDev, kSwingDeg);
     } else {
-        const Lid* l = g_v.lid >= 0 ? &g_lids[static_cast<size_t>(g_v.lid)] : nullptr;
         const float hostDev = l ? l->maxDev : 0.f;
-        const bool haveSettle = g_v.secondSeen && g_v.hostRead;
-        const float settle = haveSettle ? AngleDeg(g_v.hostSettled, g_v.clientSettled) : 180.f;
-        const bool pass = l && haveSettle && hostDev >= kFollowDeg && settle <= kSettleDeg;
+        const bool haveRest = mesh && g_v.settledSeen && !timedOut;
+        const float settle = haveRest ? AngleDeg(mine, g_v.clientRest) : 180.f;
+        result = haveRest && hostDev >= kFollowDeg && settle <= kSettleDeg ? "PASS" : "FAIL";
         UE_LOGI("[SWING-DRILL] %s %s: follow -- this peer's door turned %.1f deg of the client's %.1f (need >= %.0f) | "
-                "settle -- %.1f deg from the client's resting rotation%s (need <= %.0f) | poses resolved %u, "
-                "unresolved %u", Role(), pass ? "PASS" : "FAIL", hostDev, g_v.clientDev, kFollowDeg, settle,
-                timedOut ? " (the client's end line never came)"
-                         : haveSettle ? "" : " (no second-hold pose reached this peer's door)",
-                kSettleDeg, g_v.resolved, g_v.unresolved);
+                "settle -- this peer's door at (%.2f, %.2f, %.2f), the client's at (%.2f, %.2f, %.2f): %.2f deg between "
+                "the two orientations (need <= %.0f)%s | poses resolved %u, unresolved %u", Role(), result, hostDev,
+                g_v.clientDev, kFollowDeg, mine.Pitch, mine.Yaw, mine.Roll, g_v.clientRest.Pitch, g_v.clientRest.Yaw,
+                g_v.clientRest.Roll, settle, kSettleDeg,
+                timedOut ? " (no settled line, or this peer's door never came to rest)" : "", g_v.resolved,
+                g_v.unresolved);
     }
+    SayLine(std::string("verdict ") + Role() + " " + result);
     UE_LOGI("[SWING-DRILL] %s DONE", Role());
 }
 
@@ -330,13 +350,6 @@ void PoseArrived(const ue_wrap::FRotator& rot, int lid) {
     } else if (!g_v.settledSeen) {
         g_v.clientDev = (std::max)(g_v.clientDev, AngleDeg(rot, g_v.first));
     }
-    if (!g_v.settledSeen) return;
-    if (!g_v.secondSeen) {   // the second hold's first pose: this peer's door has not taken it yet
-        g_v.secondSeen = true;
-        g_v.hostRead = lid >= 0;
-        if (lid >= 0) g_v.hostSettled = g_lids[static_cast<size_t>(lid)].scanned;
-    }
-    g_v.clientSettled = rot;
 }
 
 // The client's key and this peer's, for the same lid: the proof that a lid whose game Key differs between
@@ -353,17 +366,32 @@ void CheckKey(const ChatEvent& e) {
 }
 
 void OnChat(const ChatEvent& e) {
-    if (Acts()) {   // the client sees its own lines come back
-        if (e.what == Phase::Settled) g_echoSettled = true;
-        else if (e.what == Phase::End) g_echoEnd = true;
+    if (e.what == Phase::Verdict) {   // the client is done once the host has judged
+        if (Acts() && e.mv == "host") g_hostVerdict = true;
         return;
     }
-    if (g_v.said) return;
+    if (Acts() || g_v.said) return;
     g_v.lastEvent = Clock::now();
     g_v.heard = true;
-    if (e.what == Phase::Grab) CheckKey(e);
-    else if (e.what == Phase::Settled) g_v.settledSeen = true;
-    else Judge(false);
+    if (e.what == Phase::Grab) {
+        CheckKey(e);
+    } else {
+        g_v.settledSeen = true;
+        g_v.clientRest = e.rot;
+        if (g_v.lid < 0) Judge(false);   // no pose reached a door here: nothing to wait for
+    }
+}
+
+// This peer's door at rest after the client's `settled` line: simulating, and the same as the scan before.
+void WatchRest() {
+    if (Acts() || !g_v.settledSeen || g_v.said || g_v.lid < 0) return;
+    void* door = g_lids[static_cast<size_t>(g_v.lid)].ref.Get();
+    void* mesh = door ? PR::GetStaticMesh(door) : nullptr;
+    if (!mesh || !E::IsComponentSimulatingPhysics(mesh)) { g_v.haveRead = false; return; }
+    const ue_wrap::FRotator w = E::GetComponentWorldRotation(mesh);
+    if (g_v.haveRead && AngleDeg(w, g_v.lastRead) <= kRestDeg) { Judge(false); return; }
+    g_v.lastRead = w;
+    g_v.haveRead = true;
 }
 
 // Every lid every scan; a lid that moved is sampled every 250 ms until a tail after its last move.
@@ -371,6 +399,7 @@ void TickWatch(Clock::time_point now) {
     if (now >= g_nextScan) {
         g_nextScan = now + kScanEvery;
         for (const ChatEvent& e : NewChat()) OnChat(e);
+        WatchRest();
         for (Lid& l : g_lids) {
             void* d = l.ref.Get();
             void* mesh = d ? PR::GetStaticMesh(d) : nullptr;
@@ -406,7 +435,7 @@ void TickWatch(Clock::time_point now) {
         nextRx = now + kSampleEvery;
         PrintRx();
     }
-    // The client's end line never came: the verdict is read without it.
+    // No settled line, or this peer's door never came to rest: the verdict is read as it stands.
     if (!Acts() && g_v.heard && !g_v.said && now - g_v.lastEvent > kJudgeBound) Judge(true);
 }
 
@@ -423,7 +452,6 @@ Clock::time_point g_nextReport{}, g_nextRead{};
 ue_wrap::FRotator g_lastRead{};   // the door at the last settle read
 bool g_haveRead = false;
 bool g_releaseEdge = false, g_wasTargetHeld = false;   // the held-item stream has let go of the door
-uint32_t g_emitsAtRegrab = 0;
 ue_wrap::FRotator g_grabRot{};   // the client's door at the grab: what its swing is measured from
 float g_peakDev = 0.f;           // the largest angle the client's door has turned from g_grabRot
 
@@ -434,8 +462,7 @@ std::wstring g_poseKey, g_otherHeldCls;
 void* g_lastOtherHeld = nullptr;   // compared as an address only
 
 const char* StepName() {
-    static const char* const n[] = {"Pick", "WalkTo", "Grab", "Drag", "Release", "Tail", "Announce", "Regrab",
-                                    "Settle", "Last", "Echo", "Done", "Invalid"};
+    static const char* const n[] = {"Pick", "WalkTo", "Grab", "Drag", "Release", "Tail", "Echo", "Done", "Invalid"};
     return n[static_cast<int>(g_step)];
 }
 
@@ -532,7 +559,6 @@ void TickActor(Clock::time_point now) {
     if (g_step == Step::Invalid || g_step == Step::Done) return;
     void* player = coop::players::Registry::Get().Local();
     if (!player || !R::IsLive(player) || !E::GetController(player)) return;
-    PumpOutbox();
     if (static_cast<int>(g_step) >= static_cast<int>(Step::Grab)) { ++g_ticks; ReportHeld(now); }
     switch (g_step) {
     case Step::Pick: {
@@ -645,39 +671,14 @@ void TickActor(Clock::time_point now) {
         g_haveRead = true;
         if (!same) return;
         LogTarget("settled");
-        SayLine("settled");
-        Go(Step::Announce);
-        return;
-    }
-    case Step::Announce:   // the line has come back from the lobby, so the watchers have it
-        if (!g_echoSettled) return;
-        g_grab = std::make_unique<coop::director::AimedGrab>(player, g_target.Get());
-        Go(Step::Regrab);
-        return;
-    case Step::Regrab: {   // the second hold, with no feed: the pose it rests at crosses on the stream
-        if (!g_target.Get()) { Invalid("the door died before the second hold"); return; }
-        const coop::director::GrabState gs = g_grab->Tick();
-        if (gs == coop::director::GrabState::Working) return;
-        if (gs == coop::director::GrabState::Failed) { Invalid(g_grab->Why()); return; }
-        LogTarget("regrabbed");
-        g_emitsAtRegrab = g_poseEmits;
-        Go(Step::Settle);
-        return;
-    }
-    case Step::Settle:   // held until the stream has carried a few of its poses
-        if (g_poseEmits - g_emitsAtRegrab < kSecondHoldPoses) return;
-        LogTarget("second hold");
-        coop::director::CallOnPlayer(player, L"dropGrabObject");
-        g_releaseEdge = false;
-        Go(Step::Last);
-        return;
-    case Step::Last:   // the stream has let go of the door
-        if (!g_releaseEdge) return;
-        SayLine("end");
+        char line[96];
+        snprintf(line, sizeof(line), "settled %.2f %.2f %.2f", w.Pitch, w.Yaw, w.Roll);
+        SayLine(line);
         Go(Step::Echo);
         return;
-    case Step::Echo:   // the end line has come back from the lobby: the watchers judge on it
-        if (!g_echoEnd) return;
+    }
+    case Step::Echo:   // the watchers answer the line with their verdicts: the host's ends this run
+        if (!g_hostVerdict) return;
         ReportHeld(now);
         PrintRx();
         UE_LOGI("[SWING-DRILL] client DONE: the door turned %.1f deg at its peak", g_peakDev);
@@ -708,6 +709,7 @@ void Tick(coop::net::Session* session) {
         MarkChat();
     }
     const Clock::time_point now = Clock::now();
+    PumpOutbox();
     TickWatch(now);
     if (Acts()) TickActor(now);
 }
@@ -726,9 +728,8 @@ void OnDisconnect() {
     g_outNext = 0;
     g_nextSayMs = 0;
     g_chatMark = 0;
-    g_echoSettled = g_echoEnd = false;
+    g_hostVerdict = false;
     g_haveRead = g_releaseEdge = g_wasTargetHeld = false;
-    g_emitsAtRegrab = 0;
     g_target.Reset();
     g_walk.reset();
     g_grab.reset();

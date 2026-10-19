@@ -705,7 +705,7 @@ CFG_ENUM(swinger_drill, "swinger_drill", "dev", "off", "off|measure|observe", "V
     "the acting client; the client walks to the nearest non-lockable lid its NavMesh reaches, grabs it "
     "through the player's own grab chain and feeds the player's input_mouseXY dispatcher, the delta doubling "
     "to a cap on each of four signs in turn until its own door has turned 15 degrees (a lid's spring holds it "
-    "at its open limit), then lets go and, once the door has settled, grabs it again; no sign moving it ends "
+    "at its open limit), then lets go and says in the lobby chat where its door settled; no sign moving it ends "
     "the run INVALID. The client prefers a lid whose game Key differs between processes and marks its phases "
     "in the lobby chat; a watcher judges on those lines and says whether the Key matched. observe: a second client, which only "
     "watches. A watching peer prints PASS when its copy of the door turned at least 10 degrees during the "

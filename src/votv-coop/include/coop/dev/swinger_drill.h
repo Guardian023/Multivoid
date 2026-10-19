@@ -1,17 +1,17 @@
-// coop/dev/swinger_drill.h -- [dev] what a dragged hinge door (prop_swinger_C) shows on the other peers. While a
-// player drags a swinger the game leaves it in the player's grabbing_actor, so the held-item stream carries the
-// door's pose; the drill judges what the receivers make of it.
+// coop/dev/swinger_drill.h -- [dev] what a dragged hinge door (prop_swinger_C) shows on the other peers: the game
+// leaves a dragged swinger in the player's grabbing_actor, so the held-item stream carries its pose.
 //   ini swinger_drill=off|measure|observe / env VOTVCOOP_SWINGER_DRILL.
 //   measure -- the host and the acting client (the first client). The client walks (bot director) to a non-lockable
 //              lid its NavMesh reaches, one whose game Key differs between processes first, and grabs it through the
 //              player's own grab chain. It feeds the player's input_mouseXY dispatcher, the delta doubling to a cap
 //              on each sign in turn ((-,-), (+,-), (-,+), (+,+): a lid's spring holds it at its open limit) until the
-//              door has turned. It lets go, and once the door has settled grabs it again so its resting pose crosses.
+//              door has turned. It lets go and, once its door has settled, says so in the lobby chat with the
+//              rotation it rests at; its DONE follows the host's verdict line.
 //   observe -- a second client (any later client does the same), which only watches.
-// The client marks its phases in the lobby chat (grab with the lid's two keys, settled, end), each phase starting on
-// a state edge, and a watching peer judges on those lines and on the poses it takes: PASS when its copy of the door
-// turned 10 degrees during the drag and rests within 3 of the client's resting rotation; a client door that did not
-// turn 15 degrees is INVALID. It also says whether the lid's game Key matched. Lines are tagged [SWING-DRILL];
+// The client's chat lines (grab with the lid's two keys, settled, each on a state edge) and the poses a watching
+// peer takes are what it judges on: PASS when its copy of the door turned 10 degrees during the drag and, once at rest,
+// lies within 3 degrees of the client's resting rotation, the angle between the two quaternions; a client door that
+// did not turn 15 degrees is INVALID. It also says whether the lid's game Key matched. Lines are tagged [SWING-DRILL];
 // every peer prints a baseline line per lid and a sample line every 250 ms for each lid that moved.
 
 #pragma once
