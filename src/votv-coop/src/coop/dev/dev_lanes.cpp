@@ -118,6 +118,7 @@
 #include "coop/dev/run_and_wait_selftest.h"  // [dev] the one game-thread wait's five endings, provoked
 #include "coop/dev/spawn_match_probe.h"  // the fuzzy-match candidate set and adoption watch
 #include "coop/dev/store_table_probe.h"  // which mechanism can read a list_store row
+#include "coop/dev/swinger_drill.h"  // [dev] what a dragged hinge door shows on the other peers
 #include "coop/dev/toggle_drill.h"  // [dev] whether a toggle device's state crosses both ways
 #include "coop/dev/world_first_check.h"  // [dev] client_world_first's verdict
 #include "coop/dev/vitals_keepalive.h"  // [dev] autonomous long-exposure keepalive (ini vitals_keepalive_sec)
@@ -184,6 +185,7 @@ void EndSession() {
     coop::dev::kerfur_serve_drill::OnDisconnect();  // [dev] back to the first phase
     coop::dev::door_drill::OnDisconnect();  // [dev] the door list and readings belong to one world
     coop::dev::toggle_drill::OnDisconnect();  // [dev] the device and its phase belong to one world
+    coop::dev::swinger_drill::OnDisconnect();  // [dev] the lids, the walk and the counters belong to one world
     coop::dev::blackout_drill::OnDisconnect();  // [dev] the panel and the phase belong to one world
     coop::dev::light_drill::OnDisconnect();  // [dev] the switch, its group and the phase belong to one world
     coop::dev::keypad_drill::OnDisconnect();  // [dev] the keypad and the legs belong to one world
@@ -289,6 +291,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::settings_drill::Tick(&session);  // [dev] the settings drill's steps (a latched enum compare when off)
     coop::dev::mannequin_drill::Tick(&session);  // [dev] the mannequin drill's phases (a single enum read when off)
     coop::dev::toggle_drill::Tick(&session);  // [dev] the toggle drill's toggles (a single check when off)
+    coop::dev::swinger_drill::Tick(&session);  // [dev] the swinger drill's watch and drag (a single check when off)
     coop::dev::world_first_check::Tick();  // [dev] client_world_first's verdict (a single bool read when off)
     coop::dev::blackout_drill::Tick(&session);  // [dev] the blackout drill's fire and reads (a single bool read when off)
     coop::dev::lid_drill::Tick(&session);  // [dev] the lid drill's legs (a single bool read when off)

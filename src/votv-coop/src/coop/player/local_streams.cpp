@@ -5,6 +5,7 @@
 #include "coop/player/local_streams.h"
 
 #include "coop/dev/perf_probe.h"
+#include "coop/dev/swinger_drill.h"  // NoteHeldActor, NoteHeldEdge, NotePoseEmit
 #include "coop/element/element.h"
 #include "coop/element/quiescence_drain.h"  // SupersedePosCorrection: the own release is the newest pose
 #include "coop/element/registry.h"          // EidForActor: the keyed eid of the released prop
@@ -258,6 +259,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
     // The ATV belongs to coop::atv_sync: a grabbed ATV is not a keyed interactable and would emit
     // zero-key poses the receivers drop.
     if (heldActor && ue_wrap::atv::IsAtv(heldActor)) heldActor = nullptr;
+    coop::dev::swinger_drill::NoteHeldActor(heldActor);
     // The garbage-pickup probe (ini garbage_pickup_probe=1): which of grabbing_actor and
     // holding_actor a clump pickup sets, plus the held class, key and keyed verdict; while
     // something is held, about 4 Hz; one bool load when off.
@@ -357,6 +359,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
                     heldActor, R::ClassNameOf(heldActor).c_str(),
                     ue_wrap::prop::GetInteractableKeyString(heldActor).c_str(),
                     eidLog, mirrored ? "BROADCAST" : "carry-only(trash/clump)");
+            coop::dev::swinger_drill::NoteHeldEdge(heldActor, mirrored, eidLog);
             // The carry-only invariant: every refusal in EnsureHeldItemBroadcast is an anti-dupe
             // gate that assumes the receiver resolves the item by another route (a kerfur prop by
             // its mirror eid, a clump by its pile's eid, a claimed save-loaded local by its shared
@@ -418,6 +421,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // An unreadable held prop streams no pose this tick; its identity is kept below.
         } else if (pp.key.len > 0 || pp.elementId != 0) {
             session.SetLocalPropPose(true, pp);
+            coop::dev::swinger_drill::NotePoseEmit(heldActor, keyW, pp.elementId);
             // The first 3 and every 60th, matching the receiver's throttle so the two logs diff
             // line for line.
             const uint64_t n = ++g_propEmitCount;

@@ -6,6 +6,7 @@
 #include "coop/props/remote_prop.h"
 #include "remote_prop_internal.h"  // impl-private (src-local), NOT under include/
 
+#include "coop/dev/swinger_drill.h"     // NotePropPose, NotePropUnresolved
 #include "coop/props/active_drive.h"   // the fixed-delay snapshot interp, shared with the trash carry stream
 #include "coop/props/prop_sound.h"
 #include "coop/props/trash_mirror.h"   // Retire (a trash mirror retires whole, pin released after the destroy)
@@ -199,6 +200,7 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     if (!prop && pose.elementId != 0)
         prop = ResolveLiveActorByEid(pose.elementId);
     if (!prop) {
+        coop::dev::swinger_drill::NotePropUnresolved(slot, keyW, pose.elementId);
         // The ledger separates the ordinary pose-before-spawn race from a sustained stream this
         // peer never got a spawn for: one WARN per sustained stream, not per packet.
         if (coop::unresolved_pose_ledger::Note(slot, keyW, pose.elementId, NowMs())) {
@@ -361,6 +363,10 @@ void Tick(coop::net::Session& session) {
                 BeginLerpToPose(drive, ue_wrap::FVector{pose.x, pose.y, pose.z},
                                 ue_wrap::FRotator{pose.pitch, pose.yaw, pose.roll}, nowMs);
                 drive.lastApplyMs = nowMs;
+                if (coop::dev::swinger_drill::IsEnabled())
+                    coop::dev::swinger_drill::NotePropPose(slot, KeyToWString(pose.key), pose.elementId, drive.actor,
+                                                           drive.mesh, ue_wrap::FVector{pose.x, pose.y, pose.z},
+                                                           ue_wrap::FRotator{pose.pitch, pose.yaw, pose.roll});
                 // The first 3 and every 60th target per slot.
                 static std::array<uint64_t, coop::players::kMaxPeers> sApplyCount{};
                 const uint64_t n = ++sApplyCount[slot];
