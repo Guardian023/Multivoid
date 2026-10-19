@@ -768,4 +768,18 @@ FRotator QuatToRotator(float x, float y, float z, float w) {
     return r;
 }
 
+float RotatorAngleDeg(const FRotator& a, const FRotator& b) {
+    float p[4], q[4];
+    RotatorToQuat(a.Pitch, a.Yaw, a.Roll, p[0], p[1], p[2], p[3]);
+    RotatorToQuat(b.Pitch, b.Yaw, b.Roll, q[0], q[1], q[2], q[3]);
+    double dot = 0.0, np = 0.0, nq = 0.0;
+    for (int i = 0; i < 4; ++i) {
+        dot += static_cast<double>(p[i]) * q[i];
+        np += static_cast<double>(p[i]) * p[i];
+        nq += static_cast<double>(q[i]) * q[i];
+    }
+    const double c = std::fabs(dot) / std::sqrt(np * nq);
+    return static_cast<float>(2.0 * std::acos(c > 1.0 ? 1.0 : c) * (180.0 / 3.14159265358979323846));
+}
+
 }  // namespace ue_wrap::engine

@@ -65,9 +65,11 @@ held-item stream carries its pose and the host relays it to the other clients. T
 lid differs between peers for most lids (a barrel's or crate's cap), so the pose and the release go under
 this lane's key for the lid (the portable `mv_` one, 19 characters; a game key is 22), and the receiving
 side finds the lid through this lane's index (`interactable_sync::ContainerActor`), parks its mesh and
-follows the pose as it follows any held prop. The holder's release (`PropRelease`) puts the lid at the
-release pose and unparks it with no throw velocity, thrown event or whoosh, and the lid's own spring
-settles from there. A peer whose own player drags the same lid ignores the remote poses for it. The
+follows the pose as it follows any held prop. A lid with nothing to hang on (a barrel's or crate's cap) falls
+when it is let go, so the holder keeps streaming its pose from its own copy until that copy is at rest, and
+only then sends the release (`PropRelease`): the others follow the same fall, parked, and the release puts
+the lid where it stopped and unparks it with no throw velocity, thrown event or whoosh. A peer whose own
+player drags the same lid ignores the remote poses for it. The
 held-item broadcast never expresses a lid as a spawned prop. A joiner mid-drag gets the live stream once its
 world is ready, and the release after it; a lid at rest comes with the lanes' connect snapshot. `[?]` until
 the swinger drill has a two-peer proof.

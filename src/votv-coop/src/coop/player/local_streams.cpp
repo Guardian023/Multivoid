@@ -26,6 +26,7 @@
 #include "ue_wrap/devices/atv.h"
 #include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/engine/engine.h"
+#include "ue_wrap/engine/engine_attach.h"   // IsActorRootBodyAtRest: a released swinger stops coasting
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/actors/prop.h"
 #include "ue_wrap/actors/puppet.h"
@@ -173,6 +174,45 @@ coop::element::ElementId ResolveHeldPropEid(void* heldActor) {
     if (eid == coop::element::kInvalidId)
         eid = coop::remote_prop::ResolveMirrorEidByActor(heldActor);
     return eid;
+}
+
+// A swinger with nothing to hang on (a barrel's cap, a crate's lid) falls when it is let go, and each peer's own
+// physics would carry it somewhere else. So the peer that let it go keeps the held pose stream running for it, from
+// its own copy, until that copy is at rest, and only then sends the release: the other peers follow the same fall
+// parked and let go of a door already where it stopped. At rest is the body asleep, or the same place and
+// orientation for kCoastStillTicks ticks. The release branch below is the trash flight's neighbour: that one keeps
+// streaming a thrown clump under its eid; this one keeps a released swinger under its key.
+constexpr int   kCoastStillTicks = 30;
+constexpr float kCoastStillCm    = 0.25f;
+constexpr float kCoastStillDeg   = 0.1f;
+ue_wrap::FVector  g_coastLoc{};
+ue_wrap::FRotator g_coastRot{};
+int g_coastStill = 0;
+
+// True while the released swinger is still moving: its pose goes out this tick and the release waits.
+bool CoastSwinger(coop::net::Session& session) {
+    if (!g_heldSwinger || !g_lastHeldProp.Alive()) return false;
+    void* const door = g_lastHeldProp.Raw();
+    ue_wrap::FVector loc{};
+    ue_wrap::FRotator rot{};
+    if (!ue_wrap::engine::TryGetActorLocation(door, loc) || !ue_wrap::engine::TryGetActorRotation(door, rot))
+        return false;
+    const float dx = loc.X - g_coastLoc.X, dy = loc.Y - g_coastLoc.Y, dz = loc.Z - g_coastLoc.Z;
+    const bool still = dx * dx + dy * dy + dz * dz <= kCoastStillCm * kCoastStillCm &&
+                       ue_wrap::engine::RotatorAngleDeg(rot, g_coastRot) <= kCoastStillDeg;
+    g_coastStill = still ? g_coastStill + 1 : 0;
+    g_coastLoc = loc;
+    g_coastRot = rot;
+    if (g_coastStill >= kCoastStillTicks || ue_wrap::engine::IsActorRootBodyAtRest(door)) return false;
+    coop::net::PropPoseSnapshot pp{};
+    pp.key = g_lastHeldKey;
+    pp.holdGen = g_holdGen;
+    pp.x = loc.X; pp.y = loc.Y; pp.z = loc.Z;
+    pp.pitch = ue_wrap::NormalizeAxis(rot.Pitch);
+    pp.yaw   = ue_wrap::NormalizeAxis(rot.Yaw);
+    pp.roll  = ue_wrap::NormalizeAxis(rot.Roll);
+    session.SetLocalPropPose(true, pp);
+    return true;
 }
 
 }  // namespace
@@ -365,6 +405,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
                     eidLog, mirrored ? "BROADCAST" : "carry-only(trash/clump)");
             coop::dev::swinger_drill::NoteHeldEdge(heldActor, mirrored, eidLog);
             g_heldSwinger = ue_wrap::swinger::EnsureResolved() && ue_wrap::swinger::IsSwinger(heldActor);
+            g_coastStill = 0;
             // The carry-only invariant: every refusal in EnsureHeldItemBroadcast is an anti-dupe
             // gate that assumes the receiver resolves the item by another route (a kerfur prop by
             // its mirror eid, a clump by its pile's eid, a claimed save-loaded local by its shared
@@ -518,7 +559,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
                         "(!IsLive or not-a-clump) -> the gap; await the re-grab or the land-settle close",
                         static_cast<unsigned>(g_lastHeldEid));
             }
-        } else {
+        } else if (!CoastSwinger(session)) {   // a swinger still falling keeps streaming; the release waits
         // The release edge (not carrying: the latch closed, or this is a non-trash prop). The
         // stream stops and a PropRelease goes out with the body's current velocity: the BP has
         // cleared grabbing_actor, released the handle and applied any impulse, and PhysX has not
@@ -594,6 +635,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         g_lastHeldProp.Reset();
         g_lastHeldKey = {};
         g_heldSwinger = false;
+        g_coastStill = 0;
         g_lastHeldEid = coop::element::kInvalidId;  // the cached held eid goes with the release
         }
     }

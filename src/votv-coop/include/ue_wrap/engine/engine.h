@@ -202,4 +202,10 @@ void RotatorToQuat(float pitchDeg, float yawDeg, float rollDeg,
 // engine does, at +-90 degrees). The quaternion is taken as a unit one.
 FRotator QuatToRotator(float qx, float qy, float qz, float qw);
 
+// The angle between two orientations, degrees, 0 to 180: 2*acos(|dot|) of their quaternions, computed in double
+// on quaternions re-normalised there, so two reads of one orientation give 0 and not the float rounding of a
+// near-1 dot (about 0.05 degrees). Rotators near pitch +-90 degrees are not unique per orientation, so this is
+// the comparison to use, never a difference of pitch, yaw and roll.
+float RotatorAngleDeg(const FRotator& a, const FRotator& b);
+
 }  // namespace ue_wrap::engine
