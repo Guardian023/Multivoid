@@ -86,36 +86,22 @@ constexpr int   kHoldAfterSwingTicks = 60;
 constexpr auto  kScanEvery      = std::chrono::milliseconds(100);
 constexpr auto  kSampleEvery    = std::chrono::milliseconds(250);
 constexpr auto  kTail           = std::chrono::seconds(5);   // how long a lid that stopped moving is still sampled
-constexpr auto  kReportEvery    = std::chrono::seconds(1);
 constexpr float kMovedDeg       = 0.5f;   // a mesh rotation that changed by more than this has moved
-constexpr float kRestDeg        = 0.05f;  // two reads this close are the same: the door has settled
+constexpr float kRestDeg        = 0.3f;   // two reads this close in orientation and in place are the same: at rest
+constexpr float kRestCm         = 0.5f;
+constexpr auto  kClientBound    = std::chrono::seconds(60);   // a client step that waits on an edge fails after this
 constexpr const char* kTag      = "[swing-drill] ";   // the chat lines: grab, settled, verdict
 // The verdict. The client's door must turn kSwingDeg or the run is INVALID; a peer passes when its own door turned
 // kFollowDeg during the drag and rests within kSettleDeg of where the client's door rested.
 constexpr float kSwingDeg       = 15.f;
 constexpr float kFollowDeg      = 10.f;
 constexpr float kSettleDeg      = 3.f;
-constexpr auto  kJudgeBound     = std::chrono::seconds(60);   // a failure bound: the watcher heard nothing new, its door at rest or the client's settled line
+constexpr float kSettleCm       = 5.f;    // and within this of where the client's door came to rest
+constexpr auto  kJudgeBound     = std::chrono::seconds(60);   // a watcher that hears nothing new this long judges as it stands
 
 float Dist(const ue_wrap::FVector& a, const ue_wrap::FVector& b) {
     const float dx = a.X - b.X, dy = a.Y - b.Y, dz = a.Z - b.Z;
     return std::sqrt(dx * dx + dy * dy + dz * dz);
-}
-
-struct Quat { float x, y, z, w; };
-
-// The unit quaternion of a rotator, the engine's own conversion.
-Quat QuatOf(const ue_wrap::FRotator& r) {
-    Quat q{};
-    E::RotatorToQuat(r.Pitch, r.Yaw, r.Roll, q.x, q.y, q.z, q.w);
-    return q;
-}
-
-// The angle between two orientations, degrees: how far a door turned, whatever axis it turned about.
-float AngleDeg(const ue_wrap::FRotator& a, const ue_wrap::FRotator& b) {
-    const Quat p = QuatOf(a), q = QuatOf(b);
-    const float dot = std::fabs(p.x * q.x + p.y * q.y + p.z * q.z + p.w * q.w);
-    return 2.f * std::acos(dot > 1.f ? 1.f : dot) * (180.f / 3.14159265f);
 }
 
 // ---- The lids: every peer watches every non-lockable lid its world holds ------------------------------
@@ -129,7 +115,7 @@ struct Reading {
 struct Lid {
     ue_wrap::CachedObjRef ref;
     std::wstring laneKey, propKey, ident;   // the lane's key, the game's Key, the portable identity's readable form
-    bool perProcessKey = false;            // a child of a keyed prop: its game Key differs between processes
+    bool perProcessKey = false;            // a child of a keyed prop (`k:<parent>/<part>`): its game Key differs
     ue_wrap::FRotator scanned{};           // the mesh's world rotation at the last scan that saw it move
     ue_wrap::FRotator restRot{};           // its rotation while the lid was not moving: where a move starts from
     float maxDev = 0.f;                    // the largest angle from restRot since the lid last started moving
@@ -174,9 +160,10 @@ void ArmWatch() {
         Lid l;
         l.ref.Set(o);
         l.laneKey = coop::interactable_sync::ContainerKey(o);
+        if (l.laneKey.empty()) continue;   // the lane does not index it: no peer could name it
         l.propKey = PR::GetInteractableKeyString(o);
         l.ident = coop::element::PortableIdentity(o);
-        l.perProcessKey = l.ident.rfind(L"k:", 0) == 0;
+        l.perProcessKey = l.ident.rfind(L"k:", 0) == 0 && l.ident.find(L'/') != std::wstring::npos;
         const Reading r = Read(o);
         l.scanned = l.restRot = r.meshWorld;
         g_lids.push_back(std::move(l));
@@ -224,7 +211,8 @@ struct ChatEvent {
     unsigned long long key;
     Phase what;
     std::string mv, gameKey;   // a Grab line's two keys; a Verdict line's role and result
-    ue_wrap::FRotator rot{};   // a Settled line's rotation: where the client's door came to rest
+    ue_wrap::FRotator rot{};   // a Settled line's rotation and place: where the client's door came to rest
+    ue_wrap::FVector at{};
 };
 
 std::vector<std::string> g_outbox;
@@ -269,14 +257,21 @@ std::vector<ChatEvent> NewChat() {
             word.push_back(rest.substr(from, sp == std::string::npos ? std::string::npos : sp - from));
             from = sp == std::string::npos ? rest.size() : sp + 1;
         }
+        float v[6] = {};
+        if (word.size() == 7 && word[0] == "settled")
+            for (int i = 0; i < 6; ++i) v[i] = std::strtof(word[static_cast<size_t>(i) + 1].c_str(), nullptr);
         if (word.size() == 3 && word[0] == "grab") {
+            if (word[1].empty() || word[2].empty()) {   // an empty key would match the first lid that has none
+                UE_LOGW("[SWING-DRILL] %s refuses a grab line with an empty key", Role());
+                return;
+            }
             e.what = Phase::Grab;
             e.mv = word[1];
             e.gameKey = word[2];
-        } else if (word.size() == 4 && word[0] == "settled") {
+        } else if (word.size() == 7 && word[0] == "settled") {
             e.what = Phase::Settled;
-            e.rot = {std::strtof(word[1].c_str(), nullptr), std::strtof(word[2].c_str(), nullptr),
-                     std::strtof(word[3].c_str(), nullptr)};
+            e.rot = {v[0], v[1], v[2]};
+            e.at = {v[3], v[4], v[5]};
         } else if (word.size() == 3 && word[0] == "verdict") {
             e.mv = word[1];
             e.gameKey = word[2];
@@ -303,8 +298,11 @@ struct Verdict {
     bool started = false, said = false, settledSeen = false, heard = false, haveRead = false;
     Clock::time_point lastEvent{};
     ue_wrap::FRotator first{};        // the client's door at the first pose
-    ue_wrap::FRotator clientRest{};   // where the client's `settled` line says its door came to rest
-    ue_wrap::FRotator lastRead{};     // this peer's door at the last settle scan
+    ue_wrap::FRotator clientRest{};   // where the client's `settled` line says its door came to rest,
+    ue_wrap::FVector clientAt{};      // in orientation and in place
+    ue_wrap::FRotator lastRead{};     // this peer's door at the last settle read
+    ue_wrap::FVector lastAt{};
+    Clock::time_point nextRead{};
     float clientDev = 0.f;            // the largest angle of the client's door from `first`
     int lid = -1;                     // this peer's copy of the door, once a pose resolved to it
     uint32_t resolved = 0, unresolved = 0;
@@ -318,6 +316,8 @@ void Judge(bool timedOut) {
     void* door = l ? l->ref.Get() : nullptr;
     void* mesh = door ? PR::GetStaticMesh(door) : nullptr;
     const ue_wrap::FRotator mine = mesh ? E::GetComponentWorldRotation(mesh) : ue_wrap::FRotator{};
+    ue_wrap::FVector mineAt{};
+    if (door) E::TryGetActorLocation(door, mineAt);
     const char* result = "INVALID";
     if (g_v.clientDev < kSwingDeg) {
         UE_LOGW("[SWING-DRILL] %s INVALID the client's door turned only %.1f deg on the stream (need %.0f)", Role(),
@@ -325,13 +325,16 @@ void Judge(bool timedOut) {
     } else {
         const float hostDev = l ? l->maxDev : 0.f;
         const bool haveRest = mesh && g_v.settledSeen && !timedOut;
-        const float settle = haveRest ? AngleDeg(mine, g_v.clientRest) : 180.f;
-        result = haveRest && hostDev >= kFollowDeg && settle <= kSettleDeg ? "PASS" : "FAIL";
+        const float settle = haveRest ? E::RotatorAngleDeg(mine, g_v.clientRest) : 180.f;
+        const float apart = haveRest ? Dist(mineAt, g_v.clientAt) : -1.f;
+        result = haveRest && hostDev >= kFollowDeg && settle <= kSettleDeg && apart <= kSettleCm ? "PASS" : "FAIL";
         UE_LOGI("[SWING-DRILL] %s %s: follow -- this peer's door turned %.1f deg of the client's %.1f (need >= %.0f) | "
-                "settle -- this peer's door at (%.2f, %.2f, %.2f), the client's at (%.2f, %.2f, %.2f): %.2f deg between "
-                "the two orientations (need <= %.0f)%s | poses resolved %u, unresolved %u", Role(), result, hostDev,
-                g_v.clientDev, kFollowDeg, mine.Pitch, mine.Yaw, mine.Roll, g_v.clientRest.Pitch, g_v.clientRest.Yaw,
-                g_v.clientRest.Roll, settle, kSettleDeg,
+                "settle -- this peer's door at (%.2f, %.2f, %.2f) place (%.1f, %.1f, %.1f), the client's at (%.2f, %.2f, "
+                "%.2f) place (%.1f, %.1f, %.1f): %.2f deg between the two orientations (need <= %.0f), %.1f cm apart "
+                "(need <= %.0f)%s | poses resolved %u, unresolved %u", Role(), result, hostDev, g_v.clientDev,
+                kFollowDeg, mine.Pitch, mine.Yaw, mine.Roll, mineAt.X, mineAt.Y, mineAt.Z, g_v.clientRest.Pitch,
+                g_v.clientRest.Yaw, g_v.clientRest.Roll, g_v.clientAt.X, g_v.clientAt.Y, g_v.clientAt.Z, settle,
+                kSettleDeg, apart, kSettleCm,
                 timedOut ? " (no settled line, or this peer's door never came to rest)" : "", g_v.resolved,
                 g_v.unresolved);
     }
@@ -349,7 +352,7 @@ void PoseArrived(const ue_wrap::FRotator& rot, int lid) {
         g_v.started = true;
         g_v.first = rot;
     } else if (!g_v.settledSeen) {
-        g_v.clientDev = (std::max)(g_v.clientDev, AngleDeg(rot, g_v.first));
+        g_v.clientDev = (std::max)(g_v.clientDev, E::RotatorAngleDeg(rot, g_v.first));
     }
 }
 
@@ -379,19 +382,30 @@ void OnChat(const ChatEvent& e) {
     } else {
         g_v.settledSeen = true;
         g_v.clientRest = e.rot;
+        g_v.clientAt = e.at;
         if (g_v.lid < 0) Judge(false);   // no pose reached a door here: nothing to wait for
     }
 }
 
-// This peer's door at rest after the client's `settled` line: simulating, and the same as the scan before.
-void WatchRest() {
-    if (Acts() || !g_v.settledSeen || g_v.said || g_v.lid < 0) return;
+// This peer's door at rest after the client's `settled` line: simulating (the release unparked it), and two reads a
+// sample apart the same in place and in orientation.
+void WatchRest(Clock::time_point now) {
+    if (Acts() || !g_v.settledSeen || g_v.said || g_v.lid < 0 || now < g_v.nextRead) return;
+    g_v.nextRead = now + kSampleEvery;
     void* door = g_lids[static_cast<size_t>(g_v.lid)].ref.Get();
     void* mesh = door ? PR::GetStaticMesh(door) : nullptr;
-    if (!mesh || !E::IsComponentSimulatingPhysics(mesh)) { g_v.haveRead = false; return; }
+    ue_wrap::FVector at{};
+    if (!mesh || !E::TryGetActorLocation(door, at) || !E::IsComponentSimulatingPhysics(mesh)) {
+        g_v.haveRead = false;
+        return;
+    }
     const ue_wrap::FRotator w = E::GetComponentWorldRotation(mesh);
-    if (g_v.haveRead && AngleDeg(w, g_v.lastRead) <= kRestDeg) { Judge(false); return; }
+    if (g_v.haveRead && E::RotatorAngleDeg(w, g_v.lastRead) <= kRestDeg && Dist(at, g_v.lastAt) <= kRestCm) {
+        Judge(false);
+        return;
+    }
     g_v.lastRead = w;
+    g_v.lastAt = at;
     g_v.haveRead = true;
 }
 
@@ -400,20 +414,20 @@ void TickWatch(Clock::time_point now) {
     if (now >= g_nextScan) {
         g_nextScan = now + kScanEvery;
         for (const ChatEvent& e : NewChat()) OnChat(e);
-        WatchRest();
+        WatchRest(now);
         for (Lid& l : g_lids) {
             void* d = l.ref.Get();
             void* mesh = d ? PR::GetStaticMesh(d) : nullptr;
             if (!mesh) continue;
             const ue_wrap::FRotator w = E::GetComponentWorldRotation(mesh);
-            if (l.tracked) l.maxDev = (std::max)(l.maxDev, AngleDeg(w, l.restRot));
-            else if (AngleDeg(w, l.scanned) <= kMovedDeg) l.restRot = w;
-            if (AngleDeg(w, l.scanned) <= kMovedDeg) continue;
+            if (l.tracked) l.maxDev = (std::max)(l.maxDev, E::RotatorAngleDeg(w, l.restRot));
+            else if (E::RotatorAngleDeg(w, l.scanned) <= kMovedDeg) l.restRot = w;
+            if (E::RotatorAngleDeg(w, l.scanned) <= kMovedDeg) continue;
             l.scanned = w;
             l.lastMoveAt = now;
             if (!l.tracked) {
                 l.tracked = true;
-                l.maxDev = AngleDeg(w, l.restRot);
+                l.maxDev = E::RotatorAngleDeg(w, l.restRot);
                 l.nextSample = now;
             }
         }
@@ -449,23 +463,13 @@ size_t g_targetLid = 0;
 ue_wrap::FVector g_targetAt{};
 std::shared_ptr<coop::director::BackgroundWalk> g_walk;
 std::unique_ptr<coop::director::AimedGrab> g_grab;
-Clock::time_point g_nextReport{}, g_nextRead{};
+Clock::time_point g_nextRead{}, g_stepSince{};
 ue_wrap::FRotator g_lastRead{};   // the door at the last settle read
+ue_wrap::FVector g_lastAt{};
 bool g_haveRead = false;
-bool g_releaseEdge = false, g_wasTargetHeld = false;   // the held-item stream has let go of the door
+bool g_releaseEdge = false;   // the held-item stream has sent the door's release
 ue_wrap::FRotator g_grabRot{};   // the client's door at the grab: what its swing is measured from
 float g_peakDev = 0.f;           // the largest angle the client's door has turned from g_grabRot
-
-// The held-prop stream's side, filled by local_streams through the Note* seams.
-uint32_t g_heldTicks = 0, g_ticks = 0, g_poseEmits = 0, g_edgeEid = 0, g_poseEid = 0;
-bool g_edgeSeen = false, g_edgeBroadcast = false;
-std::wstring g_poseKey, g_otherHeldCls;
-void* g_lastOtherHeld = nullptr;   // compared as an address only
-
-const char* StepName() {
-    static const char* const n[] = {"Pick", "WalkTo", "Grab", "Drag", "Release", "Tail", "Echo", "Done", "Invalid"};
-    return n[static_cast<int>(g_step)];
-}
 
 void Invalid(const char* why) {
     UE_LOGW("[SWING-DRILL] client INVALID %s", why);
@@ -474,6 +478,7 @@ void Invalid(const char* why) {
 
 void Go(Step s) {
     g_step = s;
+    g_stepSince = Clock::now();
 }
 
 void LogTarget(const char* what) {
@@ -544,23 +549,10 @@ bool PickTarget(void* player, const char*& why) {
     return true;
 }
 
-// Once a second while the door is dragged and after: what the held-prop stream says of it.
-void ReportHeld(Clock::time_point now) {
-    if (now < g_nextReport) return;
-    g_nextReport = now + kReportEvery;
-    UE_LOGI("[SWING-DRILL] client held (%s): local_streams named the door the held actor on %u of the last %u ticks | "
-            "new-hold edge seen %d, held-item broadcast %d, eid %u | held poses handed to the session %u, last key "
-            "'%ls' eid %u | another held actor: '%ls'",
-            StepName(), g_heldTicks, g_ticks, g_edgeSeen ? 1 : 0, g_edgeBroadcast ? 1 : 0, g_edgeEid, g_poseEmits,
-            g_poseKey.c_str(), g_poseEid, g_otherHeldCls.c_str());
-    g_heldTicks = g_ticks = 0;
-}
-
 void TickActor(Clock::time_point now) {
     if (g_step == Step::Invalid || g_step == Step::Done) return;
     void* player = coop::players::Registry::Get().Local();
     if (!player || !R::IsLive(player) || !E::GetController(player)) return;
-    if (static_cast<int>(g_step) >= static_cast<int>(Step::Grab)) { ++g_ticks; ReportHeld(now); }
     switch (g_step) {
     case Step::Pick: {
         const char* why = "";
@@ -624,7 +616,7 @@ void TickActor(Clock::time_point now) {
                     "turned %.1f deg", kSigns[g_sign].x, kSigns[g_sign].y, g_signTicks, g_feedX, g_feedY, delivered,
                     delivered == 1 ? "y" : "ies", g_peakDev);
         if (void* mesh = PR::GetStaticMesh(d))
-            g_peakDev = (std::max)(g_peakDev, AngleDeg(E::GetComponentWorldRotation(mesh), g_grabRot));
+            g_peakDev = (std::max)(g_peakDev, E::RotatorAngleDeg(E::GetComponentWorldRotation(mesh), g_grabRot));
         g_lids[g_targetLid].lastMoveAt = now;
         ++g_dragTicks;
         ++g_signTicks;
@@ -661,26 +653,36 @@ void TickActor(Clock::time_point now) {
         Go(Step::Tail);
         return;
     }
-    case Step::Tail: {   // settled: two reads a sample apart, after the stream's release, agree
+    case Step::Tail: {   // at rest: after the stream's release, two reads a sample apart agree in place and orientation
+        if (now - g_stepSince > kClientBound) { Invalid("the door never read unchanged within the bound"); return; }
         if (!g_releaseEdge || now < g_nextRead) return;
         g_nextRead = now + kSampleEvery;
-        void* mesh = PR::GetStaticMesh(g_target.Get());
-        if (!mesh) { Invalid("the door has no mesh to read"); return; }
+        void* d = g_target.Get();
+        void* mesh = d ? PR::GetStaticMesh(d) : nullptr;
+        ue_wrap::FVector at{};
+        if (!mesh || !E::TryGetActorLocation(d, at)) { Invalid("the door has no mesh or place to read"); return; }
         const ue_wrap::FRotator w = E::GetComponentWorldRotation(mesh);
-        const bool same = g_haveRead && AngleDeg(w, g_lastRead) <= kRestDeg;
+        const float turned = g_haveRead ? E::RotatorAngleDeg(w, g_lastRead) : -1.f;
+        const float moved = g_haveRead ? Dist(at, g_lastAt) : -1.f;
+        UE_LOGI("[SWING-DRILL] client rest read: %.3f deg and %.2f cm from the last (at rest within %.1f and %.1f)",
+                turned, moved, kRestDeg, kRestCm);
+        const bool same = g_haveRead && turned <= kRestDeg && moved <= kRestCm;
         g_lastRead = w;
+        g_lastAt = at;
         g_haveRead = true;
         if (!same) return;
         LogTarget("settled");
-        char line[96];
-        snprintf(line, sizeof(line), "settled %.2f %.2f %.2f", w.Pitch, w.Yaw, w.Roll);
+        char line[128];
+        snprintf(line, sizeof(line), "settled %.2f %.2f %.2f %.1f %.1f %.1f", w.Pitch, w.Yaw, w.Roll, at.X, at.Y, at.Z);
         SayLine(line);
         Go(Step::Echo);
         return;
     }
     case Step::Echo:   // the watchers answer the line with their verdicts: the host's ends this run
-        if (!g_hostVerdict) return;
-        ReportHeld(now);
+        if (!g_hostVerdict) {
+            if (now - g_stepSince > kClientBound) Invalid("the host's verdict line never came");
+            return;
+        }
         PrintRx();
         UE_LOGI("[SWING-DRILL] client DONE: the door turned %.1f deg at its peak", g_peakDev);
         g_step = Step::Done;
@@ -730,44 +732,15 @@ void OnDisconnect() {
     g_nextSayMs = 0;
     g_chatMark = 0;
     g_hostVerdict = false;
-    g_haveRead = g_releaseEdge = g_wasTargetHeld = false;
+    g_haveRead = g_releaseEdge = false;
     g_target.Reset();
     g_walk.reset();
     g_grab.reset();
     g_rx = Rx{};
-    g_heldTicks = g_ticks = g_poseEmits = g_edgeEid = g_poseEid = 0;
-    g_edgeSeen = g_edgeBroadcast = false;
-    g_poseKey.clear();
-    g_otherHeldCls.clear();
-    g_lastOtherHeld = nullptr;
 }
 
-void NoteHeldActor(void* heldActor) {
-    if (!IsEnabled()) return;
-    const bool targetNow = heldActor && heldActor == g_target.Raw();
-    if (g_wasTargetHeld && !targetNow) g_releaseEdge = true;   // local_streams sends the release on this tick
-    g_wasTargetHeld = targetNow;
-    if (!heldActor) return;
-    if (heldActor == g_target.Raw()) {
-        ++g_heldTicks;
-    } else if (heldActor != g_lastOtherHeld) {
-        g_lastOtherHeld = heldActor;
-        g_otherHeldCls = R::ClassNameOf(heldActor);
-    }
-}
-
-void NoteHeldEdge(void* heldActor, bool broadcast, uint32_t eid) {
-    if (!IsEnabled() || !heldActor || heldActor != g_target.Raw()) return;
-    g_edgeSeen = true;
-    g_edgeBroadcast = broadcast;
-    g_edgeEid = eid;
-}
-
-void NotePoseEmit(void* heldActor, const std::wstring& key, uint32_t eid) {
-    if (!IsEnabled() || !heldActor || heldActor != g_target.Raw()) return;
-    ++g_poseEmits;
-    g_poseKey = key;
-    g_poseEid = eid;
+void NoteReleased(void* heldActor) {
+    if (IsEnabled() && heldActor && heldActor == g_target.Raw()) g_releaseEdge = true;   // the release has gone out
 }
 
 void NotePropPose(int slot, const coop::net::PropPoseSnapshot& pose, void* actor, void* mesh) {

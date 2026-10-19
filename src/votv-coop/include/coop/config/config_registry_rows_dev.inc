@@ -702,18 +702,16 @@ CFG_STRING(toggle_drill, "toggle_drill", "dev", "", "VOTVCOOP_TOGGLE_DRILL", fal
     "back an oven its save had repaired before any client connects, and the reader's DONE line ends it.")
 CFG_ENUM(swinger_drill, "swinger_drill", "dev", "off", "off|measure|observe", "VOTVCOOP_SWINGER_DRILL",
     "Drill (host and clients): what a dragged hinge door shows on the other peers. measure: the host and "
-    "the acting client; the client walks to the nearest non-lockable lid its NavMesh reaches, grabs it "
-    "through the player's own grab chain and feeds the player's input_mouseXY dispatcher, the delta doubling "
-    "to a cap on each of four signs in turn until its own door has turned 15 degrees (a lid's spring holds it "
-    "at its open limit), then lets go and says in the lobby chat where its door settled; no sign moving it ends "
-    "the run INVALID. The client prefers a lid whose game Key differs between processes and marks its phases "
-    "in the lobby chat; a watcher judges on those lines and says whether the Key matched. observe: a second client, which only "
-    "watches. A watching peer prints PASS when its copy of the door turned at least 10 degrees during the "
-    "drag and rests within 3 degrees of the client's resting rotation, else FAIL. Every peer prints a "
-    "baseline line per lid, then every 250 ms a sample line for each lid that moved (actor and mesh "
-    "transform, opened, simulating); the client says each second whether its held-item stream names the "
-    "door; the host and observer count each PropPose they take. Lines tagged [SWING-DRILL]; the client's "
-    "DONE line ends its part.")
+    "the acting client. The client walks to a non-lockable lid its NavMesh reaches, one whose game Key differs "
+    "between processes first, grabs it through the player's own grab chain and feeds the player's "
+    "input_mouseXY dispatcher, the delta doubling to a cap on each of four signs in turn until its own door "
+    "has turned 15 degrees (a lid's spring holds it at its open limit); no sign moving it ends the run "
+    "INVALID. It lets go, and once the door has come to rest says in the lobby chat where it rests. observe: "
+    "a second client, which only watches. A watching peer prints PASS when its copy of the door turned at "
+    "least 10 degrees during the drag and, at rest, lies within 3 degrees and 5 cm of the client's, else "
+    "FAIL, and says whether the lid's game Key matched. Every peer prints a baseline line per lid, then "
+    "every 250 ms a sample line for each lid that moved. Lines tagged [SWING-DRILL]; the client's DONE "
+    "line ends its part, after the host's verdict.")
 CFG_STRING(door_drill_door, "door_drill_door", "dev", "", "VOTVCOOP_DOOR_DRILL_DOOR", false,
     "With door_drill: the object name of the one door the walker walks to (e.g. "
     "door_GEN_VARIABLE_door_C_CAT_45); empty walks the nearest one its navmesh reaches.")
