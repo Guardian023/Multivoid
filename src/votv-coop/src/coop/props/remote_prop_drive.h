@@ -13,6 +13,7 @@
 
 #include <array>
 #include <cstdint>
+#include <string>
 
 namespace coop::remote_prop {
 
@@ -30,8 +31,9 @@ struct HoldGate {
     uint16_t closedGen   = 0;
     bool     haveClosed  = false;
     uint16_t driveGen    = 0;      // the hold the slot's drive belongs to, while there is one
-    uint16_t refusedGen  = 0;      // the hold a static refusal was said for
+    uint16_t refusedGen  = 0;      // the hold a refusal was said for (a static prop, a door the local player drags)
     uint16_t preludeGen  = 0;      // the hold the grab's prelude ran for
+    uint16_t cueGen      = 0;      // the hold the grab's click and sound played for
     uint16_t tailSaidGen = 0;      // the closed hold a late pose was said for
     uint32_t relatches   = 0;      // re-latches during the drive, said at the first and at the loud mark
 };
@@ -63,6 +65,12 @@ bool StickHoldsPhysicsOff(void* actor);
 // A door this peer's own player drags is moved by that drag on this copy, which wins at drive start
 // and at every pose after it. Said once per hold.
 bool LocalDragsDoor(void* door, int slot, uint16_t gen);
+
+// The live actor a wire key names, or null. A portable key (`mv_`, a container-lane swinger) goes to that
+// lane's index alone: the portable token is minted only by element::PortableWireKey, so no prop's game Key
+// starts with it, and the prop key index would answer a miss with a catch-up drain on every call. Any
+// other key asks the prop key index first and the container lane second. Game thread.
+void* ResolveKeyedActor(const std::wstring& keyW);
 
 // Resolve the pose's prop and start the slot's drive on it (the grab's prelude, park, drive cache).
 void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose);

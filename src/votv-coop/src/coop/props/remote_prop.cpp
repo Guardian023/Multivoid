@@ -8,7 +8,6 @@
 #include "remote_prop_drive.h"     // g_drives, g_holds, the hold gate, ResolveAndStartDrive
 
 #include "coop/dev/swinger_drill.h"     // NotePropPose, NotePropUnresolved
-#include "coop/interactables/interactable_sync.h"  // ContainerActor: a dragged swinger's key to its actor
 #include "coop/props/active_drive.h"   // the fixed-delay snapshot interp, shared with the trash carry stream
 #include "coop/props/prop_sound.h"
 #include "coop/props/trash_mirror.h"   // Retire (a trash mirror retires whole, pin released after the destroy)
@@ -25,7 +24,6 @@
 #include "coop/props/prop_park.h"  // Park / Unpark: a held prop, and a Character welded on it
 #include "coop/props/prop_echo_suppress.h"
 #include "coop/props/prop_element_tracker.h"
-#include "coop/props/prop_key_index.h"  // a key on the wire to a live actor
 #include "coop/props/prop_stick_sync.h"  // the stuck wall-attachable gates
 #include "coop/props/prop_wire_parity.h"  // ConvergeFrozenSleep, the release's flags
 #include "coop/props/unresolved_pose_ledger.h"  // a pose-before-spawn race vs a sustained identity gap
@@ -163,8 +161,10 @@ void Tick(coop::net::Session& session) {
         // it from the flags, as this peer's own laptop exit does to a chair another peer carries, and
         // Blueprints call SetSimulatePhysics directly too (the drive's own eject among them), so the
         // state is read each tick rather than one verb hooked: one call per driven prop, a tick's lag.
-        // The prop drive only: the clump has no such verb.
-        if (drive.mesh && drive.LiveActor() && ue_wrap::engine::IsComponentSimulatingPhysics(drive.mesh)) {
+        // The prop drive only: the clump has no such verb. A door the local player drags is simulating
+        // because that drag turned it on, so it is left alone until the next pose's drag check ends the drive.
+        if (drive.mesh && drive.LiveActor() && ue_wrap::engine::IsComponentSimulatingPhysics(drive.mesh) &&
+            !LocalDragsDoor(drive.LiveActor(), slot, hold.driveGen)) {
             coop::prop_park::Park(drive.LiveActor(), drive.mesh);
             if (++hold.relatches == 1) {
                 UE_LOGI("remote_prop: slot %d hold %u -- the game turned simulation back on under the drive; "
@@ -238,8 +238,7 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
         }
     }
     if (releasedSlot < 0) {
-        void* prop = coop::prop_key_index::Find(keyW);
-        if (!prop) prop = coop::interactable_sync::ContainerActor(keyW);
+        void* prop = ResolveKeyedActor(keyW);
         if (prop) {
             // No drive entry carries this key and eid: a keyed prop resolves from the live world.
             propActor = prop;

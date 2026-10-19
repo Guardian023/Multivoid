@@ -121,11 +121,21 @@ bool StickHoldsPhysicsOff(void* actor) {
 // pose after it: a swinger has no eid and no arbiter. Said once per hold.
 bool LocalDragsDoor(void* door, int slot, uint16_t gen) {
     void* const own = coop::players::Registry::Get().Local();
-    if (!own || !ue_wrap::swinger::IsSwinger(door) || !ue_wrap::engine::IsMainPlayerGrabbing(own, door)) return false;
+    // The grab compare is the cheap test and is false for nearly every held prop, so it goes first.
+    if (!own || !ue_wrap::engine::IsMainPlayerGrabbing(own, door) || !ue_wrap::swinger::IsSwinger(door)) return false;
     if (g_holds[slot].refusedGen != gen)
         UE_LOGI("remote_prop: slot %d hold %d streams a door this peer drags -- not driven", slot, gen);
     g_holds[slot].refusedGen = gen;
     return true;
+}
+
+void* ResolveKeyedActor(const std::wstring& keyW) {
+    // A dragged swinger streams under the container lane's key, and as a child actor it is not in the prop
+    // key index. The portable token is minted only by element::PortableWireKey ("mv_" + hex, portable_identity.cpp),
+    // so a key that starts with it never names a prop and skips that index, whose miss runs a catch-up drain.
+    if (keyW.rfind(L"mv_", 0) == 0) return coop::interactable_sync::ContainerActor(keyW);
+    void* prop = coop::prop_key_index::Find(keyW);
+    return prop ? prop : coop::interactable_sync::ContainerActor(keyW);
 }
 
 void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
@@ -150,12 +160,7 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     }
     const std::wstring keyW = KeyToWString(pose.key);
     // Key first (an Aprop_C), then eid (the clump streams key None).
-    void* prop = nullptr;
-    if (!keyW.empty() && keyW != L"None") {
-        prop = coop::prop_key_index::Find(keyW);
-        // A dragged swinger streams under the container lane's key, and as a child actor it is not in that index.
-        if (!prop) prop = coop::interactable_sync::ContainerActor(keyW);
-    }
+    void* prop = (!keyW.empty() && keyW != L"None") ? ResolveKeyedActor(keyW) : nullptr;
     if (!prop && pose.elementId != 0)
         prop = ResolveLiveActorByEid(pose.elementId);
     if (!prop) {
@@ -233,9 +238,13 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
             mesh ? "Aprop physics-off" : "clump kinematic (generic physics-off)");
     // Both native grab sounds play only in the grabber's own input chain, so the receiver plays
     // them: the fixed `use` click and the per-material soft cue (a plain-actor clump resolves its
-    // root material's physSound row; silent on a miss).
-    coop::prop_sound::PlayUseClick(prop);
-    coop::prop_sound::PlayGrabSound(prop);
+    // root material's physSound row; silent on a miss). Once per hold: a drive that restarts for the
+    // same hold (a local drag of a door ended) is not a new grab, and plays no cue.
+    if (pose.holdGen == 0 || hold.cueGen != pose.holdGen) {
+        hold.cueGen = pose.holdGen;
+        coop::prop_sound::PlayUseClick(prop);
+        coop::prop_sound::PlayGrabSound(prop);
+    }
     // Simulation off so the per-packet SetActorLocation sticks: a kinematic follow, the clump
     // through the generic root toggle, and a Character welded on the prop stopped (prop_park.h).
     coop::prop_park::Park(prop, mesh);
