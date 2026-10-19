@@ -12,6 +12,7 @@
 #include "coop/element/portable_identity.h"
 #include "coop/dev/toggle_drill.h"
 #include "coop/interactables/interactable_sync.h"
+#include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"
 #include "coop/player/roster.h"
@@ -769,8 +770,7 @@ void NotePoseEmit(void* heldActor, const std::wstring& key, uint32_t eid) {
     g_poseEid = eid;
 }
 
-void NotePropPose(int slot, const std::wstring& key, uint32_t eid, void* actor, void* mesh,
-                  const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot) {
+void NotePropPose(int slot, const coop::net::PropPoseSnapshot& pose, void* actor, void* mesh) {
     if (!IsEnabled()) return;
     int lid = -1;
     for (size_t i = 0; i < g_lids.size(); ++i)
@@ -778,23 +778,23 @@ void NotePropPose(int slot, const std::wstring& key, uint32_t eid, void* actor, 
     if (lid >= 0) ++g_rx.door;
     else ++g_rx.other;
     g_rx.slot = slot;
-    g_rx.key = key;
-    g_rx.eid = eid;
+    g_rx.key.assign(pose.key.data, pose.key.data + pose.key.len);
+    g_rx.eid = pose.elementId;
     g_rx.actor = actor;
     g_rx.mesh = mesh;
-    g_rx.loc = loc;
-    g_rx.rot = rot;
-    if (lid >= 0) PoseArrived(rot, lid);   // a pose for another prop is not the door's
+    g_rx.loc = {pose.x, pose.y, pose.z};
+    g_rx.rot = {pose.pitch, pose.yaw, pose.roll};
+    if (lid >= 0) PoseArrived(g_rx.rot, lid);   // a pose for another prop is not the door's
 }
 
-void NotePropUnresolved(int slot, const std::wstring& key, uint32_t eid, const ue_wrap::FRotator& rot) {
+void NotePropUnresolved(int slot, const coop::net::PropPoseSnapshot& pose) {
     if (!IsEnabled()) return;
     ++g_rx.unresolved;
     g_rx.slot = slot;
-    g_rx.key = key;
-    g_rx.eid = eid;
+    g_rx.key.assign(pose.key.data, pose.key.data + pose.key.len);
+    g_rx.eid = pose.elementId;
     g_rx.actor = nullptr;
-    PoseArrived(rot, -1);
+    PoseArrived(ue_wrap::FRotator{pose.pitch, pose.yaw, pose.roll}, -1);
 }
 
 }  // namespace coop::dev::swinger_drill

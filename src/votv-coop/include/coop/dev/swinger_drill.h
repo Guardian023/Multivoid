@@ -21,7 +21,7 @@
 #include <cstdint>
 #include <string>
 
-namespace coop::net { class Session; }
+namespace coop::net { class Session; struct PropPoseSnapshot; }
 
 namespace coop::dev::swinger_drill {
 
@@ -44,8 +44,7 @@ void OnDisconnect();
 void NoteHeldActor(void* heldActor);
 void NoteHeldEdge(void* heldActor, bool broadcast, uint32_t eid);
 void NotePoseEmit(void* heldActor, const std::wstring& key, uint32_t eid);
-void NotePropPose(int slot, const std::wstring& key, uint32_t eid, void* actor, void* mesh,
-                  const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot);
-void NotePropUnresolved(int slot, const std::wstring& key, uint32_t eid, const ue_wrap::FRotator& rot);
+void NotePropPose(int slot, const coop::net::PropPoseSnapshot& pose, void* actor, void* mesh);
+void NotePropUnresolved(int slot, const coop::net::PropPoseSnapshot& pose);
 
 }  // namespace coop::dev::swinger_drill

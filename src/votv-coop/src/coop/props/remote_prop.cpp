@@ -147,14 +147,6 @@ bool KeyMatchesCache(int slot, const coop::net::WireKey& k) {
     return std::memcmp(k.data, d.lastKey.data(), k.len) == 0;
 }
 
-// The slot driving the prop with this key, or -1.
-int FindSlotByKey(const coop::net::WireKey& k) {
-    for (int slot = 0; slot < static_cast<int>(coop::players::kMaxPeers); ++slot) {
-        if (g_drives[slot].actor && KeyMatchesCache(slot, k)) return slot;
-    }
-    return -1;
-}
-
 // Every release-shaped physics re-enable (PropRelease, the stream-stop timeout, the switched-prop
 // release) is gated on the stick state: a wall-attachable that stuck while held stays frozen when
 // the sender's hold breaks, or the host watches the camera fall off the wall.
@@ -172,6 +164,17 @@ bool HostAuthorsTrashBody(void* actor) {
 bool StickHoldsPhysicsOff(void* actor) {
     return actor && ue_wrap::prop::IsDescendantOfProp(actor) &&
            (ue_wrap::prop::IsFrozen(actor) || ue_wrap::prop::IsStatic(actor));
+}
+
+// A door this peer's own player drags is moved by that drag on this copy, which wins at drive start and at every
+// pose after it: a swinger has no eid and no arbiter. Said once per hold.
+bool LocalDragsDoor(void* door, int slot, uint16_t gen) {
+    void* const own = coop::players::Registry::Get().Local();
+    if (!own || !ue_wrap::swinger::IsSwinger(door) || !ue_wrap::engine::IsMainPlayerGrabbing(own, door)) return false;
+    if (g_holds[slot].refusedGen != gen)
+        UE_LOGI("remote_prop: slot %d hold %d streams a door this peer drags -- not driven", slot, gen);
+    g_holds[slot].refusedGen = gen;
+    return true;
 }
 
 void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
@@ -205,8 +208,7 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     if (!prop && pose.elementId != 0)
         prop = ResolveLiveActorByEid(pose.elementId);
     if (!prop) {
-        coop::dev::swinger_drill::NotePropUnresolved(slot, keyW, pose.elementId,
-                                                     ue_wrap::FRotator{pose.pitch, pose.yaw, pose.roll});
+        coop::dev::swinger_drill::NotePropUnresolved(slot, pose);
         // The ledger separates the ordinary pose-before-spawn race from a sustained stream this
         // peer never got a spawn for: one WARN per sustained stream, not per packet.
         if (coop::unresolved_pose_ledger::Note(slot, keyW, pose.elementId, NowMs())) {
@@ -238,14 +240,7 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     // static prop cannot be held, so a stream for one that is static here and has no unstick means the
     // two copies disagree on the flag: refused, said once per hold.
     HoldGate& hold = g_holds[slot];
-    // A door this peer's own player drags is moved by that drag on this copy: the remote pose waits for its release.
-    if (void* const own = coop::players::Registry::Get().Local();
-        own && ue_wrap::swinger::IsSwinger(prop) && ue_wrap::engine::IsMainPlayerGrabbing(own, prop)) {
-        if (hold.refusedGen != pose.holdGen)
-            UE_LOGI("remote_prop: slot %d hold %d streams a door this peer drags -- not driven", slot, pose.holdGen);
-        hold.refusedGen = pose.holdGen;
-        return;
-    }
+    if (LocalDragsDoor(prop, slot, pose.holdGen)) return;
     if (ue_wrap::prop::IsDescendantOfProp(prop)) {
         const bool attachable = coop::prop_stick_sync::IsWallAttachable(prop);
         if (ue_wrap::prop::IsStatic(prop) && !attachable) {
@@ -372,15 +367,16 @@ void Tick(coop::net::Session& session) {
                 if (drive.actor) ResetDriveState(drive);
                 ResolveAndStartDrive(slot, pose);
             }
+            if (drive.actor && LocalDragsDoor(drive.LiveActor(), slot, pose.holdGen)) {   // a drag began mid-stream
+                coop::prop_park::Unpark(drive.LiveActor(), drive.mesh, /*rootSimulates=*/true);
+                ResetDriveState(drive);
+            }
             if (drive.LiveActor()) {
                 // The pose is the new lerp target; AdvanceLerp moves the actor toward it each tick.
                 BeginLerpToPose(drive, ue_wrap::FVector{pose.x, pose.y, pose.z},
                                 ue_wrap::FRotator{pose.pitch, pose.yaw, pose.roll}, nowMs);
                 drive.lastApplyMs = nowMs;
-                if (coop::dev::swinger_drill::IsEnabled())
-                    coop::dev::swinger_drill::NotePropPose(slot, KeyToWString(pose.key), pose.elementId, drive.actor,
-                                                           drive.mesh, ue_wrap::FVector{pose.x, pose.y, pose.z},
-                                                           ue_wrap::FRotator{pose.pitch, pose.yaw, pose.roll});
+                coop::dev::swinger_drill::NotePropPose(slot, pose, drive.actor, drive.mesh);
                 // The first 3 and every 60th target per slot.
                 static std::array<uint64_t, coop::players::kMaxPeers> sApplyCount{};
                 const uint64_t n = ++sApplyCount[slot];

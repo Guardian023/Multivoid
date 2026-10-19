@@ -51,6 +51,7 @@ namespace R = ue_wrap::reflection;
 ue_wrap::CachedObjRef g_lastHeldProp;
 coop::net::WireKey g_lastHeldKey{};
 bool g_heldSwinger = false;   // the held actor is a swinger, set at each new-held edge
+bool g_swingerKeySaid = false;   // the hold's key problem has been said
 // The held actor's wire eid, resolved once on the new-held edge (where the O(n) mirror lookup
 // for a morph-bound clump may run) and reused per tick; a held actor's identity is stable for
 // the carry. kInvalidId = unkeyed.
@@ -406,6 +407,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             coop::dev::swinger_drill::NoteHeldEdge(heldActor, mirrored, eidLog);
             g_heldSwinger = ue_wrap::swinger::EnsureResolved() && ue_wrap::swinger::IsSwinger(heldActor);
             g_coastStill = 0;
+            g_swingerKeySaid = false;
             // The carry-only invariant: every refusal in EnsureHeldItemBroadcast is an anti-dupe
             // gate that assumes the receiver resolves the item by another route (a kerfur prop by
             // its mirror eid, a clump by its pile's eid, a claimed save-loaded local by its shared
@@ -416,7 +418,8 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // suppressed: a key-only pose is legitimate when both peers share a save-loaded prop.
             // A dragged swinger is the exception: its identity is the container lane's key, which the receiver finds
             // in that lane's index (EnsureHeldItemBroadcast leaves it alone by design).
-            if (!mirrored && g_lastHeldEid == coop::element::kInvalidId && !g_heldSwinger) {
+            if (!mirrored && g_lastHeldEid == coop::element::kInvalidId &&
+                !(g_heldSwinger && !coop::interactable_sync::ContainerKey(heldActor).empty())) {
                 UE_LOGW("local_streams: CARRY-ONLY WITH NO WIRE IDENTITY -- held actor %p "
                         "cls='%ls' key='%ls' is streaming a held pose with eid=0 and no spawn "
                         "broadcast, so a receiver can resolve NEITHER term. Every carry-only "
@@ -436,10 +439,18 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         }
         // The held world transform: key (None for the clump) and eid; the receiver resolves by key,
         // then eid.
-        // A dragged swinger goes under the container lane's key (the portable `mv_` one, 19 characters, which no
-        // game key matches: those are 22): the game's own Key differs between peers for most lids.
+        // A dragged swinger goes under the container lane's key: the portable `mv_` token where the lid has an
+        // identity, since the game's own Key differs between peers for most lids. A lid the lane has not indexed has
+        // no key (it streams nothing), and one it filed under the game Key has only the key that may differ: each said
+        // once per hold.
         const std::wstring keyW = g_heldSwinger ? coop::interactable_sync::ContainerKey(heldActor)
                                                 : ue_wrap::prop::GetInteractableKeyString(heldActor);
+        if (g_heldSwinger && !g_swingerKeySaid && (keyW.empty() || keyW.rfind(L"mv_", 0) != 0)) {
+            g_swingerKeySaid = true;
+            UE_LOGW("local_streams: dragged swinger %p %s", heldActor,
+                    keyW.empty() ? "is not indexed by the container lane: it streams nothing"
+                                 : "has no portable key: it streams under its game Key, which may differ on the other peers");
+        }
         coop::net::PropPoseSnapshot pp{};
         pp.key.len = 0;
         for (size_t i = 0; i < keyW.size() && i < 31; ++i) {
@@ -487,7 +498,8 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // means the cached eid went invalid, not a dead branch.
             static uint64_t sPK = 0;
             if ((sPK++ % 15) == 0)
-                UE_LOGI("[POSE-SKIP] eid=0 key.len=0 -- held clump has NO identity to stream (g_lastHeldEid invalid -> carry frozen between E)");
+                UE_LOGI("%s", g_heldSwinger ? "[POSE-SKIP] a dragged swinger has no container-lane key: nothing is streamed"
+                            : "[POSE-SKIP] eid=0 key.len=0 -- held clump has NO identity to stream (g_lastHeldEid invalid -> carry frozen between E)");
         }
         // heldActor is live here, so Set's contract holds; the ref captures the index and serial.
         g_lastHeldProp.Set(heldActor);
