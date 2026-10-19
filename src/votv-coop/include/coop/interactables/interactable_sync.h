@@ -75,6 +75,11 @@ std::wstring DoorBoxKey(void* box);
 std::wstring ContainerKey(void* swinger);
 std::wstring OvenKey(void* oven);
 
+// The live swinger the container lane indexes under `key` (the key ContainerKey gives: the portable `mv_` one where
+// the swinger has an identity, else its game key), or null. The held-item receiver's answer for a dragged lid,
+// a child actor the prop key index leaves out. Game thread.
+void* ContainerActor(const std::wstring& key);
+
 // The light switch lane's key for `sw`, or "" when the lane does not index it in the current world.
 // Game thread.
 std::wstring LightSwitchKey(void* sw);

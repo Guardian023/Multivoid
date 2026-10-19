@@ -7,7 +7,6 @@
 
 #include "coop/interactables/interactable_sync.h"
 #include "coop/interactables/interactable_channel.h"  // the generic engine: Adapter and Channel
-#include "coop/interactables/swinger_hold_index.h"
 
 #include "ue_wrap/devices/appliance.h"     // the six-class save-actor toggle family
 #include "ue_wrap/devices/door.h"
@@ -267,7 +266,6 @@ void IndexChannels() {
 void Install(coop::net::Session* session) {
     for (Channel* ch : kChannels) ch->SetSession(session);
     IndexChannels();              // build the key->actor index (edges and the probe name by it; receivers resolve by it)
-    coop::swinger_hold_index::Install();   // the swingers by prop key: the held-item receiver's answer for a child actor
 }
 
 void OnReliable(uint8_t kind, const coop::net::KeyedTogglePayload& payload, uint8_t senderPeerSlot) {
@@ -320,6 +318,10 @@ std::wstring ApplianceKey(void* a) { return g_appliance.KeyForActor(a); }
 std::wstring GarageKey(void* g) { return g_garage.KeyForActor(g); }
 std::wstring DoorBoxKey(void* box) { return g_doorBox.KeyForActor(box); }
 std::wstring ContainerKey(void* swinger) { return g_container.KeyForActor(swinger); }
+
+void* ContainerActor(const std::wstring& key) {
+    return key.empty() || !ue_wrap::swinger::EnsureResolved() ? nullptr : g_container.ActorForKey(key);
+}
 std::wstring OvenKey(void* oven) { return g_oven.KeyForActor(oven); }
 
 std::wstring LightSwitchKey(void* sw) { return g_light.KeyForActor(sw); }

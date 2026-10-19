@@ -232,8 +232,8 @@ bool EnsureHeldItemBroadcast(void* heldActor, coop::net::Session* s) {
     // carry-only.
     if (ue_wrap::prop::IsGarbageClump(heldActor)) return false;
     // The swinger gate: a door or lid a player drags is a child actor every peer already holds, never a prop to
-    // spawn on the others. Its held pose crosses by its prop key, which the receiver finds in the swinger
-    // lane's index (coop/interactables/swinger_hold_index), and its release is the held stream's own.
+    // spawn on the others. Its held pose crosses under the container lane's key, which the receiver finds in
+    // that lane's index (interactable_sync::ContainerActor), and its release is the held stream's own.
     if (ue_wrap::swinger::EnsureResolved() && ue_wrap::swinger::IsSwinger(heldActor)) return false;
     // Any keyed interactable, the Aprop_C items and the non-Aprop_C clump and pile alike. Crash
     // safety is on the receiver: GetStaticMesh is null for a non-Aprop_C, so the peer never runs

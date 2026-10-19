@@ -7,7 +7,7 @@
 #include "remote_prop_internal.h"  // impl-private (src-local), NOT under include/
 
 #include "coop/dev/swinger_drill.h"     // NotePropPose, NotePropUnresolved
-#include "coop/interactables/swinger_hold_index.h"  // a child-actor swinger's key to its actor
+#include "coop/interactables/interactable_sync.h"  // ContainerActor: a dragged swinger's key to its actor
 #include "coop/props/active_drive.h"   // the fixed-delay snapshot interp, shared with the trash carry stream
 #include "coop/props/prop_sound.h"
 #include "coop/props/trash_mirror.h"   // Retire (a trash mirror retires whole, pin released after the destroy)
@@ -37,6 +37,7 @@
 #include "ue_wrap/core/hot_path_guard.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/actors/prop.h"
+#include "ue_wrap/actors/swinger.h"
 #include "ue_wrap/core/reflection.h"
 
 #include <array>
@@ -198,8 +199,8 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     void* prop = nullptr;
     if (!keyW.empty() && keyW != L"None") {
         prop = coop::prop_key_index::Find(keyW);
-        // A swinger is a child actor, which that index leaves out: the swinger lane's own index answers.
-        if (!prop) prop = coop::swinger_hold_index::Find(keyW);
+        // A dragged swinger streams under the container lane's key, and as a child actor it is not in that index.
+        if (!prop) prop = coop::interactable_sync::ContainerActor(keyW);
     }
     if (!prop && pose.elementId != 0)
         prop = ResolveLiveActorByEid(pose.elementId);
@@ -237,6 +238,14 @@ void ResolveAndStartDrive(int slot, const coop::net::PropPoseSnapshot& pose) {
     // static prop cannot be held, so a stream for one that is static here and has no unstick means the
     // two copies disagree on the flag: refused, said once per hold.
     HoldGate& hold = g_holds[slot];
+    // A door this peer's own player drags is moved by that drag on this copy: the remote pose waits for its release.
+    if (void* const own = coop::players::Registry::Get().Local();
+        own && ue_wrap::swinger::IsSwinger(prop) && ue_wrap::engine::IsMainPlayerGrabbing(own, prop)) {
+        if (hold.refusedGen != pose.holdGen)
+            UE_LOGI("remote_prop: slot %d hold %d streams a door this peer drags -- not driven", slot, pose.holdGen);
+        hold.refusedGen = pose.holdGen;
+        return;
+    }
     if (ue_wrap::prop::IsDescendantOfProp(prop)) {
         const bool attachable = coop::prop_stick_sync::IsWallAttachable(prop);
         if (ue_wrap::prop::IsStatic(prop) && !attachable) {
@@ -481,7 +490,7 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
     }
     if (releasedSlot < 0) {
         void* prop = coop::prop_key_index::Find(keyW);
-        if (!prop) prop = coop::swinger_hold_index::Find(keyW);
+        if (!prop) prop = coop::interactable_sync::ContainerActor(keyW);
         if (prop) {
             // No drive entry carries this key and eid: a keyed prop resolves from the live world.
             propActor = prop;
@@ -560,6 +569,8 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
         UE_LOGI("[PILE] CLIENT trash throw eid=%u |v|=%.1f cm/s -- frozen at release (no local physics); "
                 "the host's pose stream and its ToPile convert place it",
                 payload.elementId, linSpeed);
+    } else if (meshToActOn && ue_wrap::swinger::IsSwinger(propActor)) {
+        coop::prop_park::Unpark(propActor, meshToActOn, /*rootSimulates=*/true);  // a door: no throw
     } else if (meshToActOn) {
         // Simulate first, then the velocities: a kinematic body ignores a velocity write.
         coop::prop_park::Unpark(propActor, meshToActOn, /*rootSimulates=*/true);

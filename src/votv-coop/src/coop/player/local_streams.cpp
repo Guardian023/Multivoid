@@ -9,6 +9,7 @@
 #include "coop/element/element.h"
 #include "coop/element/quiescence_drain.h"  // SupersedePosCorrection: the own release is the newest pose
 #include "coop/element/registry.h"          // EidForActor: the keyed eid of the released prop
+#include "coop/interactables/interactable_sync.h"  // ContainerKey: a dragged swinger's portable key
 #include "coop/config/config.h"
 #include "coop/creatures/kerfur_entity.h"  // GetKerfurMirrorEidForActor, the held kerfur prop's eid
 #include "coop/net/protocol.h"
@@ -48,6 +49,7 @@ namespace R = ue_wrap::reflection;
 // edge and read on later edges.
 ue_wrap::CachedObjRef g_lastHeldProp;
 coop::net::WireKey g_lastHeldKey{};
+bool g_heldSwinger = false;   // the held actor is a swinger, set at each new-held edge
 // The held actor's wire eid, resolved once on the new-held edge (where the O(n) mirror lookup
 // for a morph-bound clump may run) and reused per tick; a held actor's identity is stable for
 // the carry. kInvalidId = unkeyed.
@@ -199,6 +201,7 @@ void* LastHeldActor() {
 void OnSessionStart() {
     g_lastHeldProp.Reset();
     g_lastHeldKey = {};
+    g_heldSwinger = false;
     g_lastHeldEid = coop::element::kInvalidId;
     g_propEmitCount = 0;
     g_wasRagdolling = false;
@@ -361,6 +364,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
                     ue_wrap::prop::GetInteractableKeyString(heldActor).c_str(),
                     eidLog, mirrored ? "BROADCAST" : "carry-only(trash/clump)");
             coop::dev::swinger_drill::NoteHeldEdge(heldActor, mirrored, eidLog);
+            g_heldSwinger = ue_wrap::swinger::EnsureResolved() && ue_wrap::swinger::IsSwinger(heldActor);
             // The carry-only invariant: every refusal in EnsureHeldItemBroadcast is an anti-dupe
             // gate that assumes the receiver resolves the item by another route (a kerfur prop by
             // its mirror eid, a clump by its pile's eid, a claimed save-loaded local by its shared
@@ -369,10 +373,9 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
             // the field, 91 poses in 1.5 s no peer could resolve, and an item invisible to everyone
             // but its holder). Reported once per held edge with the actor named, and not
             // suppressed: a key-only pose is legitimate when both peers share a save-loaded prop.
-            // A dragged swinger is the exception: its identity is its prop key, which the receiver finds in
-            // the swinger lane's index (EnsureHeldItemBroadcast leaves it alone by design).
-            if (!mirrored && g_lastHeldEid == coop::element::kInvalidId &&
-                !(ue_wrap::swinger::EnsureResolved() && ue_wrap::swinger::IsSwinger(heldActor))) {
+            // A dragged swinger is the exception: its identity is the container lane's key, which the receiver finds
+            // in that lane's index (EnsureHeldItemBroadcast leaves it alone by design).
+            if (!mirrored && g_lastHeldEid == coop::element::kInvalidId && !g_heldSwinger) {
                 UE_LOGW("local_streams: CARRY-ONLY WITH NO WIRE IDENTITY -- held actor %p "
                         "cls='%ls' key='%ls' is streaming a held pose with eid=0 and no spawn "
                         "broadcast, so a receiver can resolve NEITHER term. Every carry-only "
@@ -392,7 +395,10 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         }
         // The held world transform: key (None for the clump) and eid; the receiver resolves by key,
         // then eid.
-        const std::wstring keyW = ue_wrap::prop::GetInteractableKeyString(heldActor);
+        // A dragged swinger goes under the container lane's key (the portable `mv_` one, 19 characters, which no
+        // game key matches: those are 22): the game's own Key differs between peers for most lids.
+        const std::wstring keyW = g_heldSwinger ? coop::interactable_sync::ContainerKey(heldActor)
+                                                : ue_wrap::prop::GetInteractableKeyString(heldActor);
         coop::net::PropPoseSnapshot pp{};
         pp.key.len = 0;
         for (size_t i = 0; i < keyW.size() && i < 31; ++i) {
@@ -587,6 +593,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         }
         g_lastHeldProp.Reset();
         g_lastHeldKey = {};
+        g_heldSwinger = false;
         g_lastHeldEid = coop::element::kInvalidId;  // the cached held eid goes with the release
         }
     }

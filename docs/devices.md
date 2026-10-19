@@ -61,12 +61,16 @@ lane an oven's `fixed` at its `fix()`, the repair widget's last step, which goes
 writes it and repaints on 1, `fix()`'s work without its screen, and refuses 0.
 A lid a player drags with the mouse (`mouseAssign`, bound to the player's `input_mouseXY` while the grab
 lasts) is not a verb of this lane: the game leaves the lid in the dragger's `grabbing_actor`, so the
-held-item stream carries its pose, keyed by the lid's prop key, and the host relays it to the other
-clients. A lid is a child actor, which the prop key index leaves out, so the receiving side finds it
-through `coop/interactables/swinger_hold_index`, parks its mesh and follows the pose as it follows any
-held prop; the holder's release (`PropRelease`) puts the lid at the release pose and its velocities and
-unparks it, and the lid's own spring settles from there. A lid is never expressed as a spawned prop by
-the held-item broadcast. `[?]` until the swinger drill has a two-peer proof.
+held-item stream carries its pose and the host relays it to the other clients. The game's own `Key` of a
+lid differs between peers for most lids (a barrel's or crate's cap), so the pose and the release go under
+this lane's key for the lid (the portable `mv_` one, 19 characters; a game key is 22), and the receiving
+side finds the lid through this lane's index (`interactable_sync::ContainerActor`), parks its mesh and
+follows the pose as it follows any held prop. The holder's release (`PropRelease`) puts the lid at the
+release pose and unparks it with no throw velocity, thrown event or whoosh, and the lid's own spring
+settles from there. A peer whose own player drags the same lid ignores the remote poses for it. The
+held-item broadcast never expresses a lid as a spawned prop. A joiner mid-drag gets the live stream once its
+world is ready, and the release after it; a lid at rest comes with the lanes' connect snapshot. `[?]` until
+the swinger drill has a two-peer proof.
 A client's own press, hit or pry of a door never runs on its copy either: the
 script-body gate refuses the door's entry verb there and sends it to the host
 (`coop/interactables/door_verb_intent`), which
