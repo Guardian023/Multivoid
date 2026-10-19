@@ -83,7 +83,7 @@ constexpr uint64_t kLerpMinMs   = 16;     // ~one 60 fps frame
 constexpr uint64_t kLerpMaxMs   = 200;    // ~5 Hz floor (a gappy stream still converges)
 constexpr float    kSnapDist    = 500.f;  // 5 m: beyond this, snap instead of interpolate
 constexpr float    kSnapDistSq  = kSnapDist * kSnapDist;
-// Per-tick dirty-gate epsilons: at 125 Hz the interp step is often sub-visible -- a held-but-still
+// Per-tick dirty-gate epsilons: at ~60 Hz the interp step is often sub-visible -- a held-but-still
 // clump, or a sub-cm creep. Skip the engine write below these (the skipped delta accumulates until
 // it crosses). Conservative so a slow drift still steps invisibly (sub-pixel at gameplay scale).
 constexpr float    kLerpEpsLocSq = 0.25f * 0.25f;  // 0.25 cm

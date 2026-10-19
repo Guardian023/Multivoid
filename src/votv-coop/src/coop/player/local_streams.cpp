@@ -35,6 +35,7 @@
 #include "ue_wrap/core/types.h"
 #include "ue_wrap/actors/vitals.h"
 
+#include <chrono>
 #include <cmath>
 #include <cstdint>
 #include <string>
@@ -68,7 +69,7 @@ uint64_t g_ragdollEmitCount = 0;
 // The release branch below re-enters EVERY pump tick for the whole flight of a thrown clump --
 // it deliberately keeps the held cache so the stream continues -- while its verdict stays
 // constant across that window. These remember the verdict already reported so the branch logs
-// one line per DECISION rather than one per tick at the 125 Hz pump rate. File scope, cleared by
+// one line per DECISION rather than one per tick at the ~60 Hz pump rate. File scope, cleared by
 // OnSessionStart, for the same reason the edge state above is.
 coop::element::ElementId g_relEdgeLoggedEid = coop::element::kInvalidId;
 int  g_relEdgeLoggedSkip = -1;  // -1 = nothing reported yet, else the last relSkip reported
@@ -203,25 +204,26 @@ coop::net::PropPoseSnapshot HeldPose(const coop::net::WireKey& key, coop::elemen
 // physics would carry it somewhere else. So the peer that let it go keeps the held pose stream running for it, from
 // its own copy, until that copy is at rest, and only then sends the release: the other peers follow the same fall
 // parked and let go of a door already where it stopped. At rest is the body asleep, or the same place and
-// orientation for kCoastStillTicks ticks, measured from the pose where that still run began, so a slow creep
-// is not rest. The release branch below is the trash flight's neighbour: that one keeps streaming a thrown clump
-// under its eid; this one keeps a released swinger under its key.
+// orientation for kCoastStillTicks equal reads (about half a second at the pump's rate), measured from the pose
+// where that still run began, so a slow creep is not rest. The release branch below is the trash flight's neighbour:
+// that one keeps streaming a thrown clump under its eid; this one keeps a released swinger under its key.
 // Divergence from MTA (CUnoccupiedVehicleSync.cpp, client and server): there the syncer sends while the
 // vehicle changes and the server reassigns the syncer. Here the releaser is the syncer until rest, because no
 // server-side physics arbiter exists and the pose carries no velocity, so the receivers stay parked through the
 // fall instead of simulating from a velocity.
-constexpr int   kCoastStillTicks = 30;
+constexpr int   kCoastStillTicks = 30;   // a count of equal reads, not a duration
 constexpr float kCoastStillCm    = 0.25f;
 constexpr float kCoastStillDeg   = 0.1f;
-// The bound on a coast: 10 s of the 125 Hz pump (net_pump.cpp:81,740). A lid that never rests (on a moving
-// carrier, or jittering against its limit) is released at its current pose, and every peer's own physics takes
-// it from there.
-constexpr int   kCoastMaxTicks   = 125 * 10;
+// The bound on a coast: ten seconds from the release edge, a deadline and not a tick count, since the pump runs at
+// about 60 Hz (the timeline loop sleeps 16 ms, harness/session_runtime.cpp) and slows with the game thread. A lid that
+// never rests (on a moving carrier, or jittering against its limit) is released at its current pose, and every
+// peer's own physics takes it from there.
+constexpr auto  kCoastMax = std::chrono::seconds(10);
+std::chrono::steady_clock::time_point g_coastDeadline{};
 bool g_coasting = false;               // the release edge has begun a coast
 ue_wrap::FVector  g_stillFromLoc{};    // where the current still run began
 ue_wrap::FRotator g_stillFromRot{};
 int g_coastStill = 0;                  // ticks within tolerance of that pose
-int g_coastTicks = 0;
 
 // True while the released swinger is still moving: its pose goes out this tick and the release waits.
 bool CoastSwinger(coop::net::Session& session) {
@@ -235,14 +237,14 @@ bool CoastSwinger(coop::net::Session& session) {
         return false;
     if (!g_coasting) {   // the first tick after the release edge starts the still run afresh
         g_coasting = true;
-        g_coastTicks = 0;
+        g_coastDeadline = std::chrono::steady_clock::now() + kCoastMax;
         g_coastStill = 0;
         g_stillFromLoc = loc;
         g_stillFromRot = rot;
     }
-    if (++g_coastTicks > kCoastMaxTicks) {
-        UE_LOGI("local_streams: swinger '%.*s' still moving after %d coast ticks -- released at its current pose",
-                static_cast<int>(g_lastHeldKey.len), g_lastHeldKey.data, kCoastMaxTicks);
+    if (std::chrono::steady_clock::now() > g_coastDeadline) {
+        UE_LOGI("local_streams: swinger '%.*s' still moving after %lld s of coasting -- released at its current pose",
+                static_cast<int>(g_lastHeldKey.len), g_lastHeldKey.data, static_cast<long long>(kCoastMax.count()));
         return false;
     }
     const float dx = loc.X - g_stillFromLoc.X, dy = loc.Y - g_stillFromLoc.Y, dz = loc.Z - g_stillFromLoc.Z;
@@ -377,7 +379,7 @@ void OnSessionStart() {
     g_swingerKeySaid = false;
     g_coasting = false;
     g_coastStill = 0;
-    g_coastTicks = 0;
+    g_coastDeadline = {};
     g_stillFromLoc = {};
     g_stillFromRot = {};
     g_lastHeldEid = coop::element::kInvalidId;
@@ -466,7 +468,7 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         }
     }
     // The held-state diagnostic at the branch point: the pose branch, the release edge, or idle;
-    // about 8 a second while something is or was held.
+    // about 4 a second while something is or was held.
     if (heldActor || g_lastHeldProp.Raw()) {
         static uint32_t sHS = 0;
         if ((sHS++ % 15) == 0) {

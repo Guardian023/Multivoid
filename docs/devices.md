@@ -71,8 +71,8 @@ held prop. A lid with nothing to hang on (a barrel's or crate's cap) falls when 
 keeps streaming its pose from its own copy, under the identity the hold streamed, until that copy is at rest,
 and only then sends the release (`PropRelease`): the others follow the same fall, parked, and the release puts
 the lid where it stopped and unparks it with no throw velocity, thrown event or whoosh. At rest is the body
-asleep, or within a quarter of a centimetre and a tenth of a degree of one pose for 30 ticks, so a slow creep is
-not rest. The coast is bounded at ten seconds: a lid that never rests (on a moving carrier, or jittering against
+asleep, or within a quarter of a centimetre and a tenth of a degree of one pose for 30 equal reads (about half a second), so a slow creep is
+not rest. The coast is bounded at ten seconds from the release: a lid that never rests (on a moving carrier, or jittering against
 its limit) is released at its current pose and each peer's own physics takes it from there. A grab of another
 item while a lid coasts sends the lid's release at once. A lid the lane has not indexed streams nothing, held or
 let go. One limit stays: a second player who drags the same lid during the first one's coast makes two slots

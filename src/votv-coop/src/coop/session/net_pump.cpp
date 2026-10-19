@@ -69,7 +69,7 @@ namespace R = ue_wrap::reflection;
 namespace P = ue_wrap::profile;
 
 // The cached local mainPlayer_C, on top of Registry::Local() so the hot pump path skips its atomic
-// load. A CachedObjRef: probed at 125 Hz through teardown windows, where a bare IsLive dereference
+// load. A CachedObjRef: probed at ~60 Hz through teardown windows, where a bare IsLive dereference
 // is unsafe.
 ue_wrap::CachedObjRef g_netLocal;
 // The cached controller for the same pawn (two dispatches saved per tick); reset with g_netLocal.
@@ -590,7 +590,7 @@ void Tick(coop::net::Session& session) {
             }
         }
         // Re-resolve the controller only when missing or invalidated (it is stable between possess
-        // events); ~250 dispatches a second saved at the 125 Hz pump.
+        // events); ~120 dispatches a second saved at the ~60 Hz pump.
         if (g_netLocalController.Raw() && !g_netLocalController.Alive()) g_netLocalController.Reset();
         if (!g_netLocalController.Raw())
             g_netLocalController.Set(ue_wrap::engine::GetController(g_netLocal.Raw()));
