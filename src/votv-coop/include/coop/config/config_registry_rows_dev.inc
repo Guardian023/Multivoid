@@ -700,18 +700,8 @@ CFG_STRING(toggle_drill, "toggle_drill", "dev", "", "VOTVCOOP_TOGGLE_DRILL", fal
     "[TOGGLE-DRILL]; the client's DONE line ends it. One way: oven (the client repairs the oven, the "
     "host reads it) and oven_host (the host repairs it once a client's world is ready); the host puts "
     "back an oven its save had repaired before any client connects, and the reader's DONE line ends it.")
-CFG_ENUM(swinger_drill, "swinger_drill", "dev", "off", "off|measure|observe", "VOTVCOOP_SWINGER_DRILL",
-    "Drill (host and clients): what a dragged hinge door shows on the other peers. measure: the host and "
-    "the acting client. The client walks to a non-lockable lid its NavMesh reaches, one whose game Key differs "
-    "between processes first, grabs it through the player's own grab chain and feeds the player's "
-    "input_mouseXY dispatcher, the delta doubling to a cap on each of four signs in turn until its own door "
-    "has turned 15 degrees (a lid's spring holds it at its open limit); no sign moving it ends the run "
-    "INVALID. It lets go, and once the door has come to rest says in the lobby chat where it rests. observe: "
-    "a second client, which only watches. A watching peer prints PASS when its copy of the door turned at "
-    "least 10 degrees during the drag and, at rest, lies within 3 degrees and 5 cm of the client's, else "
-    "FAIL, and says whether the lid's game Key matched. Every peer prints a baseline line per lid, then "
-    "every 250 ms a sample line for each lid that moved. Lines tagged [SWING-DRILL]; the client's DONE "
-    "line ends its part, after the host's verdict.")
+// The swinger drill's row: its own file, one concept, included as _dev_nb.inc is below.
+#include "coop/config/config_registry_rows_dev_swinger.inc"
 CFG_STRING(door_drill_door, "door_drill_door", "dev", "", "VOTVCOOP_DOOR_DRILL_DOOR", false,
     "With door_drill: the object name of the one door the walker walks to (e.g. "
     "door_GEN_VARIABLE_door_C_CAT_45); empty walks the nearest one its navmesh reaches.")
