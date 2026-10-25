@@ -324,17 +324,22 @@ void Judge(bool timedOut) {
         const float settle = haveRest ? E::RotatorAngleDeg(mine, g_v.clientRest) : 180.f;
         const float apart = haveRest ? Dist(mineAt, g_v.clientAt) : -1.f;
         const PS::ParentPose mineParent = PS::ReadParent(door);
-        result = haveRest && hostDev >= kFollowDeg && settle <= kSettleDeg && apart <= kSettleCm ? "PASS" : "FAIL";
+        std::string parentWhy;
+        const bool parentOk = PS::ParentsAgree(mineParent, g_v.clientParent, &parentWhy);
+        result = haveRest && hostDev >= kFollowDeg && settle <= kSettleDeg && apart <= kSettleCm && parentOk ? "PASS"
+                                                                                                             : "FAIL";
         UE_LOGI("[SWING-DRILL] %s %s: follow -- this peer's door turned %.1f deg of the client's %.1f (need >= %.0f) | "
                 "settle -- this peer's door at (%.2f, %.2f, %.2f) place (%.1f, %.1f, %.1f), the client's at (%.2f, %.2f, "
                 "%.2f) place (%.1f, %.1f, %.1f): %.2f deg between the two orientations (need <= %.0f), %.1f cm apart "
-                "(need <= %.0f)%s | poses resolved %u, unresolved %u | rests %.1f deg from where it began | %s | %s", Role(),
+                "(need <= %.0f)%s | poses resolved %u, unresolved %u | rests %.1f deg from where it began | %s | %s | "
+                "parent test %s (%s, need <= %.0f cm and %.0f deg)", Role(),
                 result, hostDev, g_v.clientDev, kFollowDeg, mine.Pitch, mine.Yaw, mine.Roll, mineAt.X, mineAt.Y,
                 mineAt.Z, g_v.clientRest.Pitch, g_v.clientRest.Yaw, g_v.clientRest.Roll, g_v.clientAt.X,
                 g_v.clientAt.Y, g_v.clientAt.Z, settle, kSettleDeg, apart, kSettleCm,
                 timedOut ? " (no settled line, or this peer's door never came to rest)" : "", g_v.resolved,
                 g_v.unresolved, fromArmDeg, PS::Describe(mineParent).c_str(),
-                PS::VerdictParent(mineParent, g_v.clientParent).c_str());
+                PS::VerdictParent(mineParent, g_v.clientParent).c_str(), parentOk ? "ok" : "FAIL", parentWhy.c_str(),
+                kSettleCm, kSettleDeg);
     }
     J::NoteVerdict(l ? l->laneKey : std::wstring(), result, fromArmDeg);
     SayLine(std::string("verdict ") + Role() + " " + result);

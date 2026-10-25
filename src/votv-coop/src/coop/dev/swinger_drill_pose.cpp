@@ -87,4 +87,23 @@ std::string VerdictParent(const ParentPose& mine, const ParentPose& client) {
     return buf;
 }
 
+bool ParentsAgree(const ParentPose& mine, const ParentPose& client, std::string* why) {
+    if (mine.has && client.has) {
+        const float cm = swinger_drill_join::Dist(mine.loc, client.loc);
+        const float deg = E::RotatorAngleDeg(mine.rot, client.rot);
+        if (cm <= swinger_drill_join::kSettleCm && deg <= swinger_drill_join::kSettleDeg) {
+            *why = "within tolerance";
+            return true;
+        }
+        char buf[96];
+        snprintf(buf, sizeof(buf), "the parents are %.1f cm and %.2f deg apart", cm, deg);
+        *why = buf;
+        return false;
+    }
+    if (!mine.has && mine.name.empty() && !client.has) { *why = "no parent on either side"; return true; }
+    *why = std::string("one side unread (this peer's ") + (mine.has ? "read" : "none or unread") + ", the client's " +
+           (client.has ? "read" : "none or unread") + ")";
+    return false;
+}
+
 }  // namespace coop::dev::swinger_drill_pose

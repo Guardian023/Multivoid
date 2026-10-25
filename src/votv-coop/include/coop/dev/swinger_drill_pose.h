@@ -38,4 +38,8 @@ bool ParseSettled(const std::vector<std::string>& word, ue_wrap::FRotator* rot, 
 // The host's verdict tail: the client's parent pose beside this peer's, and how far apart the two are.
 std::string VerdictParent(const ParentPose& mine, const ParentPose& client);
 
+// The parent test of the host's verdict: both parents read and within the settle tolerance, or neither lid has one.
+// False names the reason in `why` (one side unread, or the two apart).
+bool ParentsAgree(const ParentPose& mine, const ParentPose& client, std::string* why);
+
 }  // namespace coop::dev::swinger_drill_pose

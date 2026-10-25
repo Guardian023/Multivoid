@@ -19,6 +19,7 @@
 #include "coop/player/skin_effects.h"  // own-body step FX at the wire-pose stride
 #include "coop/props/trash_channel.h"   // CtxForEid, the trash sync-time context
 #include "coop/props/prop_element_tracker.h"
+#include "coop/props/prop_syncer.h"        // Claim: a dragged swinger's parent prop
 #include "coop/props/prop_wire_parity.h"  // PhysFlagsOf, the flags a release carries
 #include "coop/props/remote_prop.h"     // ResolveMirrorEidByActor (the bound-clump held-pose eid fallback)
 #include "coop/props/trash_collect_sync.h"
@@ -227,6 +228,18 @@ ue_wrap::FVector  g_stillFromLoc{};    // where the current still run began
 ue_wrap::FRotator g_stillFromRot{};
 int g_coastStill = 0;                  // ticks within tolerance of that pose
 
+// A swinger on a prop (a barrel's cap on its barrel) is joined to it by a constraint, so the drag rolls the parent
+// too, and no channel carries that motion: the dragging peer syncs the parent (prop_syncer.h), claimed every tick of
+// the hold and of the coast. A parent that does not simulate (a static frame) is not claimed.
+void FeedSwingerParent(void* door) {
+    static const bool sRedNoClaim =
+        ::coop::config::ResolveEnum(::coop::config_registry::rows::swinger_drill_red) == "no_parent_claim";
+    if (sRedNoClaim) return;
+    void* const parent = ue_wrap::engine::ParentActorOf(door);
+    if (!parent || !R::IsLive(parent) || !ue_wrap::engine::IsActorRootSimulatingPhysics(parent)) return;
+    coop::prop_syncer::Claim(parent, coop::net::PropSyncReason::SwingerParent);
+}
+
 // True while the released swinger is still moving: its pose goes out this tick and the release waits.
 bool CoastSwinger(coop::net::Session& session) {
     if (!g_heldSwinger || !g_lastHeldProp.Alive()) return false;
@@ -262,6 +275,7 @@ bool CoastSwinger(coop::net::Session& session) {
     // The body's rest flag is read only on a still tick: a body in motion is not at rest.
     if (g_coastStill >= kCoastStillTicks || (still && ue_wrap::engine::IsActorRootBodyAtRest(door))) return false;
     session.SetLocalPropPose(true, HeldPose(g_lastHeldKey, g_lastHeldEid, loc, rot));
+    FeedSwingerParent(door);
     return true;
 }
 
@@ -631,7 +645,8 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         // heldActor is live here, so Set's contract holds; the ref captures the index and serial.
         g_lastHeldProp.Set(heldActor);
         g_lastHeldKey = pp.key;
-        g_coasting = false;   // a re-grab of the coasting door ends the coast; the next one starts afresh
+        if (g_heldSwinger) FeedSwingerParent(heldActor);
+        g_coasting = false;  // a re-grab of the coasting door ends the coast; the next one starts afresh
     } else if (g_lastHeldProp.Raw()) {
         // The carry latch owns "carrying", not the flickering holding_actor: a churn re-pile
         // destroys the held clump and the field is empty for a frame, and the held-puppet
