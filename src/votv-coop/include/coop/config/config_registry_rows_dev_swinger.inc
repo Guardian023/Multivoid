@@ -19,4 +19,4 @@ CFG_ENUM(swinger_drill, "swinger_drill", "dev", "off", "off|measure|observe|rejo
     "the lid against the host's (PASS within 3 degrees and 5 cm); \"rejoin DONE\" ends it.")
 CFG_ENUM(swinger_drill_red, "swinger_drill_red", "dev", "off", "off|no_parent_claim", "VOTVCOOP_SWINGER_DRILL_RED",
     "Developer red arm: never set. no_parent_claim (the acting client): a dragged swinger's parent prop is not "
-    "claimed for the prop syncer, so the measure arm's host must FAIL on the parent test.")
+    "claimed for the prop syncer, so the measure arm's host must FAIL on the parent synced test (0 rows).")

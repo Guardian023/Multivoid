@@ -11,8 +11,8 @@
 // The client's chat lines (grab with the lid's two keys, settled, each on a state edge) and the poses a watching
 // peer takes are what it judges on: PASS when its copy of the door turned 10 degrees during the drag and, at rest,
 // lies within 3 degrees (the angle between the quaternions) and 5 cm of the client's, as do the two doors' parent
-// props when both are read; a client door that did not turn 15 degrees is INVALID. It says whether the lid's game
-// Key matched. Lines are tagged [SWING-DRILL]: a baseline line per lid, and every 250 ms a line per lid that moved.
+// props when both are read, and the host's parent that simulates has 3 rows admitted from the client; a client door
+// that did not turn 15 degrees is INVALID. Lines are tagged [SWING-DRILL]: a baseline per lid, a sample per move.
 
 #pragma once
 

@@ -7,6 +7,7 @@
 
 #include "ue_wrap/core/types.h"
 
+#include <cstdint>
 #include <string>
 #include <vector>
 
@@ -41,5 +42,11 @@ std::string VerdictParent(const ParentPose& mine, const ParentPose& client);
 // The parent test of the host's verdict: both parents read and within the settle tolerance, or neither lid has one.
 // False names the reason in `why` (one side unread, or the two apart).
 bool ParentsAgree(const ParentPose& mine, const ParentPose& client, std::string* why);
+
+// The mechanism test of the host's verdict: a parent of `door` that simulates physics on this (host) peer must have
+// had at least kParentRows rows admitted from its syncer, the dragging client. A lid with no parent, or a parent that
+// does not simulate, needs none. `rows` is the count read (0 when none was); `why` names the finding.
+inline constexpr uint32_t kParentRows = 3;
+bool ParentSynced(void* door, uint32_t* rows, std::string* why);
 
 }  // namespace coop::dev::swinger_drill_pose

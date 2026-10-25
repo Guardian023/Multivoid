@@ -8,7 +8,8 @@
 
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
-#include "coop/dev/prop_syncer_drill.h"        // IsEnabled: the drill's views are written only while it is on
+#include "coop/dev/prop_syncer_drill.h"        // IsEnabled: the drills' views are written only while one is on
+#include "coop/dev/swinger_drill.h"            // IsEnabled: the swinger drill reads a dragged lid's parent count
 #include "coop/element/intent_authority.h"
 #include "coop/net/intent_bucket.h"
 #include "coop/net/protocol.h"
@@ -189,7 +190,7 @@ void AdmitRow(const coop::net::PropPoseSnapshot& e, uint8_t slot, uint64_t nowMs
     fed.key = row->key;
     coop::prop_drive_stream::FeedAdmitted(fed);
     if (row->syncer != slot) ++g_nonSyncerAdmitted;
-    if (coop::dev::prop_syncer_drill::IsEnabled()) {   // the drill's judge reads it; nothing else does
+    if (coop::dev::prop_syncer_drill::IsEnabled() || coop::dev::swinger_drill::IsEnabled()) {   // the drills' judges read it
         dev::Admitted& seen = g_admittedBy[e.elementId];
         if (seen.gen != row->gen) seen = dev::Admitted{row->gen, 0};
         ++seen.rows;

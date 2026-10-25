@@ -3,9 +3,12 @@
 #include "coop/dev/swinger_drill_pose.h"
 
 #include "coop/dev/swinger_drill_join.h"
+#include "coop/props/prop_element_tracker.h"
+#include "coop/props/prop_syncer_host.h"
 
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/engine/engine.h"
+#include "ue_wrap/engine/engine_attach.h"
 
 #include <cstdio>
 #include <cstdlib>
@@ -104,6 +107,21 @@ bool ParentsAgree(const ParentPose& mine, const ParentPose& client, std::string*
     *why = std::string("one side unread (this peer's ") + (mine.has ? "read" : "none or unread") + ", the client's " +
            (client.has ? "read" : "none or unread") + ")";
     return false;
+}
+
+bool ParentSynced(void* door, uint32_t* rows, std::string* why) {
+    if (rows) *rows = 0;
+    void* const parent = door ? E::ParentActorOf(door) : nullptr;
+    if (!parent || !R::IsLive(parent)) { *why = "no parent"; return true; }
+    if (!E::IsActorRootSimulatingPhysics(parent)) { *why = "the parent does not simulate"; return true; }
+    const uint32_t eid = coop::prop_element_tracker::GetPropElementIdForActor(parent);
+    const uint32_t seen = coop::prop_syncer_host::dev::AdmittedOf(eid).rows;
+    if (rows) *rows = seen;
+    char buf[112];
+    snprintf(buf, sizeof(buf), "the parent (eid %u) had %u rows admitted from its syncer, need >= %u", eid, seen,
+             kParentRows);
+    *why = buf;
+    return seen >= kParentRows;
 }
 
 }  // namespace coop::dev::swinger_drill_pose
