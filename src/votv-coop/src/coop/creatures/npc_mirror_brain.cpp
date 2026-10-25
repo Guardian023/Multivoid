@@ -4,6 +4,8 @@
 
 #include "coop/creatures/npc_mirror_brain.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/death_seam.h"
 #include "coop/element/element.h"
 
@@ -38,12 +40,14 @@ UE_FACT_FN(kRowCorpse, "npc_mirror_brain", L"npc_zombie_corpse_C", L"ExecuteUber
 UE_FACT_FN(kRowSkerfuro, "npc_mirror_brain", L"npc_zombie_skerfuro_C", L"ExecuteUbergraph_npc_zombie_skerfuro",
            Declared);
 UE_FACT_FN(kRowHound, "npc_mirror_brain", L"fossilhound_C", L"ExecuteUbergraph_fossilhound", Declared);
+UE_FACT_FN(kRowGeomOcta, "npc_mirror_brain", L"geomOcta_C", L"ExecuteUbergraph_geomOcta", Declared);
 
 constexpr int kTagZombie   = 0x4D505A30;  // 'MPZ0'
 constexpr int kTagSummoner = 0x4D505A41;  // 'MPZA'
 constexpr int kTagCorpse   = 0x4D505A43;  // 'MPZC'
 constexpr int kTagSkerfuro = 0x4D505A53;  // 'MPZS'
 constexpr int kTagHound    = 0x4D504630;  // 'MPF0'
+constexpr int kTagGeomOcta = 0x4D504730;  // 'MPG0'
 
 // ---- The mark ----
 
@@ -135,6 +139,7 @@ Watch g_watches[] = {
     {&kRowCorpse, kTagCorpse, R::ParamOffset{L"EntryPoint"}},
     {&kRowSkerfuro, kTagSkerfuro, R::ParamOffset{L"EntryPoint"}},
     {&kRowHound, kTagHound, R::ParamOffset{L"EntryPoint"}},
+    {&kRowGeomOcta, kTagGeomOcta, R::ParamOffset{L"EntryPoint"}},
 };
 constexpr size_t kWatches = sizeof(g_watches) / sizeof(g_watches[0]);
 
@@ -326,6 +331,9 @@ void SetUpPresentation(void* actor, Origin origin) {
     void* const cls = R::ClassOf(actor);
     static const EntryTable* const zombieTable = TableNamed(P::name::NpcClass_Zombie);
     static const EntryTable* const houndTable = TableNamed(P::name::NpcClass_Fossilhound);
+    static const EntryTable* const octaTable = TableNamed(P::name::NpcClass_GeomOcta);
+    // The Octa's BeginPlay runs whole, so nothing is set up and nothing is said.
+    if (octaTable && ChainHasTable(cls, *octaTable)) return;
     bool ok = true;
     if (zombieTable && ChainHasTable(cls, *zombieTable)) {
         ok = ue_wrap::zombie::ApplyBeginPlayPresentation(actor);
@@ -343,8 +351,20 @@ uint32_t AdoptedKickSkips() { return g_adoptedKickSkips; }
 
 void Install() {
     ResolveClassNames();   // a latch; the lookups also ask for it
+    // [dev] octa_red=no_parking, the Octa drill's red arm: the Octa's graph watch is never registered, so its mirror
+    // keeps every decision and the drill must see it move on its own.
+    static const bool noOctaParking =
+        coop::config::ResolveEnum(::coop::config_registry::rows::octa_red) == "no_parking";
     bool registered = true;
     for (Watch& w : g_watches) {
+        if (noOctaParking && w.tag == kTagGeomOcta) {
+            static bool s_said = false;
+            if (!s_said) {
+                s_said = true;
+                UE_LOGW("npc_mirror_brain: [dev] octa_red=no_parking -- the Octa's graph watch is left out");
+            }
+            continue;
+        }
         if (!w.registered) w.registered = sg::WatchName(*w.row, w.tag, &OnGraphPre, nullptr);
         registered = registered && w.registered;
     }

@@ -743,6 +743,8 @@ CFG_FLAG(key_index_forget_one, "key_index_forget_one", "dev", false, "VOTVCOOP_K
 // The explosion lane's drill, birth line and selftest red arms: their own file, one concept, included as
 // _dev_port.inc is above.
 #include "coop/config/config_registry_rows_dev_explosion.inc"
+// The Geom Octa lane's drill and red arm: their own file, one concept, included as _dev_port.inc is above.
+#include "coop/config/config_registry_rows_dev_octa.inc"
 // The fire lane's drill: its own file, one concept, included as _dev_port.inc is above.
 #include "coop/config/config_registry_rows_dev_fire.inc"
 // The cord lane's drill: its own file, one concept, included as _dev_port.inc is above.
