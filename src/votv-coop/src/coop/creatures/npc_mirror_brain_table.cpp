@@ -55,8 +55,8 @@ constexpr int32_t kFossilhound[] = {
 //   496 BeginPlay's Delay(300) resume (it only arms the despawn timer);
 //   1092 the "fire" montage's finish notify (re-fire or close, from this machine's overlap).
 // The twenty-five allowed are below, each presentation or the deterministic continuation of a relayed decision. As
-// MTA's remote ped runs on relayed sync state while the game animates it (reference/mtasa-blue/Client/mods/
-// deathmatch/logic/CPedSync.cpp:236-252), its output lock being the explosion lane's dissolve of the laser's blast.
+// MTA's remote ped runs on relayed sync state while the game animates it, the Octa's output lock is the explosion
+// lane's dissolve of its laser's blast (the header's precedent paragraph cites MTA).
 constexpr int32_t kGeomOcta[] = {
     // BeginPlay: the 3 s hum timer and the mesh attached to the spring arm. Its first move() and its Delay(300) land in
     // refused entries.
