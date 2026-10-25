@@ -1,4 +1,4 @@
-// coop/dev/octa_probe.h -- [dev] what the Octa drill's measure arm reports on the host to say why an Octa does or does
+// coop/dev/octa_probe.h -- [dev] what the Octa drill's measure and attack arms report on the host to say why an Octa does or does
 // not aggro: each `[OCTA-PROBE]` line is a reading and never a verdict. The colliders once after the spawn, and a line
 // a second for the bodies' places and the Octa's target and animation state, at most 120 of them. The reads are the
 // engine's own UFunctions called through reflection (no raw offsets); one the class does not carry is said in the line.

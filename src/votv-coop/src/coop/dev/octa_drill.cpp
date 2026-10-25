@@ -5,6 +5,7 @@
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
 #include "coop/creatures/creature_hit.h"
+#include "coop/creatures/geom_octa_relay.h"
 #include "coop/creatures/geom_octa_sync.h"
 #include "coop/dev/director/director.h"
 #include "coop/dev/director/routes.h"
@@ -60,7 +61,9 @@ constexpr float    kSpawnNearCm      = 600.f;   // measure: the Octa spawns abou
 constexpr float    kSpawnAwayCm      = 1300.f;  // measure: and at least this far from the other player, outside minSphere
 constexpr uint64_t kStillMs          = 2000;    // measure: a puppet that has not moved for this long is in place
 constexpr float    kStillCm          = 30.f;    // ... where "not moved" is less than this between two polls
-constexpr float    kOutRingCm        = 1800.f;  // the walk-out ends this far from the Octa, outside minSphere
+// The walk-out ends this far from the Octa, outside minSphere: the first ring with a route, else the next.
+constexpr float    kOutRingsCm[]     = {1800.f, 2400.f, 3000.f};
+constexpr size_t   kOutRingCount     = sizeof(kOutRingsCm) / sizeof(kOutRingsCm[0]);
 constexpr float    kSphereCm         = 1000.f;  // minSphere's radius
 constexpr int      kStandpoints      = 8;
 constexpr float    kStandReachCm     = 60.f;    // a standpoint is reached within this
@@ -75,13 +78,23 @@ constexpr uint64_t kAggroBoundMs     = 30000;   // HOST: no aggro this long afte
 constexpr uint64_t kFireBoundMs      = 90000;   // CLIENT: this long with no new blast applied is a stalled wait
 constexpr uint64_t kBirthsBoundMs    = 60000;   // births: the enrol, and either arm's mirror, within this
 
-enum class Arm : uint8_t { Off, Births, Measure };
+enum class Arm : uint8_t { Off, Births, Measure, Attack };
 Arm ArmOf() {
     static const Arm arm = [] {
         const std::string v = coop::config::ResolveEnum(::coop::config_registry::rows::octa_drill);
-        return v == "births" ? Arm::Births : v == "measure" ? Arm::Measure : Arm::Off;
+        return v == "births" ? Arm::Births : v == "measure" ? Arm::Measure : v == "attack" ? Arm::Attack : Arm::Off;
     }();
     return arm;
+}
+// The arms that place a walker and let the Octa fire: measure (no relay judged) and attack (the relay judged).
+bool Fires() { return ArmOf() == Arm::Measure || ArmOf() == Arm::Attack; }
+const char* FiringArmName() { return ArmOf() == Arm::Attack ? "attack" : "measure"; }
+
+// Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
+// own spawn verb with the spawn menu's Octa row, whose Octa the host's EX catch enrols at the drain.
+bool SpawnByGamemode() {
+    static const bool gm = coop::config::ResolveEnum(::coop::config_registry::rows::octa_spawn_route) == "gamemode";
+    return gm;
 }
 
 // Who walks into the Octa's sphere (the control row octa_measure_target): the client, or the host's own player.
@@ -116,6 +129,11 @@ uint32_t g_volleysSeen = 0;       // the host's own verdicts (one per fire) sinc
 uint32_t g_appliedBase = 0;       // the explosion lane's applied count when the Octa mirror appeared
 uint32_t g_appliedSeen = 0;
 uint32_t g_volleys = 0;           // the volleys applied since then
+uint32_t g_relayBase = 0;         // attack: the relay's applied-verdict count when the mirror appeared
+uint32_t g_verdictsSeen = 0;      // attack: the verdicts it has applied since
+uint32_t g_laserSeen = 0;         // attack: this client's own lasers counted so far
+uint64_t g_laserPendingMs = 0;    // attack: the stamp of a laser still waiting for the blast that follows it
+size_t   g_outRing = 0;           // the walk-out ring in use (kOutRingsCm)
 uint64_t g_lastAppliedMs = 0;     // when the last explosion was seen applied
 bool     g_calledEvent = false;   // CLIENT (births): the night roll's event has been called
 
@@ -225,7 +243,7 @@ void HostWait(coop::net::Session* s, void* me) {
     if (!s->AnyWorldReadyPeer()) return;
     float worldNow = 0.f;
     if (!E::TryGetWorldTimeSeconds(worldNow)) return;
-    if (ArmOf() == Arm::Measure && !DamageProbeOn()) {
+    if (Fires() && !DamageProbeOn()) {
         Fail("damage_probe=1 is required: each blast must still log its [DMG] line");
         return;
     }
@@ -234,7 +252,7 @@ void HostWait(coop::net::Session* s, void* me) {
         return;
     }
     g_stepMs = coop::net::NowMs();
-    if (ArmOf() == Arm::Measure) {
+    if (Fires()) {
         g_hstep = HStep::Place;   // the walker takes its place first; the Octa is spawned beside it
         return;
     }
@@ -270,7 +288,15 @@ void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
     // The baseline is read before the spawn: the sphere reports the walker standing inside it as it registers, inside
     // the spawn's finish, so the first aggro lands before SpawnAt returns.
     g_base = GS::GetCounters();
-    void* octa = coop::dev::spawn_npc::SpawnAt(kOctaClass, *best);
+    // The dev tool's NPC spawn is enrolled at its interceptor, which also sends the spawn; the gamemode's spawn verb is
+    // caught at the EX catch and enrolled, and sent, at the drain a tick later: the Octa's first aggro, inside the
+    // spawn's finish, then precedes both, and the lane keeps it until the spawn has been sent.
+    void* octa = nullptr;
+    if (SpawnByGamemode()) {
+        if (CallGamemodeSpawn(*best)) octa = FirstInstance(kOctaClass);
+    } else {
+        octa = coop::dev::spawn_npc::SpawnAt(kOctaClass, *best);
+    }
     if (!octa) {
         Fail("the Octa did not spawn");
         return;
@@ -281,9 +307,9 @@ void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
     g_wstep = WStep::Stand;
     g_spawnMs = g_stepMs = coop::net::NowMs();
     g_hstep = HStep::Watch;
-    UE_LOGI("[OCTA-DRILL] host READY measure: Octa eid=%u at=%.0f,%.0f,%.0f, %.0f cm from the walker (slot %u), %.0f "
-            "from the other player", NpcEidOf(octa), best->X, best->Y, best->Z, FlatDist(*best, walker),
-            static_cast<unsigned>(g_walkerSlot), bestD);
+    UE_LOGI("[OCTA-DRILL] host READY %s: Octa (%s route) eid=%u at=%.0f,%.0f,%.0f, %.0f cm from the walker (slot %u), "
+            "%.0f from the other player", FiringArmName(), SpawnByGamemode() ? "gamemode" : "sat", NpcEidOf(octa), best->X,
+            best->Y, best->Z, FlatDist(*best, walker), static_cast<unsigned>(g_walkerSlot), bestD);
 }
 
 // measure: the walker takes its place. The client's: its director walks it (the client's own half) and the host spawns
@@ -345,6 +371,26 @@ void HostWatchBirths() {
     if (Expired(kBirthsBoundMs)) Fail("births host: the Octa the gamemode spawned was never enrolled as an NPC element");
 }
 
+// The walker's way out of the sphere: a standpoint on a ring about the Octa's live place, the next ring when the last
+// has none or the walk to it ended with no route (an earlier host walk-out failed once on a place with no route 1800 cm
+// out). False, said, once the last ring has failed.
+bool BeginWalkOut(void* me, void* octa, const char* who) {
+    FVector at{};
+    if (!octa || !E::TryGetActorLocation(octa, at)) {
+        Fail("the Octa is gone before the walk-out");
+        return false;
+    }
+    for (; g_outRing < kOutRingCount; ++g_outRing) {
+        const std::vector<FVector> ring = D::ReachableStandpoints(me, at, kOutRingsCm[g_outRing], kStandpoints, kStandReachCm);
+        if (ring.empty()) continue;
+        g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kOutWalkDeadlineS);
+        UE_LOGI("[OCTA-DRILL] %s: walking out to a standpoint %.0f cm from the Octa", who, kOutRingsCm[g_outRing]);
+        return true;
+    }
+    Fail("no NavMesh route from the Octa reaches a standpoint 1800, 2400 or 3000 cm out: the walker cannot leave its sphere");
+    return false;
+}
+
 // octa_measure_target=host: the host's own player, in place beside the Octa it spawned, stands until the Octa has fired
 // three volleys and walks out, from the Octa's live place. A volley is one fire, which is one host verdict: a laser
 // makes several explosions, so the host counts its verdicts, not its explosions. The bound is the client's.
@@ -358,18 +404,7 @@ void HostWalkTick(void* octa, void* me) {
             UE_LOGI("[OCTA-DRILL] host: volley %u of %u fired", now, kBlastsWanted);
         }
         if (g_volleysSeen >= kBlastsWanted) {
-            FVector at{};
-            if (!E::TryGetActorLocation(octa, at)) {
-                Fail("the Octa is gone before the host's walk-out");
-                return;
-            }
-            const std::vector<FVector> ring = D::ReachableStandpoints(me, at, kOutRingCm, kStandpoints, kStandReachCm);
-            if (ring.empty()) {
-                Fail("no NavMesh route from the Octa reaches a standpoint 1800 cm out: the host cannot leave its sphere");
-                return;
-            }
-            g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kOutWalkDeadlineS);
-            g_wstep = WStep::Out;
+            if (BeginWalkOut(me, octa, "host")) g_wstep = WStep::Out;
             return;
         }
         if (Expired(kFireBoundMs)) Fail("no host fire (the host's Octa fired no volley for 90 s)");
@@ -378,8 +413,9 @@ void HostWalkTick(void* octa, void* me) {
     case WStep::Out: {
         const int state = g_walk ? g_walk->state.load() : 2;
         if (state == 0) return;
-        if (state == 2) {
-            Fail("the host's walk out of the Octa's sphere ended with no route");
+        if (state == 2) {   // the next ring
+            ++g_outRing;
+            BeginWalkOut(me, octa, "host");
             return;
         }
         UE_LOGI("[OCTA-DRILL] host out t=%llu", Now());
@@ -432,9 +468,14 @@ void HostWatchMeasure() {
     // An idle after the third verdict, with the puppet out of the sphere. The lane keeps the idle count at the moment
     // it counted the third verdict, so an idle between that and this poll is not absorbed.
     if (c.windowReached && c.idle > c.idleAtWindow && haveBoth && dist > kSphereCm) {
-        UE_LOGI("[OCTA-DRILL] measure DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
-                c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
-                c.laser - g_base.laser, Now());
+        if (ArmOf() == Arm::Attack)
+            UE_LOGI("[OCTA-DRILL] attack DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
+                    c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
+                    c.laser - g_base.laser, Now());
+        else
+            UE_LOGI("[OCTA-DRILL] measure DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
+                    c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
+                    c.laser - g_base.laser, Now());
         g_hstep = HStep::Done;
     }
 }
@@ -476,6 +517,8 @@ void ClientFindMirror() {
     // In place already: the host spawned the Octa beside it, and it stands until the host's blasts have come.
     g_octa.Set(octa);
     g_appliedBase = g_appliedSeen = AppliedSum();
+    g_relayBase = coop::geom_octa_relay::GetCounters().verdictApplied;
+    g_laserSeen = GS::GetCounters().laser;
     UE_LOGI("[OCTA-DRILL] client: the Octa mirror eid=%u stands beside it t=%llu applied=%u", eid, Now(), g_appliedBase);
     Go(CStep::Stand);
 }
@@ -511,10 +554,26 @@ void ClientPlace(void* me) {
     Go(CStep::Find);
 }
 
-// Stands until three volleys of the host's blasts have reached this client's explosion lane. One laser makes several
-// explosions, so they are counted as volleys: an applied explosion more than kVolleyGapMs after the previous one starts
-// a new volley. The bound counts from the last blast that arrived (or from the arrival), so a wait that is still
-// progressing is never cut.
+// The §5.5 spread: each of this client's own lasers against the first blast the explosion lane applies after it, both
+// stamped from the net clock. The client's chain runs one latency behind the host's, so a blast can come before it.
+void NoteSpread() {
+    const GS::Counters c = GS::GetCounters();
+    if (c.laser > g_laserSeen) {
+        g_laserSeen = c.laser;
+        g_laserPendingMs = c.lastLaserMs;
+    }
+    const uint64_t applyMs = coop::explosion_sync::GetCounters().lastApplyMs;
+    if (g_laserPendingMs && applyMs >= g_laserPendingMs) {
+        UE_LOGI("[OCTA-DRILL] client: laser -> first blast applied %llu ms",
+                static_cast<unsigned long long>(applyMs - g_laserPendingMs));
+        g_laserPendingMs = 0;
+    }
+}
+
+// Stands until the Octa has fired three volleys. measure counts them as volleys of the explosions this client's
+// explosion lane applies (one laser makes several, so an explosion more than kVolleyGapMs after the previous one starts
+// a new volley); attack counts the verdicts the relay has applied, which it can now see. The bound counts from the last
+// sign of progress, so a wait that is still going is never cut.
 void ClientStand(void* me) {
     Guard();
     const uint32_t now = AppliedSum();
@@ -524,39 +583,45 @@ void ClientStand(void* me) {
         g_stepMs = at;
         if (g_volleys == 0 || at - g_lastAppliedMs > kVolleyGapMs) {
             ++g_volleys;
-            UE_LOGI("[OCTA-DRILL] client: volley %u of %u applied (%u explosions so far)", g_volleys, kBlastsWanted,
-                    now - g_appliedBase);
+            if (ArmOf() == Arm::Measure)
+                UE_LOGI("[OCTA-DRILL] client: volley %u of %u applied (%u explosions so far)", g_volleys, kBlastsWanted,
+                        now - g_appliedBase);
         }
         g_lastAppliedMs = at;
     }
-    if (g_volleys >= kBlastsWanted) {
-        void* octa = g_octa.Get();
-        FVector at{};
-        if (!octa || !E::TryGetActorLocation(octa, at)) {
-            Fail("the Octa mirror is gone before the walk-out");
-            return;
+    if (ArmOf() == Arm::Attack) {
+        NoteSpread();
+        const uint32_t applied = coop::geom_octa_relay::GetCounters().verdictApplied - g_relayBase;
+        if (applied > g_verdictsSeen) {
+            g_verdictsSeen = applied;
+            g_stepMs = coop::net::NowMs();
+            UE_LOGI("[OCTA-DRILL] client: verdict %u of %u applied", applied, kBlastsWanted);
         }
-        const std::vector<FVector> ring = D::ReachableStandpoints(me, at, kOutRingCm, kStandpoints, kStandReachCm);
-        if (ring.empty()) {
-            Fail("no NavMesh route from the Octa reaches a standpoint 1800 cm out: the client cannot leave its sphere");
-            return;
-        }
-        g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kOutWalkDeadlineS);
-        Go(CStep::Out);
+    }
+    const uint32_t reached = ArmOf() == Arm::Attack ? g_verdictsSeen : g_volleys;
+    if (reached >= kBlastsWanted) {
+        if (BeginWalkOut(me, g_octa.Get(), "client")) Go(CStep::Out);
         return;
     }
     if (Expired(kFireBoundMs)) Fail("no host fire (the client's explosion lane applied no blast for 90 s)");
 }
 
-void ClientOut() {
+void ClientOut(void* me) {
     Guard();
     const int state = g_walk ? g_walk->state.load() : 2;
     if (state == 0) return;
-    if (state == 2) {
-        Fail("the walk out of the Octa's sphere ended with no route");
+    if (state == 2) {   // the next ring
+        ++g_outRing;
+        BeginWalkOut(me, g_octa.Get(), "client");
         return;
     }
     UE_LOGI("[OCTA-DRILL] client out t=%llu", Now());
+    if (ArmOf() == Arm::Attack) {
+        const coop::geom_octa_relay::Counters r = coop::geom_octa_relay::GetCounters();
+        UE_LOGI("[OCTA-DRILL] attack DONE role=client replayed=%u skipped=%u applied=%u timeouts=%u dropped=%u t=%llu",
+                r.aggroReplayed, r.aggroSkipped, r.verdictApplied - g_relayBase, r.verdictTimeout, r.verdictDropped,
+                Now());
+    }
     Unguard();
     Go(CStep::Done);
 }
@@ -569,7 +634,7 @@ void ClientTick() {
         if (!coop::net_pump::HasAnnouncedWorldReady() ||
             coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle)
             return;
-        if (ArmOf() == Arm::Measure && !DamageProbeOn()) {
+        if (Fires() && !DamageProbeOn()) {
             Fail("damage_probe=1 is required: each blast must still log its [DMG] line");
             return;
         }
@@ -589,7 +654,7 @@ void ClientTick() {
             g_calledEvent = true;
             UE_LOGI("[OCTA-DRILL] births client: called CustomEvent_5");
         }
-        if (ArmOf() == Arm::Measure && HostWalks()) {
+        if (Fires() && HostWalks()) {
             // The control: the host's player takes its place and meets the Octa; this client stands where it spawned,
             // guarded, and has nothing to wait for.
             UE_LOGI("[OCTA-DRILL] client: stands where it spawned, the host walks");
@@ -597,7 +662,7 @@ void ClientTick() {
             return;
         }
         // measure: the client takes its place first; the Octa is spawned beside it after.
-        Go(ArmOf() == Arm::Measure ? CStep::Place : CStep::Find);
+        Go(Fires() ? CStep::Place : CStep::Find);
         return;
     case CStep::Place:
         ClientPlace(me);
@@ -609,7 +674,7 @@ void ClientTick() {
         ClientStand(me);
         return;
     case CStep::Out:
-        ClientOut();
+        ClientOut(me);
         return;
     default:
         return;
@@ -647,6 +712,9 @@ void OnDisconnect() {
     coop::dev::octa_probe::Reset();
     g_appliedBase = g_appliedSeen = 0;
     g_volleys = 0;
+    g_relayBase = g_verdictsSeen = g_laserSeen = 0;
+    g_laserPendingMs = 0;
+    g_outRing = 0;
     g_lastAppliedMs = 0;
     g_calledEvent = false;
 }

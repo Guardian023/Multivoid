@@ -23,6 +23,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
+#include <string>
 
 namespace coop::geom_octa_sync {
 namespace {
@@ -43,7 +44,7 @@ UE_FACT_FN(kRowCloseFinish, "geom_octa_sync", L"geomOcta_C", L"OnNotifyBegin_9B2
 UE_FACT_FN(kRowLaserBeginPlay, "geom_octa_sync", L"geomOctaLazer_C", L"ReceiveBeginPlay", Declared);
 UE_FACT_FN(kRowOctaGraph, "geom_octa_sync", L"geomOcta_C", L"ExecuteUbergraph_geomOcta", Declared);
 // The two begin-overlap handlers whose target choice a mirror's brain refuses; watched on the host only while the Octa
-// drill's measure arm is on, to see whether any overlap fires at all.
+// drill's measure or attack arm is on, to see whether any overlap fires at all.
 UE_FACT_FN(kRowMinSphereOverlap, "geom_octa_sync", L"geomOcta_C",
            L"BndEvt__geomOcta_minSphere_K2Node_ComponentBoundEvent_0_ComponentBeginOverlapSignature__DelegateSignature",
            Declared);
@@ -281,6 +282,10 @@ void SendAggro(uint32_t eid, const WireTarget& target, uint32_t base) {
 }
 
 void SendVerdict(uint32_t eid, uint32_t n, int refire) {
+    // [dev] octa_red=no_verdict, the attack arm's red: the host counts its verdicts and sends none, so the client's
+    // refused notify waits for a verdict that never comes and its look times out.
+    static const bool noVerdict = coop::config::ResolveEnum(::coop::config_registry::rows::octa_red) == "no_verdict";
+    if (noVerdict) return;
     N::GeomOctaEventPayload p{};
     p.op = N::kGeomOctaOpVerdict;
     p.octaEid = eid;
@@ -341,16 +346,20 @@ void OnLaserPost(const sg::Call& call) {
     char eid[16];
     EidText(NpcEid(GO::LaserOwner(call.object)), eid);
     ++g_counters.laser;
-    UE_LOGI("[OCTA] laser eid=%s t=%llu", eid, Now());
+    g_counters.lastLaserMs = N::NowMs();
+    UE_LOGI("[OCTA] laser eid=%s t=%llu", eid, static_cast<unsigned long long>(g_counters.lastLaserMs));
 }
 
 // ---- [dev] the overlap probe ----
 //
-// While the Octa drill's measure arm is on, the host's Octa reports each begin-overlap handler that fires: once per
+// While the Octa drill's measure or attack arm is on, the host's Octa reports each begin-overlap handler that fires: once per
 // handler and class of the other actor, with the handler's running total in the counters. It only observes.
 
 bool ProbeOn() {
-    static const bool on = coop::config::ResolveEnum(::coop::config_registry::rows::octa_drill) == "measure";
+    static const bool on = [] {
+        const std::string arm = coop::config::ResolveEnum(::coop::config_registry::rows::octa_drill);
+        return arm == "measure" || arm == "attack";
+    }();
     return on;
 }
 
@@ -424,7 +433,7 @@ void Install(coop::net::Session* session) {
         int                             tag;
         sg::PreFn                       pre;
         sg::PostFn                      post;
-        bool                            probeOnly = false;   // registered only while the drill's measure arm is on
+        bool                            probeOnly = false;   // registered only while the drill's measure or attack arm is on
         bool                            registered = false;
         bool                            refusedSaid = false;
     };
