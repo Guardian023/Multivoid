@@ -131,7 +131,8 @@ public:
     PoseTurn TrashCarryPoseTurn(uint32_t eid, bool ahead) const;
     void PublishTrashCarryPose(const TrashClumpPoseSnapshot& pose, bool ahead);
 
-    // Host: a driven prop's turn and its pose for the next PropDrivePose send. A pose superseded
+    // A driven prop's turn and its pose for the next PropDrivePose send (the host's to every peer, a
+    // client's to the host). A pose superseded
     // before a send is the only kind that never goes out, which keeps the publisher's delta baseline
     // consistent. Game thread.
     PoseTurn PropDrivePoseTurn(uint32_t eid) const;
@@ -184,6 +185,10 @@ public:
     // per eid; `out` comes in empty and keeps its capacity.
     bool TakeRemoteTrashCarryBatch(std::vector<TrashClumpPoseSnapshot>& out);
     bool TakeRemotePropDriveBatch(std::vector<PropPoseSnapshot>& out);
+
+    // Host: swap out the driven-prop rows client `peerSlot` sent since the last take, newest per eid; `out`
+    // comes in empty and keeps its capacity. Unjudged: the caller admits or refuses each row.
+    bool TakeRemotePropDriveBatchFrom(int peerSlot, std::vector<PropPoseSnapshot>& out);
 
     // Game thread: queue a reliable message to every connected client (host) or to the host
     // (client). False on an oversize payload or no peer. `skipSlot` skips one slot (-1: none): MTA pSkip.
@@ -427,7 +432,7 @@ private:
     int  SerializeLocalTrashCarryBatch(uint8_t* buf);
     void StoreRemoteTrashCarryBatch(const void* data, int len, uint32_t seq);
     int  SerializeLocalPropDriveBatch(uint8_t* buf);
-    void StoreRemotePropDriveBatch(const void* data, int len, uint32_t seq);
+    void StoreRemotePropDriveBatch(int originSlot, const void* data, int len, uint32_t seq);
     // Voice receive store (session_voice.cpp): validate one VoiceFrame, queue it, host-relay it.
     // Net thread.
     void StoreVoiceFrame(int routeSlot, int peerSlot, const void* data, int len);
@@ -478,6 +483,12 @@ private:
         if (!connected()) return false;
         std::lock_guard<std::mutex> lk(remoteMutex_);
         return (host_.*stream).Take(out);
+    }
+    template <class S, class T>
+    bool TakeOrigin(int slot, S OriginStreams::*stream, T& out) {
+        if (!connected() || slot < 0 || slot >= kMaxPeers) return false;
+        std::lock_guard<std::mutex> lk(remoteMutex_);
+        return (origin_[slot].*stream).Take(out);
     }
 
     // Host relay of an unreliable datagram from `originSlot` to every other client: the header's
@@ -666,13 +677,14 @@ private:
     // net thread's send round copies the samples and serializes the batches, both under localMutex_.
     std::mutex localMutex_;
     OutboundStreams outbound_;
-    // The host-originated trash-carry and driven-prop queues, each with its own mutex (what a client
-    // receives of them is in host_).
+    // The trash-carry queue (host-originated) and the driven-prop queue (the host's rows, or on a client the
+    // rows of a prop it syncs, sent to the host alone), each with its own mutex (what a client receives of
+    // them is in host_; what the host receives of a client's driven-prop rows is in origin_).
     EidPoseQueue<TrashClumpPoseSnapshot> trashCarryPoses_;
     EidPoseQueue<PropPoseSnapshot>       propDrivePoses_;
     // The batch kinds only the host originates: a host refuses each from a client, said once per
     // kind and per session (the net thread sets, Stop clears).
-    enum class HostBatch : uint8_t { Npc, WorldActor, TrashCarry, PropDrive, Count };
+    enum class HostBatch : uint8_t { Npc, WorldActor, TrashCarry, Count };
     std::array<std::atomic<bool>, static_cast<size_t>(HostBatch::Count)> saidClientBatch_{};
     // HOST: a client sent `kind`, which only a host originates; dropped, said once. Net thread.
     void RefuseClientBatch(HostBatch kind, const char* tag, const char* msgName);

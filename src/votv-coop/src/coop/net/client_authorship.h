@@ -143,6 +143,8 @@ constexpr ClientAuthorship AuthorshipOf(ReliableKind k) {
     case ReliableKind::PropActCommit:
     case ReliableKind::CameraToggleIntent:
     case ReliableKind::LaptopTabReport:
+    case ReliableKind::PropDriveEnd:
+    case ReliableKind::PropSyncClaim:
         return ClientAuthorship::Client;
     // The Host row matches MTA's protected element data, which a client may not write: opt-in there
     // (reference/mtasa-blue/Server/mods/deathmatch/logic/CGame.cpp:2743-2755), the only mode here.
@@ -191,7 +193,6 @@ constexpr ClientAuthorship AuthorshipOf(ReliableKind k) {
     case ReliableKind::ChatLine:
     case ReliableKind::AuthChallenge:
     case ReliableKind::LightGroupState:
-    case ReliableKind::PropDriveEnd:
     case ReliableKind::GrabRefused:
     case ReliableKind::JoinPhaseNote:
     case ReliableKind::UpgradeLevels:
@@ -222,6 +223,7 @@ constexpr ClientAuthorship AuthorshipOf(ReliableKind k) {
     case ReliableKind::CameraLightState:
     case ReliableKind::LaptopTabState:
     case ReliableKind::AtvSetComplete:
+    case ReliableKind::PropSyncAnswer:
         return ClientAuthorship::Host;
     }
     return ClientAuthorship::NotAKind;  // a byte value that names no kind: refused like Host

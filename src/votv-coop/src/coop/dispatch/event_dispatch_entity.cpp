@@ -1,7 +1,8 @@
 // coop/dispatch/event_dispatch_entity.cpp -- the entity-lifecycle and held-item reliable kinds:
 // PropStickState, PropRelease, PropSpawn, PropDestroy, PropConvert, PropSnapPos, the
 // owner-entity lane, EntitySpawn and EntityDestroy, the world-actor pair, PyramidGather and
-// ItemActivate. Each case validates at the trust boundary and hands off to its module. See
+// ItemActivate, and the driven-prop syncer pair (PropSyncClaim, PropSyncAnswer, with the End of a
+// prop a client syncs). Each case validates at the trust boundary and hands off to its module. See
 // coop/dispatch/event_dispatch.h.
 
 #include "event_dispatch.h"  // co-located private header (src tree, not include/)
@@ -23,6 +24,8 @@
 #include "coop/props/prop_save_data.h"    // the per-prop save record lane
 #include "coop/props/prop_stick_sync.h"
 #include "coop/props/prop_drive_stream.h"  // the driven-prop end edge
+#include "coop/props/prop_syncer.h"        // the client's answer receiver
+#include "coop/props/prop_syncer_host.h"   // the host's claim judge and a client's End
 #include "coop/player/remote_player.h"
 #include "coop/props/prop_element_tracker.h"  // SessionIsHost
 #include "coop/props/remote_prop.h"
@@ -467,8 +470,8 @@ bool HandleEntityEvent(net::Session& session,
         break;
     }
     case net::ReliableKind::PropDriveEnd: {
-        // Host to all: a driven prop's stream closed. Host-only, never relayed; validated here and
-        // applied by the stream's receiver on the game thread.
+        // A driven prop's stream closed: the host's to all, or a syncing client's to the host. Never
+        // relayed; validated here and applied by the stream's receiver on the game thread.
         if (msg.payloadLen < sizeof(net::PropDriveEndPayload)) {
             UE_LOGW("event_feed: PropDriveEnd payload too short (%zu < %zu)",
                     static_cast<size_t>(msg.payloadLen), sizeof(net::PropDriveEndPayload));
@@ -492,7 +495,64 @@ bool HandleEntityEvent(net::Session& session,
             UE_LOGW("event_feed: PropDriveEnd eid=0x%08x not a valid host-allocated id -- dropping", p.eid);
             break;
         }
+        if (session.role() == net::Role::Host) {
+            // A client's End for a prop it syncs: the host judges it against the row's syncer and
+            // generation, and re-publishes it; the stream's receiver is the client side.
+            if (msg.senderPeerSlot < 1 || msg.senderPeerSlot >= net::kMaxPeers) {
+                UE_LOGW("event_feed: PropDriveEnd from invalid senderPeerSlot=%d -- dropping", msg.senderPeerSlot);
+                break;
+            }
+            ::coop::prop_syncer_host::OnClientEnd(session, p, static_cast<uint8_t>(msg.senderPeerSlot));
+            break;
+        }
         ::coop::prop_drive_stream::OnEnd(p);   // the router is on the game thread; PropRelease's shape
+        break;
+    }
+    case net::ReliableKind::PropSyncClaim: {
+        // CLIENT->HOST: this client's interaction moves a prop and it asks to be its syncer. The host
+        // judges the claim and answers it (coop::prop_syncer_host::OnClaim). Never relayed.
+        if (session.role() != net::Role::Host) {
+            UE_LOGW("event_feed: PropSyncClaim received on a client -- dropping");
+            break;
+        }
+        if (msg.senderPeerSlot < 1 || msg.senderPeerSlot >= net::kMaxPeers) {
+            UE_LOGW("event_feed: PropSyncClaim from invalid senderPeerSlot=%d -- dropping", msg.senderPeerSlot);
+            break;
+        }
+        if (msg.payloadLen < sizeof(net::PropSyncClaimPayload)) {
+            UE_LOGW("event_feed: PropSyncClaim payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::PropSyncClaimPayload));
+            break;
+        }
+        net::PropSyncClaimPayload p{};
+        std::memcpy(&p, msg.payload, sizeof(p));
+        if (p.key.len > sizeof(p.key.data) || p.eid == 0u ||
+            !coop::element::Registry::IsAllowedHostAllocatedEid(p.eid)) {
+            UE_LOGW("event_feed: PropSyncClaim eid=0x%08x key.len=%u malformed -- dropping", p.eid,
+                    static_cast<unsigned>(p.key.len));
+            break;
+        }
+        ::coop::prop_syncer_host::OnClaim(session, p, static_cast<uint8_t>(msg.senderPeerSlot));
+        break;
+    }
+    case net::ReliableKind::PropSyncAnswer: {
+        // HOST->CLIENT: the host's verdict on a claim, or the end of a row it granted. Host-authored: a
+        // client's copy is refused at the host's receive edge (client_authorship.h).
+        if (msg.payloadLen < sizeof(net::PropSyncAnswerPayload)) {
+            UE_LOGW("event_feed: PropSyncAnswer payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::PropSyncAnswerPayload));
+            break;
+        }
+        net::PropSyncAnswerPayload p{};
+        std::memcpy(&p, msg.payload, sizeof(p));
+        if (p.eid == 0u || p.result < static_cast<uint8_t>(net::PropSyncResult::Granted) ||
+            p.result > static_cast<uint8_t>(net::PropSyncResult::Refused) ||
+            p.refusal > static_cast<uint8_t>(net::PropSyncRefusal::Paced)) {
+            UE_LOGW("event_feed: PropSyncAnswer eid=0x%08x result=%u refusal=%u malformed -- dropping", p.eid,
+                    static_cast<unsigned>(p.result), static_cast<unsigned>(p.refusal));
+            break;
+        }
+        ::coop::prop_syncer::OnAnswer(p);
         break;
     }
     case net::ReliableKind::HookAnchorCommit: {

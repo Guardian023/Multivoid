@@ -393,6 +393,8 @@ set(VOTVCOOP_SOURCES
     src/coop/props/trash_sweep.cpp
     src/coop/props/prop_drive_host.cpp
     src/coop/props/prop_drive_stream.cpp
+    src/coop/props/prop_syncer_host.cpp
+    src/coop/props/prop_syncer_client.cpp
     src/coop/props/prop_park.cpp
     src/coop/props/rider_hold.cpp
     src/coop/world/weather_sync.cpp

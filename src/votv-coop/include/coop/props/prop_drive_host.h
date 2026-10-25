@@ -8,7 +8,8 @@
 // the body rests; while claimed or coasting the prop's pose goes out on MsgType::PropDrivePose
 // whenever it moved, and one reliable PropDriveEnd closes the stream with the final pose, the
 // host's physics flags and the velocity. MTA's unoccupied-vehicle syncer, with the host as the
-// only syncer since props are host-authoritative.
+// only syncer since props are host-authoritative. A row can also name a client as its author
+// (prop_syncer_host grants it); the host then publishes the client's admitted pose as it would its own.
 //
 // HOST-ONLY, game thread. Verb-fed and never scanned: the set holds only what a caller claimed.
 

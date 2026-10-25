@@ -426,9 +426,9 @@ void Session::SendStreamsTick(std::chrono::steady_clock::time_point now,
         // SerializeLocalTrashCarryBatch returns 0 on a client / when no clump is carried).
         uint8_t tcBuf[kTrashCarryPoseDatagramMax];
         const int tcMsgLen = SerializeLocalTrashCarryBatch(tcBuf);
-        // The driven-prop batch, serialized ONCE and drained from the host's pending queue
-        // (host-only producer -- SerializeLocalPropDriveBatch returns 0 on a client / when no
-        // driven prop moved).
+        // The driven-prop batch, serialized ONCE and drained from this peer's pending queue (the
+        // host's driven rows, or on a client the rows of a prop it syncs, which go to the host
+        // connection alone -- SerializeLocalPropDriveBatch returns 0 when no driven prop moved).
         uint8_t pdBuf[kPropDrivePoseDatagramMax];
         const int pdMsgLen = SerializeLocalPropDriveBatch(pdBuf);
         if (have || haveProp || haveRagdoll || haveHand || haveDeskCursor || clockDue || deskSimDue ||
@@ -542,7 +542,8 @@ void Session::SendStreamsTick(std::chrono::steady_clock::time_point now,
                 // A joiner still loading gets no driven-prop pose either: the end edge that would hand
                 // its copy back is not sent to a world that is not ready (session_lanes.h), so a park
                 // started now could outlive the drive, and the host re-sends every driven prop's pose
-                // at the ready edge (prop_drive_host::OnPeerWorldReady).
+                // at the ready edge (prop_drive_host::OnPeerWorldReady). On a client the one slot is the
+                // host's, open from the connect edge (ClientConnectEdge).
                 if (pdMsgLen > 0 && IsSlotWorldReady(i)) {  // driven-prop batch -- body built once above; stamp per-peer
                     PacketHeader pdHdr{};
                     WriteHeader(pdHdr, MsgType::PropDrivePose, sendSeq_.fetch_add(1), ownEpoch_);

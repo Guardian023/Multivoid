@@ -211,8 +211,10 @@ inline Lane LaneForKind(ReliableKind k) {
     case ReliableKind::HookAnchored:      return Lane::Normal;
     // PropDriveEnd is host-to-all, with no lane order against other kinds: its stream is unreliable on
     // its own datagram kind, and a never-parked receiver closes the generation and no more. A
-    // join-window PropSnapPos (Bulk) is ordered against it by its drive context. The default.
+    // join-window PropSnapPos (Bulk) is ordered against it by its drive context. The default, as for the syncer pair.
     case ReliableKind::PropDriveEnd:      return Lane::Normal;
+    case ReliableKind::PropSyncClaim:     return Lane::Normal;
+    case ReliableKind::PropSyncAnswer:    return Lane::Normal;
     // The Kerfus pair is ordered against nothing: a state for a Kerfus whose mirror has not bound
     // waits for the bind, and the host resolves an intent by eid. The default, by decision.
     case ReliableKind::KerfusState:       return Lane::Normal;
@@ -300,8 +302,8 @@ constexpr bool IsClientRelayableReliableKind(ReliableKind k) {
     case ReliableKind::OwnerEntityDestroy:
     case ReliableKind::HookState:         // a hook belongs to the player who fired it
     case ReliableKind::HookDestroy:
-    // PropDriveEnd is not relayable: the host originates it, and a client's copy would be a forged
-    // end for a stream only the host runs.
+    // PropDriveEnd is not relayable: a client's End goes to the host, which judges it and re-publishes it. Nor is
+    // PropSyncClaim (the host answers the sender alone); PropSyncAnswer is host-authored.
     // HookAnchorCommit is deliberately NOT relayable: it is an intent addressed to the host alone,
     // and the host's own HookAnchored is what the other peers get. Relaying it would hand every
     // peer a record the arbiter has not validated yet, and two of them would build the hook.
@@ -370,7 +372,7 @@ inline bool IsPreWorldSendableKind(ReliableKind k) {
     // A command's answer is a private text line; the receiver touches no world.
     case ReliableKind::CommandReply:
     // PropDriveEnd stays gated: it names a prop by eid, which a joiner has only after its world is up,
-    // and the world-ready replay re-sends every driven prop's pose in any case.
+    // and the world-ready replay re-sends every driven prop's pose in any case. The syncer pair likewise.
         return true;
     default:
         return false;

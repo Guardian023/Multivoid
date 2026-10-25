@@ -30,7 +30,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // This file is past the 1500-line hard cap and stays there: it is the single-feature exception the
 // rule names. One wire format, whose enum, payload structs and static_asserts are read together;
 // splitting it would put a kind's number in one file and its bytes in another.
-inline constexpr uint16_t kProtocolVersion = 250;
+inline constexpr uint16_t kProtocolVersion = 251;
 
 // Default LAN port (overridable via multivoid.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -113,7 +113,9 @@ enum class MsgType : uint8_t {
     // Host to all: props in motion under something other than a hand -- a hook's constraint, a
     // body still sliding after the hook let go -- keyed by key and eid, ctx carrying the claim
     // generation; an entry only for a prop that moved since its last one. EntityPoseBatchHeader
-    // plus N PropPoseSnapshot; PropDriveEnd closes each eid's stream.
+    // plus N PropPoseSnapshot; PropDriveEnd closes each eid's stream. A client that syncs a prop its
+    // interaction moves (PropSyncClaim) sends the same batch to the host alone, which judges every
+    // row by the sender, the eid's row and its generation before it relays one.
     PropDrivePose = 41,
 
     // One 20 ms Opus frame: a stream, not a state. The receiver queues every arrival per sender
@@ -709,7 +711,10 @@ enum class ReliableKind : uint8_t {
 
     // Host to all: the driven prop at eid has come to rest, or a hand took it -- its final pose and
     // velocity, and the claim generation its stream carried. A receiver hands the prop its physics
-    // back and drops every later-arriving pose of that generation. PropDriveEndPayload.
+    // back and drops every later-arriving pose of that generation. A client that syncs the prop sends
+    // the same payload to the host alone when its copy rests; the host admits it when the sender is
+    // the row's syncer and the generation matches, applies it and re-publishes it to all. Not
+    // relayed by the session; not pre-world. PropDriveEndPayload.
     PropDriveEnd = 137,
 
     // Client to host: a broom stroke the client refused at its own montage notify, as what that
@@ -1134,6 +1139,19 @@ enum class ReliableKind : uint8_t {
     // joiner's world-ready it sends every corded prop's link, then op 2 (the seed's end). Rides PropSpawn's lane, so
     // a link never passes the birth of the prop it names. Not pre-world. CordLinkPayload.
     CordLinkState = 195,
+
+    // CLIENT->HOST: this client's own interaction moves a prop (a keyed prop with a host eid, in no hand) and it
+    // asks to be the prop's syncer, once per claim episode. The host judges the sender (world-ready, pace, the
+    // prop, no hand, no host-authored row, no other syncer, reach) and answers every one with PropSyncAnswer; a
+    // grant opens the row the client's PropDrivePose rows are then admitted against. Never relayed; not pre-world;
+    // a client sends none before its own world-ready. Late join: none, a claim is an act (a prop a joiner finds
+    // under a client's row is replayed by the drive lane's world-ready answer). PropSyncClaimPayload.
+    PropSyncClaim = 201,
+    // HOST->CLIENT: the host's verdict on one PropSyncClaim, to its sender alone (Granted or Refused, the claim's
+    // seq echoed), or the end of a row it granted (Revoked, the ended generation). Host-authored: refused from a
+    // client at the host's receive edge; never relayed; not pre-world; lost only with the session. Late join:
+    // none. PropSyncAnswerPayload.
+    PropSyncAnswer = 202,
 };
 
 #pragma pack(push, 1)
@@ -1658,7 +1676,8 @@ inline constexpr float kThrownLinVelThreshold = 200.f;
 // carried in PropPoseSnapshot.ctx, the host's physics flags at that instant (propspawn_flags, the
 // receiver restores the same parity the join's converge does), the final pose, and the body's
 // linear and angular velocity -- zero when it ended at rest, the coasting velocity when a hand
-// took it. Once per claim.
+// took it. Once per claim. A client that syncs the prop sends it to the host too, with its own copy's
+// values.
 struct PropDriveEndPayload {
     uint32_t eid;                        // 4
     uint8_t  gen;                        // 1 -- the claim generation
@@ -1672,6 +1691,59 @@ struct PropDriveEndPayload {
 static_assert(sizeof(PropDriveEndPayload) == 56, "PropDriveEndPayload must be 56 bytes");
 static_assert(sizeof(PropDriveEndPayload) <= 256 - 20 - 8,
               "PropDriveEndPayload must fit in one reliable datagram");
+
+// Why a client asks to sync a prop (PropSyncClaim): one value per feeder, logged on the host. Wire-visible: the
+// values are stable.
+enum class PropSyncReason : uint8_t {
+    DevDrill = 1,
+    SwingerParent = 2,   // unused until the swinger-parent feeder
+};
+
+// A client's request to be a prop's syncer (PropSyncClaim): the prop by its key when it has one and by its host eid,
+// and the claim's seq, which the answer echoes. One per claim episode; the seq is the client's own u16 counter.
+struct PropSyncClaimPayload {
+    WireKey  key;         // 32 -- the prop's Key; len 0 = keyless, the eid names it
+    uint32_t eid;         // 4  -- the prop's host element id; 0 is malformed
+    uint16_t seq;         // 2
+    uint8_t  reason;      // 1  -- a PropSyncReason
+    uint8_t  _pad;        // 1  -- zero
+};
+static_assert(sizeof(PropSyncClaimPayload) == 40, "PropSyncClaimPayload must be 40 bytes");
+static_assert(sizeof(PropSyncClaimPayload) <= 256 - 20 - 8,
+              "PropSyncClaimPayload must fit in one reliable datagram");
+
+// What the host's PropSyncAnswer says. Wire-visible: the values are stable; 0 is never sent.
+enum class PropSyncResult : uint8_t {
+    Granted = 1,   // the claim opened a row; gen is the row's generation
+    Revoked = 2,   // the host ended the sender's row; gen is the ended generation
+    Refused = 3,   // the claim was refused; `refusal` says why
+};
+
+// Why the host refused a PropSyncClaim. Wire-visible: the values are stable; 0 = none (not a refusal).
+enum class PropSyncRefusal : uint8_t {
+    None = 0,
+    NotReady = 1,       // the sender is not world-ready
+    Unknown = 2,        // the eid is no live prop the channel can carry
+    InHand = 3,         // a hand holds the prop
+    HostAuthored = 4,   // a host verb or push has a row on it
+    OtherSyncer = 5,    // another client's row (or the sender's own) is open on it
+    OutOfReach = 6,     // the sender's puppet is beyond the intent reach
+    Paced = 7,          // the sender's claim bucket is empty
+};
+
+// The host's verdict on one PropSyncClaim, or the end of a row it granted (PropSyncAnswer), to the claim's sender
+// alone. `seq` echoes the claim that opened the row; `gen` is the granted or the ended generation (0 on a refusal).
+struct PropSyncAnswerPayload {
+    uint32_t eid;         // 4 -- the claim's eid
+    uint16_t seq;         // 2
+    uint8_t  gen;         // 1 -- the granted or the ended generation
+    uint8_t  result;      // 1 -- a PropSyncResult
+    uint8_t  refusal;     // 1 -- a PropSyncRefusal; None unless result is Refused
+    uint8_t  _pad[3];     // 3 -- zero
+};
+static_assert(sizeof(PropSyncAnswerPayload) == 12, "PropSyncAnswerPayload must be 12 bytes");
+static_assert(sizeof(PropSyncAnswerPayload) <= 256 - 20 - 8,
+              "PropSyncAnswerPayload must fit in one reliable datagram");
 
 // A prop birth (PropSpawn): the class, the persistent key, the list_props row name that init()
 // resolves the mesh, mass and collision from, the transform and scale, the physics flags, an
