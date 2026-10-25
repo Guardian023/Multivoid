@@ -51,6 +51,10 @@ constexpr uint64_t kVolleyGapMs      = 400;
 constexpr uint64_t kAggroBoundMs     = 30000;   // HOST: no aggro this long after the spawn is a dead Octa
 constexpr uint64_t kFireBoundMs      = 90000;   // CLIENT: this long with no new blast applied is a stalled wait
 constexpr uint64_t kBirthsBoundMs    = 60000;   // births: the enrol, and either arm's mirror, within this
+// The join arm: a client whose first Aggro carries a verdict base of at least this is the joiner (the second life): the
+// first life got its Aggro at the attack's start, base 0, and left after two verdicts, so any later Aggro has more.
+constexpr uint32_t kJoinMinBase      = 2;
+constexpr uint32_t kLife1Verdicts    = 2;   // the first life applies this many verdicts, then prints the rejoin marker
 
 // ---- the arm and its rows (octa_drill.cpp) ----
 
@@ -60,8 +64,8 @@ Arm ArmOf();
 bool Fires();
 // The arms the client's relay is judged on: attack, and join (where client 2 joins mid-attack).
 bool RelayJudged();
-// The join arm's client 2: the observer, which joins mid-attack and does not walk.
-bool IsObserver();
+// The join arm's client 1: the joiner. Its first life stands away; its second joins mid-attack.
+bool IsJoiner();
 const char* FiringArmName();
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
 // own spawn verb with the spawn menu's Octa row, whose Octa the host's EX catch enrols at the drain.
@@ -101,8 +105,11 @@ extern coop::geom_octa_relay::Counters g_relay0;   // attack: the relay's counte
 extern uint32_t g_verdictsSeen;      // attack: the verdicts it has applied since
 extern uint32_t g_laserSeen;         // attack: this client's own lasers counted so far
 extern uint64_t g_laserPendingMs;    // attack: the stamp of a laser still waiting for the blast that follows it
-extern uint64_t g_joinHoldAt;       // join: when client 1 first had its three verdicts and began to wait for client 2
-extern bool     g_observerSeen;      // join: client 2 has said it is done
+extern uint64_t g_joinHoldAt;       // join, the walker: when it first had its three verdicts and began to wait for the joiner
+extern bool     g_joinerSeen;        // join: the joiner (client 1, second life) has said it is done
+extern bool     g_lifeKnown;         // join, client 1: its first Aggro has come, and with it which life this is
+extern bool     g_isJoiner;          // join, client 1: that Aggro carried a base of kJoinMinBase or more: the second life
+extern uint32_t g_joinBase;          // join, client 1: the base of that first Aggro
 extern size_t   g_outRing;           // the walk-out ring in use (kOutRingsCm)
 extern uint64_t g_lastAppliedMs;     // when the last explosion was seen applied
 extern bool     g_calledEvent;       // CLIENT (births): the night roll's event has been called
@@ -121,6 +128,9 @@ void* FirstInstance(const wchar_t* className);
 uint32_t NpcEidOf(void* actor);
 float FlatDist(const FVector& a, const FVector& b);
 void* LivePuppetBody(uint8_t& slot);
+// The walker's puppet on the host: the join arm's is the client in slot 2 (client 1 is the joiner), every other
+// arm's the first live puppet.
+void* LiveWalkerBody(uint8_t& slot);
 // The walker's way out of the sphere, ring by ring; false, said, once the last ring has failed.
 bool BeginWalkOut(void* me, void* octa, const char* who);
 

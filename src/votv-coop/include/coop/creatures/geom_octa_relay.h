@@ -39,6 +39,7 @@ struct Counters {
     uint32_t eventDropped;
     uint32_t overwriteWrites;   // host answers the post hook wrote into a replayed notify's overlap read
     uint32_t aggroReceived;     // Aggros that passed the boundary for a live Octa mirror (replayed or not)
+    uint32_t lastAggroBase;     // the base the last of them carried
     uint32_t verdictReceived;   // FireVerdicts that did
 };
 Counters GetCounters();

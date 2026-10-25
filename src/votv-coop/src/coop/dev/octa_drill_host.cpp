@@ -13,6 +13,7 @@
 #include "coop/net/net_clock.h"
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"
+#include "coop/player/remote_player.h"
 
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/object_index.h"
@@ -20,6 +21,7 @@
 #include "ue_wrap/core/types.h"
 #include "ue_wrap/engine/engine.h"
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <vector>
@@ -110,16 +112,37 @@ Pending g_pending;
 
 void OctaSpawned(void* octa, const FVector& at, float walkerD, float otherD);
 
-// measure: spawns the Octa about 600 cm from the walker, on the side away from the other player (a reachable point of a
-// ring about the walker, the one farthest from the other, at least 1300 cm from it). The Octa's sphere registers inside
-// its own finish-spawn and reports the walker's capsule as an overlap there, which is how it aggros, with the other
-// player out of the sphere's reach.
-void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
+// The places of the players other than the walker: the host, unless it is the walker, and every live puppet but the
+// walker's. The Octa must stand out of all their reach.
+struct Others {
+    FVector at[coop::players::kMaxPeers];
+    int     count = 0;
+};
+
+Others OthersOf(void* me, bool hostWalks, uint8_t walkerSlot) {
+    Others o;
+    FVector p{};
+    if (!hostWalks && E::TryGetActorLocation(me, p)) o.at[o.count++] = p;
+    for (uint8_t s = 0; s < coop::players::kMaxPeers && o.count < coop::players::kMaxPeers; ++s) {
+        if (!hostWalks && s == walkerSlot) continue;
+        coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(s);
+        void* body = rp ? rp->GetActor() : nullptr;
+        if (body && R::IsLive(body) && E::TryGetActorLocation(body, p)) o.at[o.count++] = p;
+    }
+    return o;
+}
+
+// measure: spawns the Octa about 600 cm from the walker, on the side away from the other players (a reachable point of a
+// ring about the walker, the one farthest from the nearest of them, at least 1300 cm from each). The Octa's sphere
+// registers inside its own finish-spawn and reports the walker's capsule as an overlap there, which is how it aggros,
+// with the others out of the sphere's reach.
+void SpawnOctaBeside(void* me, const FVector& walker, const Others& others) {
     const std::vector<FVector> ring = D::ReachableStandpoints(me, walker, kSpawnNearCm, kStandpoints, kStandReachCm);
     const FVector* best = nullptr;
     float bestD = 0.f;
     for (const FVector& p : ring) {
-        const float d = FlatDist(p, other);
+        float d = 1e9f;   // the distance to the nearest other player
+        for (int i = 0; i < others.count; ++i) d = (std::min)(d, FlatDist(p, others.at[i]));
         if (d >= kSpawnAwayCm && (!best || d > bestD)) {
             best = &p;
             bestD = d;
@@ -178,7 +201,7 @@ void OctaSpawned(void* octa, const FVector& at, float walkerD, float otherD) {
     if (eid) std::snprintf(eidText, sizeof(eidText), "%u", eid);
     else std::snprintf(eidText, sizeof(eidText), "pending");
     UE_LOGI("[OCTA-DRILL] host READY %s: Octa (%s route) eid=%s at=%.0f,%.0f,%.0f, %.0f cm from the walker (slot %u), "
-            "%.0f from the other player", FiringArmName(), SpawnByGamemode() ? "gamemode" : "sat", eidText, at.X, at.Y,
+            "%.0f from the nearest other player", FiringArmName(), SpawnByGamemode() ? "gamemode" : "sat", eidText, at.X, at.Y,
             at.Z, walkerD, static_cast<unsigned>(g_walkerSlot), otherD);
 }
 
@@ -197,7 +220,7 @@ void HostAwaitOcta() {
 // walks it 2200 cm from the client's puppet, and the Octa is spawned beside it.
 void HostPlace(void* me) {
     uint8_t slot = 0;
-    void* puppet = LivePuppetBody(slot);
+    void* puppet = LiveWalkerBody(slot);
     FVector hp{}, pp{};
     if (!E::TryGetActorLocation(me, hp)) return;
     if (!puppet || !E::TryGetActorLocation(puppet, pp)) {
@@ -225,7 +248,7 @@ void HostPlace(void* me) {
         g_walkerSlot = 0;
         UE_LOGI("[OCTA-DRILL] host in place t=%llu", Now());
         if (!E::TryGetActorLocation(me, hp)) return;
-        SpawnOctaBeside(me, hp, pp);
+        SpawnOctaBeside(me, hp, OthersOf(me, true, 0));
         return;
     }
     // The client is in place when its puppet is far from the host and has not moved for two seconds.
@@ -237,7 +260,7 @@ void HostPlace(void* me) {
     }
     if (now - g_puppetStillAt < kStillMs || FlatDist(pp, hp) < kSpawnAwayCm) return;
     g_walkerSlot = slot;
-    SpawnOctaBeside(me, pp, hp);
+    SpawnOctaBeside(me, pp, OthersOf(me, false, slot));
 }
 
 // octa_measure_target=host: the host's own player, in place beside the Octa it spawned, stands until the Octa has fired
@@ -288,7 +311,7 @@ void HostWatchMeasure() {
     FVector op{};
     FVector pp{};
     uint8_t puppetSlot = 0;
-    void* puppet = LivePuppetBody(puppetSlot);
+    void* puppet = LiveWalkerBody(puppetSlot);
     // The body that stands in the sphere: the client's puppet, or the host's own player for the control.
     void* walker = HostWalks() ? me : puppet;
     const bool haveBoth = E::TryGetActorLocation(octa, op) && walker && E::TryGetActorLocation(walker, pp);

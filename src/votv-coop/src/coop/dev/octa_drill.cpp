@@ -61,7 +61,7 @@ Arm ArmOf() {
 // The arms that place a walker and let the Octa fire: measure (no relay judged), attack and join (the relay judged).
 bool Fires() { return ArmOf() == Arm::Measure || RelayJudged(); }
 bool RelayJudged() { return ArmOf() == Arm::Attack || ArmOf() == Arm::Join; }
-bool IsObserver() { return ArmOf() == Arm::Join && coop::players::Registry::Get().LocalPeerId() == 2; }
+bool IsJoiner() { return ArmOf() == Arm::Join && coop::players::Registry::Get().LocalPeerId() == 1; }
 const char* FiringArmName() { return ArmOf() == Arm::Join ? "join" : ArmOf() == Arm::Attack ? "attack" : "measure"; }
 
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
@@ -106,7 +106,10 @@ uint32_t g_verdictsSeen = 0;      // attack: the verdicts it has applied since
 uint32_t g_laserSeen = 0;         // attack: this client's own lasers counted so far
 uint64_t g_laserPendingMs = 0;    // attack: the stamp of a laser still waiting for the blast that follows it
 uint64_t g_joinHoldAt = 0;
-bool     g_observerSeen = false;
+bool     g_joinerSeen = false;
+bool     g_lifeKnown = false;
+bool     g_isJoiner = false;
+uint32_t g_joinBase = 0;
 size_t   g_outRing = 0;           // the walk-out ring in use (kOutRingsCm)
 uint64_t g_lastAppliedMs = 0;     // when the last explosion was seen applied
 bool     g_calledEvent = false;   // CLIENT (births): the night roll's event has been called
@@ -183,6 +186,17 @@ void* LivePuppetBody(uint8_t& slot) {
     return nullptr;
 }
 
+// The walker's puppet on the host: the join arm's walker is client 2 (client 1 is the joiner, relaunched mid-run), so its
+// puppet is the one waited for; every other arm's is the first live puppet.
+void* LiveWalkerBody(uint8_t& slot) {
+    if (ArmOf() != Arm::Join) return LivePuppetBody(slot);
+    coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(2);
+    void* body = rp ? rp->GetActor() : nullptr;
+    if (!body || !R::IsLive(body)) return nullptr;
+    slot = 2;
+    return body;
+}
+
 // The walker's way out of the sphere: a standpoint on a ring about the Octa's live place, the next ring when the last
 // has none or the walk to it ended with no route (an earlier host walk-out failed once on a place with no route 1800 cm
 // out). False, said, once the last ring has failed.
@@ -226,7 +240,7 @@ void ClientFindMirror() {
     // In place already: the host spawned the Octa beside it, and it stands until the host's blasts have come.
     g_octa.Set(octa);
     g_appliedBase = g_appliedSeen = AppliedSum();
-    if (!IsObserver()) g_relay0 = coop::geom_octa_relay::GetCounters();   // the observer's was taken at its start
+    if (!IsJoiner()) g_relay0 = coop::geom_octa_relay::GetCounters();   // the joiner's was taken at its start
     g_laserSeen = GS::GetCounters().laser;
     UE_LOGI("[OCTA-DRILL] client: the Octa mirror eid=%u stands beside it t=%llu applied=%u", eid, Now(), g_appliedBase);
     Go(CStep::Stand);
@@ -294,15 +308,19 @@ const char* RelayDirty() {
     return nullptr;
 }
 
-// The join arm's chat line: client 2 says it when it has applied its three verdicts, and client 1 walks out on it.
-constexpr const char* kObserverDoneLine = "OCTAJOIN observer done";
-// How long client 1 holds after its own three verdicts for client 2 to report: the observer boots after the run began.
-constexpr uint64_t kJoinWaitMs = 240000;
+// The join arm's chat line: the joiner says it when it has applied its three verdicts, and the walker leaves on it.
+constexpr const char* kJoinerDoneLine = "OCTAJOIN joiner done";
+// How long the walker holds after its own three verdicts for the joiner to report: the joiner is a relaunched process
+// that has to boot, join and replay, so this is a cap on a wait that has stopped progressing, never a pace.
+constexpr uint64_t kJoinWaitMs = 360000;
 
-// The join arm's client 2: it joined mid-attack, so the host's snapshot must have sent it one Aggro, and the host's
-// verdicts that follow pair with its own refused notifies. It stands guarded, never walks, and is done on its third
-// verdict applied, which it says in the lobby chat for client 1.
-void ObserverStand() {
+// The join arm's client 1, two lives. It stands guarded and never walks, away from the Octa. Its FIRST Aggro says which
+// life it is: the first life got the attack's own Aggro (base 0), the second (the rig relaunches the client when the
+// first prints its rejoin marker) gets the join snapshot's Aggro, whose base is the host's verdict count by then.
+//   life 1: applies two verdicts, prints the rejoin marker, and waits to be relaunched.
+//   life 2, the joiner: the join's Aggro must have been replayed, and each host verdict after its base applied with the
+//   overwrite written; on the third it prints join DONE and says so in the lobby chat for the walker.
+void JoinerStand() {
     Guard();
     NoteSpread();
     const coop::geom_octa_relay::Counters r = coop::geom_octa_relay::GetCounters();
@@ -315,16 +333,42 @@ void ObserverStand() {
         Fail(dirty);
         return;
     }
+    if (!g_lifeKnown) {
+        if (r.aggroReceived == g_relay0.aggroReceived) {
+            if (Expired(kFireBoundMs)) Fail("no host fire (this client received no Aggro for 90 s)");
+            return;
+        }
+        g_lifeKnown = true;
+        g_joinBase = r.lastAggroBase;
+        g_isJoiner = g_joinBase >= kJoinMinBase;
+        g_stepMs = coop::net::NowMs();
+        UE_LOGI("[OCTA-DRILL] join: this is the %s (the first Aggro carried base=%u)", g_isJoiner ? "joiner, life 2" : "first life",
+                g_joinBase);
+    }
     const uint32_t applied = r.verdictApplied - g_relay0.verdictApplied;
     if (applied > g_verdictsSeen) {
         g_verdictsSeen = applied;
         g_stepMs = coop::net::NowMs();
-        UE_LOGI("[OCTA-DRILL] observer: verdict %u of %u applied", applied, kBlastsWanted);
+        UE_LOGI("[OCTA-DRILL] join: verdict %u applied (%s)", applied, g_isJoiner ? "joiner" : "life 1");
+    }
+    if (!g_isJoiner) {
+        if (applied >= kLife1Verdicts) {   // the rig's rejoin marker: it kills this process and relaunches the client
+            UE_LOGI("[OCTA-DRILL] JOIN LIFE 1 DONE applied=%u t=%llu", applied, Now());
+            Go(CStep::Done);
+        } else if (Expired(kFireBoundMs)) {
+            Fail("no host fire (this client applied no verdict for 90 s)");
+        }
+        return;
     }
     if (applied >= kBlastsWanted) {
-        UE_LOGI("[OCTA-DRILL] join DONE role=observer replayed=%u applied=%u wrote=%u t=%llu",
-                r.aggroReplayed - g_relay0.aggroReplayed, applied, r.overwriteWrites - g_relay0.overwriteWrites, Now());
-        coop::dev::drill_chat::Say(kObserverDoneLine);
+        if (r.aggroReplayed == g_relay0.aggroReplayed) {
+            Fail("no aggro replayed at join (verdicts were applied, the join's Aggro was not)");
+            return;
+        }
+        UE_LOGI("[OCTA-DRILL] join DONE role=joiner replayed=%u applied=%u wrote=%u base=%u t=%llu",
+                r.aggroReplayed - g_relay0.aggroReplayed, applied, r.overwriteWrites - g_relay0.overwriteWrites, g_joinBase,
+                Now());
+        coop::dev::drill_chat::Say(kJoinerDoneLine);
         Unguard();
         Go(CStep::Done);
         return;
@@ -332,11 +376,11 @@ void ObserverStand() {
     if (Expired(kFireBoundMs)) Fail("no host fire (this client applied no verdict for 90 s)");
 }
 
-// Client 1 of the join arm holds in the sphere, so the Octa keeps re-firing, until client 2 has said it is done.
-bool ObserverDone() {
-    if (!g_observerSeen && coop::dev::drill_chat::PollDue())
-        g_observerSeen = coop::dev::drill_chat::ChatHasLive(kObserverDoneLine);
-    return g_observerSeen;
+// The walker of the join arm holds in the sphere, so the Octa keeps re-firing, until the joiner has said it is done.
+bool JoinerDone() {
+    if (!g_joinerSeen && coop::dev::drill_chat::PollDue())
+        g_joinerSeen = coop::dev::drill_chat::ChatHasLive(kJoinerDoneLine);
+    return g_joinerSeen;
 }
 
 // Stands until the Octa has fired three volleys. measure counts them as volleys of the explosions this client's
@@ -344,8 +388,8 @@ bool ObserverDone() {
 // a new volley); attack counts the verdicts the relay has applied, which it can now see. The bound counts from the last
 // sign of progress, so a wait that is still going is never cut.
 void ClientStand(void* me) {
-    if (IsObserver()) {
-        ObserverStand();
+    if (IsJoiner()) {
+        JoinerStand();
         return;
     }
     Guard();
@@ -377,11 +421,11 @@ void ClientStand(void* me) {
     }
     const uint32_t reached = RelayJudged() ? g_verdictsSeen : g_volleys;
     if (reached >= kBlastsWanted) {
-        // The join arm's walker stays until the observer reports, so the Octa keeps re-firing under the joiner.
-        if (ArmOf() == Arm::Join && !ObserverDone()) {
+        // The join arm's walker stays until the joiner reports, so the Octa keeps re-firing under it.
+        if (ArmOf() == Arm::Join && !JoinerDone()) {
             if (!g_joinHoldAt) g_joinHoldAt = coop::net::NowMs();
             g_stepMs = coop::net::NowMs();   // holding is progress: the verdicts still come
-            if (coop::net::NowMs() - g_joinHoldAt > kJoinWaitMs) Fail("the observer never said it was done (240 s)");
+            if (coop::net::NowMs() - g_joinHoldAt > kJoinWaitMs) Fail("the joiner never said it was done (360 s)");
             return;
         }
         if (BeginWalkOut(me, g_octa.Get(), "client")) Go(CStep::Out);
@@ -447,8 +491,9 @@ void ClientTick() {
             Go(CStep::Done);
             return;
         }
-        if (IsObserver()) {
-            // Client 2 joined mid-attack: nothing to place. Its relay's counts are taken now, before the join's Aggro.
+        if (IsJoiner()) {
+            // Client 1 stands where it spawned, away from the Octa (the host placed the Octa out of its reach). Its
+            // relay's counts are taken now, before any Aggro.
             g_relay0 = coop::geom_octa_relay::GetCounters();
             Go(CStep::Find);
             return;
@@ -520,7 +565,10 @@ void OnDisconnect() {
     g_laserPendingMs = 0;
     g_outRing = 0;
     g_joinHoldAt = 0;
-    g_observerSeen = false;
+    g_joinerSeen = false;
+    g_lifeKnown = false;
+    g_isJoiner = false;
+    g_joinBase = 0;
     g_lastAppliedMs = 0;
     g_calledEvent = false;
 }

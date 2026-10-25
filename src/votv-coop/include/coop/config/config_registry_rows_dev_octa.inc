@@ -13,9 +13,10 @@ CFG_ENUM(octa_drill, "octa_drill", "dev", "off", "off|births|measure|attack|join
     "three verdicts. A measurement of the Octa's liveness with no relay. attack: the same placement, judged on the "
     "relay: the client stands until it has applied three of the host's verdicts, logs the time from each of its own "
     "lasers to the first blast applied after it, and walks out; the host prints attack DONE. join (THREE peers, "
-    "slot 2 the observer, which the rig starts after the Octa has begun to fire): attack's placement with client 1 "
-    "held in the sphere, so the Octa keeps re-firing; client 2 joins mid-attack, and must replay the join's Aggro and "
-    "apply three verdicts, then says so in the lobby chat; client 1 walks out on that line, and the host prints join "
+    "run with the rig's --observer --rejoin): client 2 is attack's walker, held in the sphere so the Octa keeps "
+    "re-firing, with the Octa out of client 1's reach. Client 1's first life applies two verdicts and prints JOIN LIFE "
+    "1 DONE, the rejoin marker; the relaunched client is the joiner, which must replay the join snapshot's Aggro and "
+    "apply three verdicts, then says so in the lobby chat; client 2 walks out on that line, and the host prints join "
     "DONE. The firing arms need damage_probe=1, and every player holds startInvinc for the arm's span.")
 CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_source|no_parking|no_verdict|no_join", "VOTVCOOP_OCTA_RED",
     "Developer red arm: never set. no_source (HOST): the gamemode's row of the EX spawn catch is skipped, so the "
@@ -23,7 +24,7 @@ CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_source|no_parking|no_verdic
     "graph watch is left unregistered, so its mirror runs its own wander and the measure arm must show it (the "
     "client logs `[OCTA] mirror ran move`). no_verdict (HOST): the host counts its fire verdicts and sends none, so "
     "the attack arm's client waits for a verdict that never comes (the client logs `[OCTA] verdict timeout`). "
-    "no_join (HOST): a joiner's snapshot of an Octa mid-attack sends it no Aggro, so the join arm's observer gets host "
+    "no_join (HOST): a joiner's snapshot of an Octa mid-attack sends it no Aggro, so the join arm's joiner gets host "
     "verdicts and no Aggro (it prints `[OCTA-DRILL] FAIL: no aggro at join`).")
 CFG_ENUM(octa_measure_target, "octa_measure_target", "dev", "client", "client|host", "VOTVCOOP_OCTA_MEASURE_TARGET",
     "Control for the Octa drill's firing arms, set on BOTH peers: who walks into the Octa's sphere. client (the "
