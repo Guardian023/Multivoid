@@ -14,6 +14,8 @@
 #include "ue_wrap/core/trace.h"
 #include "ue_wrap/devices/cord.h"
 #include "ue_wrap/engine/engine.h"
+#include "ue_wrap/engine/engine_nav.h"
+#include "ue_wrap/engine/engine_pawn.h"
 
 #include <algorithm>
 #include <cmath>
@@ -39,6 +41,7 @@ struct Host {
     int         sub = 0;
     uint64_t    phaseMs = 0, armMs = 0;
     bool        closable = false, seen = false, clientLeft = false;
+    bool        clientWalking = false;   // the client walks in this arm: the arm's bound starts at its "walked" line
     std::string consumed;   // the nonce of the client's ready line the host acted on
     Hand        hand;
 };
@@ -73,50 +76,88 @@ struct Cand {
 struct Pick {
     void* sock[kSocks] = {};
     ue_wrap::FVector makerAt[kMakers]{};
-    int free = 0, clear = 0;
+    int free = 0, lone = 0, clear = 0, sideBlocked = 0, alone = 0;
+};
+// Every live level socket's place, for the "lone" test (off: nearly every wall socket has a twin 10 uu away, run
+// cord10; the hand's aim tells a pair apart, cord_drill_hand.cpp).
+struct Census {
+    std::vector<Cand> free;
+    std::vector<std::pair<void*, ue_wrap::FVector>> all;
 };
 
 ue_wrap::FVector SideSpot(const Cand& c, float sign) {
     return {c.stand.X - c.fwd.Y * kSideCm * sign, c.stand.Y + c.fwd.X * kSideCm * sign, c.at.Z};
 }
 
-// The free LEVEL sockets (no cord, no parent: a generator's child socket sits behind its own mesh), each with a clear
-// line from its stand point to its face. Socket 1 is the nearest to the host's player whose stand point has a clear
-// line to a maker spot on each side and two more clear sockets within kClusterCm of it.
+// The free LEVEL sockets (no cord, no parent: a generator's child socket sits behind its own mesh) that stand LONE (no
+// other cordSocket_C within kLoneCm) and that a standing player reaches: the stand point out along the plug arrow
+// projected onto the navmesh, an eye there at the host's own eye height above its nav point, the socket within
+// kTraceReachCm of that eye and a clear line from the eye to its face (run cord3: the use trace ends 200 uu from the
+// camera; run cord4: a stand 100 uu out lay on a desk). Each peer stands kPeerSideCm to its own side of that point and
+// both stands must pass the test. Socket 1 is the nearest to the host's player whose nominal stand has a clear line
+// to a maker spot on each side and two more reachable sockets within kClusterCm of it.
 bool Choose(void* player, Pick& out) {
     ue_wrap::FVector me{};
     void* cls = ue_wrap::object_index::ClassByName(L"cordSocket_C");
     if (!cls || !player || !E::TryGetActorLocation(player, me)) return false;
-    std::vector<Cand> cands;
+    Census census;
     ue_wrap::object_index::ForEachInstance(cls, [](void* p, void* o, int32_t) {
         if (!R::IsLive(o) || R::NameStartsWith(R::NameOf(o), L"Default__")) return;
-        if (FieldOf(o, L"cord") || FieldOf(o, L"parent")) return;
+        Census& cs = *static_cast<Census*>(p);
         Cand c;
         c.sock = o;
         if (!SocketGeometry(o, c.at, c.fwd)) return;
-        static_cast<std::vector<Cand>*>(p)->push_back(c);
-    }, &cands);
-    out.free = static_cast<int>(cands.size());
+        cs.all.emplace_back(o, c.at);
+        if (FieldOf(o, L"cord") || FieldOf(o, L"parent")) return;
+        cs.free.push_back(c);
+    }, &census);
+    out.free = static_cast<int>(census.free.size());
+    std::vector<Cand> cands;
+    for (const Cand& c : census.free) {
+        bool lone = true;
+        for (const auto& other : census.all)
+            if (other.first != c.sock && Dist(c.at, other.second) < kLoneCm) { lone = false; break; }
+        if (lone) cands.push_back(c);
+    }
+    out.lone = static_cast<int>(cands.size());
+    const ue_wrap::FVector navBox{50.f, 50.f, 250.f};
+    ue_wrap::FVector meNav{};
+    if (!E::ProjectToNav(player, me, navBox, &meNav)) return false;
+    const float eyeUp = E::GetCameraLocation().Z - meNav.Z;
     for (Cand& c : cands) {
-        c.stand = {c.at.X + c.fwd.X * kStandOutCm, c.at.Y + c.fwd.Y * kStandOutCm, c.at.Z};
+        if (!NominalStand(player, c.at, c.fwd, c.stand)) continue;
         const ue_wrap::FVector face{c.at.X + c.fwd.X * 12.f, c.at.Y + c.fwd.Y * 12.f, c.at.Z};
-        c.clear = ue_wrap::trace::LineBlockedStatDyn(player, c.stand, face) == 0;
+        // each peer has its own stand beside the nominal one: the socket is reachable only when both are
+        c.clear = true;
+        for (const Peer who : {Peer::Host, Peer::Client}) {
+            ue_wrap::FVector stand{}, nav{};
+            const bool placed = PeerStand(player, c.at, c.fwd, c.stand, who, stand, nav);
+            const ue_wrap::FVector eye{nav.X, nav.Y, nav.Z + eyeUp};
+            if (!placed || Dist(eye, c.at) > kTraceReachCm || ue_wrap::trace::LineBlockedStatDyn(player, eye, face) != 0) {
+                c.clear = false;
+                break;
+            }
+        }
         c.d = Dist(c.at, me);
         if (c.clear) ++out.clear;
     }
     std::sort(cands.begin(), cands.end(), [](const Cand& a, const Cand& b) { return a.d < b.d; });
     for (const Cand& first : cands) {
         if (!first.clear) continue;
+        // the stand is a nav point on the floor; the maker lines start at knee height, never inside the floor
+        const ue_wrap::FVector knee{first.stand.X, first.stand.Y, first.stand.Z + kKneeCm};
         const ue_wrap::FVector spotA = SideSpot(first, 1.f), spotB = SideSpot(first, -1.f);
-        if (ue_wrap::trace::LineBlockedStatDyn(player, first.stand, spotA) != 0 ||
-            ue_wrap::trace::LineBlockedStatDyn(player, first.stand, spotB) != 0)
+        if (ue_wrap::trace::LineBlockedStatDyn(player, knee, spotA) != 0 ||
+            ue_wrap::trace::LineBlockedStatDyn(player, knee, spotB) != 0) {
+            ++out.sideBlocked;
             continue;
+        }
         std::vector<std::pair<float, const Cand*>> nearby;
         for (const Cand& o : cands) {
             const float d = Dist(first.stand, o.stand);
             if (&o != &first && o.clear && d <= kClusterCm) nearby.emplace_back(d, &o);
         }
-        if (nearby.size() < 2) continue;
+        if (nearby.size() < 2) { ++out.alone; continue; }
         std::sort(nearby.begin(), nearby.end(), [](const auto& a, const auto& b) { return a.first < b.first; });
         out.sock[0] = first.sock;
         out.sock[1] = nearby[0].second->sock;
@@ -133,8 +174,12 @@ std::wstring KeyOfSock(void* s) { return ue_wrap::prop::GetActorSaveKeyString(s)
 bool SpawnCast(void* player) {
     Pick pick;
     const bool found = Choose(player, pick);
-    UE_LOGI("[CORD] host setup: free sockets=%d clear=%d cluster=%s", pick.free, pick.clear, found ? "found" : "none");
-    if (!found) { Fail("stage", "no cluster of three free wall sockets with room in front"); return false; }
+    UE_LOGI("[CORD] host setup: free sockets=%d lone=%d reachable=%d side-blocked=%d without-two-near=%d cluster=%s",
+            pick.free, pick.lone, pick.clear, pick.sideBlocked, pick.alone, found ? "found" : "none");
+    if (!found) { Fail("stage", "no cluster of three free wall sockets a standing player reaches"); return false; }
+    for (int k = 0; k < kSocks; ++k)
+        UE_LOGI("[CORD] host chose socket %d: %s key=%s", k + 1, Narrow(R::ToString(R::NameOf(pick.sock[k]))).c_str(),
+                Narrow(KeyOfSock(pick.sock[k])).c_str());
     void* cls = R::FindClass(kMakerCls);
     if (!cls) { Fail("stage", "the coffee maker class does not resolve"); return false; }
     Cast& c = TheCast();
@@ -172,7 +217,7 @@ void HostWait(coop::net::Session* s, void* player) {
     plan.mode = Hand::Mode::WalkOnly;
     plan.who = "host";
     plan.walk = true;
-    if (!StandOf(Sock(0), plan.stand)) return Fail("stage", "socket 1's stand point is unread");
+    if (!StandOf(player, Sock(0), Peer::Host, plan.stand)) return Fail("stage", "socket 1's stand point is unread");
     g_h.hand.Start(plan);
     g_h.ph = Ph::Stage;
     g_h.phaseMs = NowMs();
@@ -184,6 +229,7 @@ void OpenArm(int n) {
     g_h.sub = 0;
     g_h.armMs = NowMs();
     g_h.closable = g_h.seen = false;
+    g_h.clientWalking = n == 3;
     if (n != 4) Say(ArmLine(n));   // arm 4 opens once the host holds A
     Hand::Plan plan;
     plan.who = "host";
@@ -228,6 +274,7 @@ void ArmActs(void* player) {
             if (st == Hand::St::Held) {
                 Say(ArmLine(4));
                 h.armMs = NowMs();
+                h.clientWalking = true;
                 h.sub = 1;
             }
         } else if (h.sub == 1) {   // the client dragged its copy of A into 3: the host's own link was its answer
@@ -255,7 +302,10 @@ void ArmActs(void* player) {
         h.closable = true;
         h.sub = 1;
         return;
-    case 6: {
+    case 6:   // the client moves its own copy of A; the host's copy stays and still shows A in 1
+        h.closable = true;
+        return;
+    case 7: {
         if (h.sub != 0) return;
         // A prop moved, not a player: A's cord stretches past its length and breaks on the host's own tick.
         ue_wrap::FVector at{};
@@ -272,9 +322,16 @@ void ArmActs(void* player) {
 
 void HostArm(void* player) {
     Host& h = g_h;
-    if (NowMs() - h.armMs > kArmFailMs) {
+    // The client's walk is its own phase, bounded by the director's deadline; the arm's bound starts when it arrived.
+    if (h.clientWalking && Heard(WalkedLine(h.arm))) {
+        h.clientWalking = false;
+        h.armMs = NowMs();
+    }
+    if (h.clientWalking) {
+        if (NowMs() - h.armMs > kStageFailMs) return FailArm("walk: the client never reported arriving at its stand");
+    } else if (NowMs() - h.armMs > kArmFailMs) {
         char why[160];
-        std::snprintf(why, sizeof(why), "not closed within %llu ms of its opening edge",
+        std::snprintf(why, sizeof(why), "not closed within %llu ms of its bound's start",
                       static_cast<unsigned long long>(kArmFailMs));
         return FailArm(why);
     }
@@ -291,7 +348,7 @@ void HostArm(void* player) {
 }
 
 // The client has left: the joiner is owed the seed's plug and unplug entries. A is put back where it was spawned (arm
-// 6 moved it past its cord's length), plugged into 1 by a scripted Connect, and B unplugged by a scripted Disconnect.
+// 7 moved it past its cord's length), plugged into 1 by a scripted Connect, and B unplugged by a scripted Disconnect.
 void HostGap() {
     if (!g_h.clientLeft) return;
     void* a = CordOfMaker(0);

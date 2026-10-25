@@ -44,6 +44,7 @@ const std::vector<std::string>& Watched() {
             v.push_back(D::ArmLine(n));
             v.push_back(D::HostSeenLine(n));
             v.push_back(D::ClientSeenLine(n));
+            v.push_back(D::WalkedLine(n));
         }
         for (const char* l : {"cord client staged", "cord client dragged 4", "cord host released 4",
                               "cord client held 5", "cord host plugged 5"})
@@ -73,6 +74,7 @@ void Say(const std::string& line) { DC::Say(line); }
 std::string ArmLine(int n) { return "cord host arm " + std::to_string(n); }
 std::string HostSeenLine(int n) { return "cord host seen " + std::to_string(n); }
 std::string ClientSeenLine(int n) { return "cord client seen " + std::to_string(n); }
+std::string WalkedLine(int n) { return "cord client walked " + std::to_string(n); }
 
 std::string Narrow(const std::wstring& w) {
     std::string out;

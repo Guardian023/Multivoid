@@ -6,7 +6,9 @@
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/devices/cord.h"
 #include "ue_wrap/engine/engine.h"
+#include "ue_wrap/engine/engine_nav.h"
 
+#include <cmath>
 #include <cstring>
 #include <vector>
 
@@ -91,11 +93,27 @@ bool SocketGeometry(void* socket, ue_wrap::FVector& at, ue_wrap::FVector& fwd) {
     return socket && E::TryGetActorLocation(socket, at) && ForwardOf(FieldOf(socket, L"dir"), fwd);
 }
 
-bool StandOf(void* socket, ue_wrap::FVector& stand) {
-    ue_wrap::FVector at{}, fwd{};
-    if (!SocketGeometry(socket, at, fwd)) return false;
-    stand = {at.X + fwd.X * kStandOutCm, at.Y + fwd.Y * kStandOutCm, at.Z};
+bool NominalStand(void* player, const ue_wrap::FVector& at, const ue_wrap::FVector& fwd, ue_wrap::FVector& nav) {
+    const ue_wrap::FVector raw{at.X + fwd.X * kStandOutCm, at.Y + fwd.Y * kStandOutCm, at.Z};
+    const ue_wrap::FVector box{50.f, 50.f, 250.f};
+    return player && E::ProjectToNav(player, raw, box, &nav) && std::hypot(nav.X - raw.X, nav.Y - raw.Y) <= kStandSlipCm;
+}
+
+bool PeerStand(void* player, const ue_wrap::FVector& at, const ue_wrap::FVector& fwd, const ue_wrap::FVector& nominal,
+               Peer who, ue_wrap::FVector& stand, ue_wrap::FVector& nav) {
+    const float sign = who == Peer::Host ? 1.f : -1.f;
+    const ue_wrap::FVector raw{nominal.X - fwd.Y * kPeerSideCm * sign, nominal.Y + fwd.X * kPeerSideCm * sign, at.Z};
+    const ue_wrap::FVector box{50.f, 50.f, 250.f};
+    if (!player || !E::ProjectToNav(player, raw, box, &nav) || std::hypot(nav.X - raw.X, nav.Y - raw.Y) > kStandSlipCm)
+        return false;
+    stand = raw;
     return true;
+}
+
+bool StandOf(void* player, void* socket, Peer who, ue_wrap::FVector& stand) {
+    ue_wrap::FVector at{}, fwd{}, nominal{}, nav{};
+    return SocketGeometry(socket, at, fwd) && NominalStand(player, at, fwd, nominal) &&
+           PeerStand(player, at, fwd, nominal, who, stand, nav);
 }
 
 }  // namespace coop::dev::cord_drill::detail

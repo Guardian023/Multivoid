@@ -12,6 +12,7 @@
 #include "coop/session/net_pump.h"  // HasAnnouncedWorldReady
 
 #include "ue_wrap/core/log.h"
+#include "ue_wrap/engine/engine.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -21,6 +22,7 @@ namespace coop::dev::cord_drill::detail {
 namespace {
 
 namespace CS = coop::cord_sync;
+namespace E = ue_wrap::engine;
 
 constexpr uint64_t kFindEveryMs = 250;   // the cast's props are found by key; a miss catches the object index up
 
@@ -32,6 +34,7 @@ struct Client {
     int         sub = 0;
     uint64_t    phaseMs = 0, armMs = 0, nextFindMs = 0;
     bool        armOpen = false, closable = false, seen = false, beforeSaid = false;
+    bool        walking = false;   // this arm's walk is in flight: the director's deadline bounds it, not kArmFailMs
     std::string nonce;
     std::string keys[kMakers], sockKeys[kSocks];
     Hand        hand;
@@ -118,14 +121,14 @@ void ClientBranch() {
     g_c.phaseMs = NowMs();
 }
 
-void ClientResolve() {
+void ClientResolve(void* player) {
     if (!Resolve(kSocks)) {
         if (NowMs() - g_c.phaseMs > kStageFailMs) Fail("stage", "the makers or sockets were not found by their keys");
         return;
     }
     Hand::Plan plan = PlanFor(Hand::Mode::WalkOnly, nullptr);
     plan.walk = true;
-    if (!StandOf(Sock(1), plan.stand)) return Fail("stage", "socket 2's stand point is unread");
+    if (!StandOf(player, Sock(1), Peer::Client, plan.stand)) return Fail("stage", "socket 2's stand point is unread");
     g_c.hand.Start(plan);
     g_c.ph = Ph::Stage;
     g_c.phaseMs = NowMs();
@@ -157,6 +160,7 @@ void BeginArm() {
     c.armMs = NowMs();
     c.sub = 0;
     c.closable = c.seen = false;
+    c.walking = false;
 }
 
 // The arm's own actions; each sets `closable` once its last act has run and the host has said what it sees.
@@ -185,8 +189,9 @@ void ArmActs(void* player) {
             Hand::Plan plan = PlanFor(Hand::Mode::Plug, CordOfMaker(1));
             plan.sock = 0;
             plan.walk = true;
-            if (!StandOf(Sock(0), plan.stand)) return FailArm("socket 1's stand point is unread");
+            if (!StandOf(player, Sock(0), Peer::Client, plan.stand)) return FailArm("socket 1's stand point is unread");
             c.hand.Start(plan);
+            c.walking = true;
             c.sub = 1;
         } else if (c.sub == 1 && HandDone(player)) {
             c.sub = 2;
@@ -200,8 +205,9 @@ void ArmActs(void* player) {
             Hand::Plan plan = PlanFor(Hand::Mode::Plug, CordOfMaker(0));
             plan.sock = 2;
             plan.walk = true;
-            if (!StandOf(Sock(2), plan.stand)) return FailArm("socket 3's stand point is unread");
+            if (!StandOf(player, Sock(2), Peer::Client, plan.stand)) return FailArm("socket 3's stand point is unread");
             c.hand.Start(plan);
+            c.walking = true;
             c.sub = 1;
         } else if (c.sub == 1 && HandDone(player)) {
             if (LinkOf(0) != 3) return FailArm("the release did not plug the copy of A in 3");
@@ -238,8 +244,21 @@ void ArmActs(void* player) {
             c.closable = Heard(HostSeenLine(5));
         }
         return;
-    case 6:   // the host moves A; this peer's copy stretches and its break is refused
-        c.closable = CS::ReadForDrill().stretchRefused >= 1;
+    case 6:   // the client moves its own copy of A; the copy stretches and its break is refused
+        if (c.sub == 0) {
+            // A prop moved, not a player: the host does not move its copy, so no broadcast reaches this peer.
+            ue_wrap::FVector at{};
+            if (!E::TryGetActorLocation(Maker(0), at) ||
+                !E::SetActorLocation(Maker(0), {at.X, at.Y, at.Z + kMakerRiseCm}))
+                return FailArm("the scripted move of the copy of A did not run");
+            UE_LOGI("[CORD] client moved its copy of A %.0f uu by a scripted actor move", kMakerRiseCm);
+            c.sub = 1;
+        } else {
+            c.closable = CS::ReadForDrill().stretchRefused >= 1;
+        }
+        return;
+    case 7:   // the host moves its copy of A: the host's break reaches this peer as an unplug
+        c.closable = true;
         return;
     }
 }
@@ -250,9 +269,19 @@ void ClientArm(void* player) {
         if (!Heard(ArmLine(c.arm))) return;
         BeginArm();
     }
-    if (NowMs() - c.armMs > kArmFailMs) {
+    // A walk is its own phase: the director's deadline bounds it, and the arm's bound starts at the arrival. A walk that
+    // failed stays `walking` so the hand's Stuck fails the arm below with the walk's own text.
+    if (c.walking) {
+        const Hand::St st = c.hand.state();
+        if (st != Hand::St::Walk && st != Hand::St::Stuck) {
+            c.walking = false;
+            c.armMs = NowMs();
+            Say(WalkedLine(c.arm));
+        }
+    }
+    if (!c.walking && NowMs() - c.armMs > kArmFailMs) {
         char why[160];
-        std::snprintf(why, sizeof(why), "not closed within %llu ms of its opening edge; stretchRefused=%u",
+        std::snprintf(why, sizeof(why), "not closed within %llu ms of its bound's start; stretchRefused=%u",
                       static_cast<unsigned long long>(kArmFailMs), CS::ReadForDrill().stretchRefused);
         return FailArm(why);
     }
@@ -271,7 +300,7 @@ void ClientArm(void* player) {
         return;
     }
     if (!Heard(ClientSeenLine(kArms))) return;   // the host has the last line before this peer leaves
-    UE_LOGI("[CORD] client arms 1-6 PASS");
+    UE_LOGI("[CORD] client arms 1-7 PASS");
     c.ph = Ph::Done;
 }
 
@@ -301,7 +330,7 @@ void ClientTick(coop::net::Session*) {
     switch (g_c.ph) {
     case Ph::Wait:    return ClientWait();
     case Ph::Branch:  return ClientBranch();
-    case Ph::Resolve: return ClientResolve();
+    case Ph::Resolve: return ClientResolve(player);
     case Ph::Stage:   return ClientStage(player);
     case Ph::Arm:     return ClientArm(player);
     case Ph::Joiner:  return ClientJoiner();

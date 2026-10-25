@@ -217,7 +217,7 @@ void EndSession() {
     coop::dev::laptop_tab_drill::OnDisconnect();  // [dev] a rejoin's peers run their legs again
     coop::dev::explosion_drill::OnDisconnect();  // [dev] a rejoin's peers run their halves and arms again
     coop::dev::fire_ignite_drill::OnDisconnect();  // [dev] a rejoin's peers run their steps again
-    coop::dev::cord_drill::OnDisconnect();  // [dev] the client's steps start over; the host keeps its cast for a rejoin after its six arms
+    coop::dev::cord_drill::OnDisconnect();  // [dev] the client's steps start over; the host keeps its cast for a rejoin after its seven arms
     coop::dev::grid_drill::OnDisconnect();  // [dev] the panel and the legs belong to one world
     coop::dev::tower_drill::OnDisconnect();  // [dev] the tower and the legs belong to one world
     coop::dev::desk_verb_drill::OnDisconnect();  // [dev] the legs start over
