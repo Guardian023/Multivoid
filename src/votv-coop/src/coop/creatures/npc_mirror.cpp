@@ -108,20 +108,22 @@ const R::FName* MirrorTickNames() {
     return held;
 }
 
-// The row of the spawned actor's class, or null for a class with none (and, said once, while the names cannot yet be
-// resolved: such a class takes both ticks off, the default).
+// The row of the spawned actor's class, or null for a class with none. While the names cannot yet be resolved the class
+// is told by its rendered name instead (said once), so a class that has a row gets it either way.
 const MirrorTickRow* MirrorTickRowOf(void* actor) {
+    const R::FName& name = R::NameOf(R::ClassOf(actor));
     const R::FName* names = MirrorTickNames();
     if (!names) {
         static bool said = false;
         if (!said) {
             said = true;
-            UE_LOGW("npc-sync[client OnSpawn]: the tick table's class names are not resolved -- a mirror takes both "
-                    "ticks off");
+            UE_LOGW("npc-sync[client OnSpawn]: the tick table's class names are not resolved -- a mirror is told by "
+                    "its rendered name");
         }
+        for (const MirrorTickRow& row : kMirrorTicks)
+            if (R::NameEquals(name, row.cls)) return &row;
         return nullptr;
     }
-    const R::FName& name = R::NameOf(R::ClassOf(actor));
     for (size_t i = 0; i < kMirrorTickCount; ++i)
         if (name.ComparisonIndex == names[i].ComparisonIndex && name.Number == names[i].Number) return &kMirrorTicks[i];
     return nullptr;
