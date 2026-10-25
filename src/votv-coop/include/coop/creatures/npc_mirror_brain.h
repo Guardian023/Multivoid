@@ -1,7 +1,7 @@
-// coop/creatures/npc_mirror_brain.h -- a creature mirror's Blueprint makes nothing of its own.
+// coop/creatures/npc_mirror_brain.h -- a creature mirror's Blueprint makes only what its table lets run.
 // A mirror is the creature's whole Blueprint running on a client: every body its BeginPlay armed (timers, delay
 // resumes, overlap and montage delegates, move callbacks) fires on the client's clock and acts there. The host's
-// copy is the creature; the pose stream shows the mirror. So a mirror of a parked class has its event graph refused
+// copy decides; the pose stream moves the mirror. So a mirror of a parked class has its event graph refused
 // entry by entry but the few a table names (or only its decisions, the Octa), and our code redoes a refused BeginPlay.
 //   - FAMILIES: the zombie and every class below it, the fossilhound, and the Geom Octa, whose table lists all but
 //     the twelve entries that decide, relayed from the host by coop/creatures/geom_octa_sync; the table's class
@@ -27,7 +27,11 @@ namespace coop::npc_mirror_brain {
 // the gate is per mirror, by mark. MTA also locks a copy's output: the syncer's report locks its health
 // (reference/mtasa-blue/Client/mods/deathmatch/logic/CPedSync.cpp:236-252) and the damage handler restores it
 // (reference/mtasa-blue/Client/mods/deathmatch/logic/CClientGame.cpp:4509). The output lock does not reach a
-// creature's Blueprint, which also writes world state and saves, so the body is refused at its entry.
+// creature's Blueprint, which also writes world state and saves, so the body is refused at its entry. The Octa is the
+// other half of the precedent: MTA's remote ped is driven by relayed sync state while the game animates it
+// (reference/mtasa-blue/Client/mods/deathmatch/logic/CPedSync.cpp:236-252, CClientPed.cpp:6546). It keeps its brain
+// because every live piece is presentation or the continuation of a relayed decision, and its output lock is the
+// explosion lane's dissolve of its laser's blast, not a Blueprint refusal.
 //
 // Mark `actor`, a mirror of a creature, before its BeginPlay can run. A full table drops the marks whose slot no
 // longer holds their serial first; a mirror still unmarkable is said, and its Blueprint runs. Game thread.
