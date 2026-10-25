@@ -35,8 +35,13 @@ void Tick();
 // dispatcher has judged the format and the direction.
 void OnReliable(const coop::net::CordLinkPayload& payload, uint8_t senderSlot);
 
-// The dispatcher refused a message of this kind (wrong size, direction or format): counted, not logged.
-void CountDropped();
+// Why the dispatcher refused a message of this kind. Each refused message has one reason, the first that holds in this
+// order: a payload that is not the struct's size, a key longer than the wire's, an op the sender's role may not send
+// (an op unknown or in the wrong direction), a field a form leaves empty or a pad that is not.
+enum class Drop : uint8_t { Size, Key, Op, Field };
+
+// The dispatcher refused a message of this kind: counted under its reason, not logged.
+void CountDropped(Drop why);
 
 // HOST, at a joiner's world-ready edge: every corded prop's link, plugged or not, then op 2. Waits for the listing
 // of the current world.
@@ -50,12 +55,21 @@ void OnDisconnect();
 // is only ever looked up, never made a name the engine's pool keeps. Game thread.
 void* LevelSocket(const std::wstring& key);
 
-// What the cord drill reads of a client's lane: whether the seed's op 2 has arrived, the claims sent (the latest
-// claim's seq, since the seq starts at 1 and counts each claim), and the stretch breaks refused. A read; zeroes on a host.
+// What the drills read of the lane. A client's: whether the seed's op 2 has arrived, the claims sent (the latest
+// claim's seq, since the seq starts at 1 and counts each claim), the stretch breaks refused, and the canonicals the
+// pending rule dropped (the answer to a claim this client did not register is one). A host's: the claims taken and
+// how each ended (each claim ends in exactly one of applied, equal and the refusals), the answers sent, and the
+// dispatcher's drops by reason. A read; the fields of the other role stay zero.
 struct DrillView {
     bool seeded = false;
     uint32_t claimsSent = 0;
     uint32_t stretchRefused = 0;
+    uint32_t pendingDropped = 0;
+    uint32_t claims = 0, claimsApplied = 0, claimsEqual = 0;
+    uint32_t refusedRate = 0, refusedDead = 0, refusedReach = 0, refusedHostDrag = 0;
+    uint32_t unresolved = 0, keyPending = 0, laneOff = 0;
+    uint32_t answers = 0;
+    uint32_t dropSize = 0, dropKey = 0, dropOp = 0, dropField = 0;
 };
 DrillView ReadForDrill();
 

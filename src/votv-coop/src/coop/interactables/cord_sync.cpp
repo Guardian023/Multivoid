@@ -558,12 +558,14 @@ void PrintStats(bool summary) {
             "refusedHostDrag=%u unresolved=%u keyPending=%u laneOff=%u sockBuilds=%u broadcasts=%u answers=%u "
             "seeds=%u seedLinks=%u | claimsSent=%u "
             "applied=%u equal=%u stillDiffering=%u applyFailed=%u pendingDropped=%u held=%u parked=%u "
-            "parkOverflow=%u parkDead=%u parkLeft=%u stretchRefused=%u | badWire=%u unsyncable=%u sendFailed=%u",
+            "parkOverflow=%u parkDead=%u parkLeft=%u stretchRefused=%u | badWire=%u unsyncable=%u sendFailed=%u "
+            "dropSize=%u dropKey=%u dropOp=%u dropField=%u",
             summary ? "summary" : "stats", c.claims, c.claimsApplied, c.claimsEqual, c.refusedRate, c.refusedDead,
             c.refusedReach, c.refusedHostDrag, c.unresolved, c.keyPending, c.laneOff, c.sockBuilds, c.broadcasts,
             c.answers, c.seeds, c.seedLinks,
             c.claimsSent, c.applied, c.equal, c.stillDiffering, c.applyFailed, c.pendingDropped, c.held, c.parked,
-            c.parkOverflow, c.parkDead, c.parkLeft, c.stretchRefused, c.badWire, c.unsyncable, c.sendFailed);
+            c.parkOverflow, c.parkDead, c.parkLeft, c.stretchRefused, c.badWire, c.unsyncable, c.sendFailed,
+            c.dropSize, c.dropKey, c.dropOp, c.dropField);
 }
 
 }  // namespace
@@ -661,7 +663,7 @@ void Tick() {
 }
 
 void OnReliable(const coop::net::CordLinkPayload& payload, uint8_t senderSlot) {
-    if (!ue_wrap::game_thread::IsGameThread()) { CountDropped(); return; }
+    if (!ue_wrap::game_thread::IsGameThread()) { ++detail::Stat().badWire; return; }
     auto* s = detail::Connected();
     if (!s) return;
     if (payload.op == kOpClaim) {
@@ -673,11 +675,39 @@ void OnReliable(const coop::net::CordLinkPayload& payload, uint8_t senderSlot) {
     }
 }
 
-void CountDropped() { ++detail::Stat().badWire; }
+void CountDropped(Drop why) {
+    Counters& st = detail::Stat();
+    switch (why) {
+    case Drop::Size:  ++st.dropSize; break;
+    case Drop::Key:   ++st.dropKey; break;
+    case Drop::Op:    ++st.dropOp; break;
+    case Drop::Field: ++st.dropField; break;
+    }
+}
 
 DrillView ReadForDrill() {
     const Counters& c = detail::Stat();
-    return DrillView{g_seeded, c.claimsSent, c.stretchRefused};
+    DrillView v;
+    v.seeded = g_seeded;
+    v.claimsSent = c.claimsSent;
+    v.stretchRefused = c.stretchRefused;
+    v.pendingDropped = c.pendingDropped;
+    v.claims = c.claims;
+    v.claimsApplied = c.claimsApplied;
+    v.claimsEqual = c.claimsEqual;
+    v.refusedRate = c.refusedRate;
+    v.refusedDead = c.refusedDead;
+    v.refusedReach = c.refusedReach;
+    v.refusedHostDrag = c.refusedHostDrag;
+    v.unresolved = c.unresolved;
+    v.keyPending = c.keyPending;
+    v.laneOff = c.laneOff;
+    v.answers = c.answers;
+    v.dropSize = c.dropSize;
+    v.dropKey = c.dropKey;
+    v.dropOp = c.dropOp;
+    v.dropField = c.dropField;
+    return v;
 }
 
 void QueueConnectBroadcastForSlot(int peerSlot) {

@@ -545,10 +545,10 @@ bool HandleStateEvent(net::Session& session,
     case net::ReliableKind::CordLinkState: {
         // A cord's link, one kind in three ops by direction: op 0 (a client's claim) reaches the host alone, ops 1
         // (a canonical) and 2 (the seed's end) reach a client from the host alone. The format and the direction are
-        // judged here, every other check in the module; a message that fails either is counted there, not logged,
-        // so a flood costs no line. coop::cord_sync::OnReliable.
+        // judged here, every other check in the module; a message that fails either is counted there under its
+        // reason (cord_sync.h, Drop), not logged, so a flood costs no line. coop::cord_sync::OnReliable.
         if (msg.payloadLen != sizeof(net::CordLinkPayload)) {
-            coop::cord_sync::CountDropped();
+            coop::cord_sync::CountDropped(coop::cord_sync::Drop::Size);
             break;
         }
         net::CordLinkPayload p{};
@@ -564,9 +564,11 @@ bool HandleStateEvent(net::Session& session,
                                  !(p.op == 2 && (p.sockForm != 0 || p.seq != 0 || p.cord.len != 0 ||
                                                  p.sock.len != 0 || p.child.len != 0)) &&
                                  !(p.op == 0 && p.seq == 0);
-        if (!direction || !fieldsAgree || p.pad != 0 || p.sockForm > 2 || p.cord.len > sizeof(p.cord.data) ||
-            p.sock.len > sizeof(p.sock.data) || p.child.len > sizeof(p.child.data)) {
-            coop::cord_sync::CountDropped();
+        using coop::cord_sync::Drop;
+        const bool keyTooLong = p.cord.len > sizeof(p.cord.data) || p.sock.len > sizeof(p.sock.data) ||
+                                p.child.len > sizeof(p.child.data);
+        if (keyTooLong || !direction || !fieldsAgree || p.pad != 0 || p.sockForm > 2) {
+            coop::cord_sync::CountDropped(keyTooLong ? Drop::Key : !direction ? Drop::Op : Drop::Field);
             break;
         }
         coop::cord_sync::OnReliable(p, static_cast<uint8_t>(msg.senderPeerSlot));

@@ -34,7 +34,8 @@ CFG_ENUM(hostile_drill, "hostile_drill", "dev", "off",
     "explosion_rejoin|explosion_self_clamp|"
     "ignite_malformed|ignite_no_tool|ignite_torch_attempt|ignite_torch_ignite|ignite_reach|ignite_not_rocket|"
     "ignite_not_ready|ignite_flood|"
-    "atv_state_forge|atv_seat_forge|atv_takeover_forge|atv_explode_forge",
+    "atv_state_forge|atv_seat_forge|atv_takeover_forge|atv_explode_forge|"
+    "cord_malformed|cord_bad_op|cord_reach|cord_flood|cord_dead_sender",
     "VOTVCOOP_HOSTILE_DRILL",
     "Receive-boundary drill (BOTH peers). signal_park: a client floods refused saved-signal rows "
     "(size 0, so the game's own gate rejects each) and the host must keep them from filling the apply "
@@ -91,6 +92,11 @@ CFG_ENUM(hostile_drill, "hostile_drill", "dev", "off",
     "(takeovers of a seated ATV and a burst past the pace) and atv_explode_forge (blast requests from a non-syncer, "
     "ill-formed, and twice from the syncer); the host judges each phase by its counters, and a counter the phase does "
     "not name must not move. "
+    "cord_*: a joined client forges cord link claims against the host: cord_malformed (a claim one byte short, a "
+    "cord key past the wire), cord_bad_op (a canonical and a seed end from a client), cord_reach (a claim on a cord "
+    "2000 uu away), cord_flood (20 claims in one tick, 12 taken and 8 refused by the rate window) and "
+    "cord_dead_sender (a well-formed claim sent while the client's own player is dead: refused as dead and answered); "
+    "the host judges by its counters, every message one outcome, every answered claim also counted by the client. "
     "Drill only.")
 
 // The act drill: an honest client takes and uses shared props through the real verbs, and the host judges what it

@@ -34,7 +34,9 @@ inline constexpr size_t kKeyMax = sizeof(coop::net::WireKey::data);
 // equal, refused (every refusal is answered; keyPending a key lookup that could not answer yet, laneOff a claim met
 // while the lane's watches were not all live), the broadcasts and the seeds. Both: sockBuilds, the times the level
 // sockets' table was read from the object index. Client: claims sent, canonicals applied or
-// found equal, those dropped by the pending rule, held for a drag, parked, and the stretch breaks refused.
+// found equal, those dropped by the pending rule, held for a drag, parked, and the stretch breaks refused. The
+// dispatcher's refusals, by reason (cord_sync.h, Drop): dropSize, dropKey, dropOp, dropField; badWire counts a
+// message that reached the lane off the game thread or a canonical with no key.
 struct Counters {
     uint32_t claims = 0, claimsApplied = 0, claimsEqual = 0;
     uint32_t refusedRate = 0, refusedDead = 0, refusedReach = 0, refusedHostDrag = 0, unresolved = 0;
@@ -45,6 +47,7 @@ struct Counters {
     uint32_t parked = 0, parkOverflow = 0, parkDead = 0, parkLeft = 0;
     uint32_t stretchRefused = 0;
     uint32_t badWire = 0, unsyncable = 0, sendFailed = 0;
+    uint32_t dropSize = 0, dropKey = 0, dropOp = 0, dropField = 0;
 };
 Counters& Stat();
 
