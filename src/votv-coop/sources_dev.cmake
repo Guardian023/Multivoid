@@ -181,6 +181,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/toggle_drill.cpp
     src/coop/dev/swinger_drill.cpp
     src/coop/dev/swinger_drill_join.cpp
+    src/coop/dev/swinger_drill_pose.cpp
     src/coop/dev/world_first_check.cpp
     src/coop/dev/blackout_drill.cpp
     src/coop/dev/lid_drill.cpp

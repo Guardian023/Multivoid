@@ -10,6 +10,7 @@
 #include "coop/dev/director/routes.h"
 #include "coop/dev/drill_chat_pace.h"
 #include "coop/dev/swinger_drill_join.h"
+#include "coop/dev/swinger_drill_pose.h"
 #include "coop/element/portable_identity.h"
 #include "coop/dev/toggle_drill.h"
 #include "coop/interactables/interactable_sync.h"
@@ -52,6 +53,7 @@ namespace E  = ue_wrap::engine;
 namespace PR = ue_wrap::prop;
 namespace SW = ue_wrap::swinger;
 namespace J  = coop::dev::swinger_drill_join;
+namespace PS = coop::dev::swinger_drill_pose;
 using Clock = std::chrono::steady_clock;
 // The tolerances and the distance are shared with the joiner arm (swinger_drill_join.h).
 using J::Dist; using J::kRestDeg; using J::kRestCm; using J::kSettleDeg; using J::kSettleCm;
@@ -107,6 +109,7 @@ struct Reading {
     ue_wrap::FVector loc{};
     ue_wrap::FRotator actorRot{}, meshRel{}, meshWorld{};
     int opened = -1, sim = -1;             // -1: unread
+    PS::ParentPose parent;                 // the prop the lid hangs on, as it stands at this read
 };
 
 struct Lid {
@@ -136,15 +139,16 @@ Reading Read(void* d) {
     }
     bool open = false;
     if (SW::TryReadOpen(d, open)) r.opened = open ? 1 : 0;
+    r.parent = PS::ReadParent(d);
     return r;
 }
 
 void Say(const char* what, const Lid& l, const Reading& r) {
     UE_LOGI("[SWING-DRILL] %s %s key='%ls': actor rot (%.2f, %.2f, %.2f) loc (%.1f, %.1f, %.1f) | mesh rel rot "
-            "(%.2f, %.2f, %.2f) world rot (%.2f, %.2f, %.2f) | opened %d simulating %d",
+            "(%.2f, %.2f, %.2f) world rot (%.2f, %.2f, %.2f) | opened %d simulating %d | %s",
             Role(), what, l.laneKey.c_str(), r.actorRot.Pitch, r.actorRot.Yaw, r.actorRot.Roll, r.loc.X, r.loc.Y,
             r.loc.Z, r.meshRel.Pitch, r.meshRel.Yaw, r.meshRel.Roll, r.meshWorld.Pitch, r.meshWorld.Yaw,
-            r.meshWorld.Roll, r.opened, r.sim);
+            r.meshWorld.Roll, r.opened, r.sim, PS::Describe(r.parent).c_str());
 }
 
 // One walk of the object array, when the drill arms, never again.
@@ -211,6 +215,7 @@ struct ChatEvent {
     std::string mv, gameKey;   // a Grab line's two keys; a Verdict line's role and result
     ue_wrap::FRotator rot{};   // a Settled line's rotation and place: where the client's door came to rest
     ue_wrap::FVector at{};
+    PS::ParentPose parent;     // a Settled line's parent pose: where the prop the client's door hangs on stood
 };
 
 std::vector<std::string> g_outbox;
@@ -248,12 +253,9 @@ std::vector<ChatEvent> NewChat() {
         top = (std::max)(top, r.key);
         const std::string rest(r.line.substr(at + std::strlen(kTag)));
         ChatEvent e{r.key, Phase::Verdict, {}, {}, {}};
-        // "grab <lane key> <game Key>", "settled <p> <y> <r> <x> <y> <z>", "verdict <role> <PASS|FAIL|INVALID>". The
+        // "grab <lane key> <game Key>", "settled ..." (PS::SettledLine), "verdict <role> <PASS|FAIL|INVALID>". The
         // host's word to a world-ready client (go, rest, void) is read by J::PollWord, not here.
         const std::vector<std::string> word = J::SplitWords(rest);
-        float v[6] = {};
-        if (word.size() == 7 && word[0] == "settled")
-            for (int i = 0; i < 6; ++i) v[i] = std::strtof(word[static_cast<size_t>(i) + 1].c_str(), nullptr);
         if (word.size() == 3 && word[0] == "grab") {
             if (word[1].empty() || word[2].empty()) {   // an empty key would match the first lid that has none
                 UE_LOGW("[SWING-DRILL] %s refuses a grab line with an empty key", Role());
@@ -262,10 +264,8 @@ std::vector<ChatEvent> NewChat() {
             e.what = Phase::Grab;
             e.mv = word[1];
             e.gameKey = word[2];
-        } else if (word.size() == 7 && word[0] == "settled") {
+        } else if (PS::ParseSettled(word, &e.rot, &e.at, &e.parent)) {
             e.what = Phase::Settled;
-            e.rot = {v[0], v[1], v[2]};
-            e.at = {v[3], v[4], v[5]};
         } else if (word.size() == 3 && word[0] == "verdict") {
             e.mv = word[1];
             e.gameKey = word[2];
@@ -294,6 +294,7 @@ struct Verdict {
     ue_wrap::FRotator first{};        // the client's door at the first pose
     ue_wrap::FRotator clientRest{};   // where the client's `settled` line says its door came to rest,
     ue_wrap::FVector clientAt{};      // in orientation and in place
+    PS::ParentPose clientParent;      // and where its door's parent prop stood then
     ue_wrap::FRotator lastRead{};     // this peer's door at the last settle read
     ue_wrap::FVector lastAt{};
     Clock::time_point nextRead{};
@@ -322,16 +323,18 @@ void Judge(bool timedOut) {
         const bool haveRest = mesh && g_v.settledSeen && !timedOut;
         const float settle = haveRest ? E::RotatorAngleDeg(mine, g_v.clientRest) : 180.f;
         const float apart = haveRest ? Dist(mineAt, g_v.clientAt) : -1.f;
+        const PS::ParentPose mineParent = PS::ReadParent(door);
         result = haveRest && hostDev >= kFollowDeg && settle <= kSettleDeg && apart <= kSettleCm ? "PASS" : "FAIL";
         UE_LOGI("[SWING-DRILL] %s %s: follow -- this peer's door turned %.1f deg of the client's %.1f (need >= %.0f) | "
                 "settle -- this peer's door at (%.2f, %.2f, %.2f) place (%.1f, %.1f, %.1f), the client's at (%.2f, %.2f, "
                 "%.2f) place (%.1f, %.1f, %.1f): %.2f deg between the two orientations (need <= %.0f), %.1f cm apart "
-                "(need <= %.0f)%s | poses resolved %u, unresolved %u | rests %.1f deg from where it began", Role(),
+                "(need <= %.0f)%s | poses resolved %u, unresolved %u | rests %.1f deg from where it began | %s | %s", Role(),
                 result, hostDev, g_v.clientDev, kFollowDeg, mine.Pitch, mine.Yaw, mine.Roll, mineAt.X, mineAt.Y,
                 mineAt.Z, g_v.clientRest.Pitch, g_v.clientRest.Yaw, g_v.clientRest.Roll, g_v.clientAt.X,
                 g_v.clientAt.Y, g_v.clientAt.Z, settle, kSettleDeg, apart, kSettleCm,
                 timedOut ? " (no settled line, or this peer's door never came to rest)" : "", g_v.resolved,
-                g_v.unresolved, fromArmDeg);
+                g_v.unresolved, fromArmDeg, PS::Describe(mineParent).c_str(),
+                PS::VerdictParent(mineParent, g_v.clientParent).c_str());
     }
     J::NoteVerdict(l ? l->laneKey : std::wstring(), result, fromArmDeg);
     SayLine(std::string("verdict ") + Role() + " " + result);
@@ -379,6 +382,7 @@ void OnChat(const ChatEvent& e) {
         g_v.settledSeen = true;
         g_v.clientRest = e.rot;
         g_v.clientAt = e.at;
+        g_v.clientParent = e.parent;
         if (g_v.lid < 0) Judge(false);   // no pose reached a door here: nothing to wait for
     }
 }
@@ -680,9 +684,7 @@ void TickActor(Clock::time_point now) {
         g_haveRead = true;
         if (!same) return;
         LogTarget("settled");
-        char line[128];
-        snprintf(line, sizeof(line), "settled %.2f %.2f %.2f %.1f %.1f %.1f", w.Pitch, w.Yaw, w.Roll, at.X, at.Y, at.Z);
-        SayLine(line);
+        SayLine(PS::SettledLine(w, at, PS::ReadParent(d)));
         Go(Step::Echo);
         return;
     }
