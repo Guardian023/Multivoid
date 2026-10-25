@@ -2,15 +2,23 @@
 
 #include "ue_wrap/actors/geom_octa.h"
 
+#include "ue_wrap/core/call.h"
+#include "ue_wrap/core/fname_utils.h"
 #include "ue_wrap/core/reflection.h"
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 
 namespace ue_wrap::geom_octa {
 namespace {
 
 namespace R = reflection;
+
+// The class's export names: minSphere's begin-overlap handler, and the "fire" section's finish notify.
+constexpr const wchar_t* kMinSphereOverlap =
+    L"BndEvt__geomOcta_minSphere_K2Node_ComponentBoundEvent_0_ComponentBeginOverlapSignature__DelegateSignature";
+constexpr const wchar_t* kFireFinish = L"OnNotifyBegin_1DFC28904024A8FB71C3ACA9DBD440F9";
 
 R::InstanceOffset g_target{L"targetActor"};
 R::InstanceOffset g_owner{L"Owner"};
@@ -35,6 +43,36 @@ bool IsAnim(void* octa) {
 }
 
 void* MinSphere(void* octa) { return octa ? LivePointerAt(octa, g_minSphere.Of(octa)) : nullptr; }
+
+bool IsFinishNotify(const script_gate::Call& call) {
+    static R::ParamOffset notifyName{L"NotifyName"};
+    const int32_t off = notifyName.Of(call.function);
+    if (off < 0 || !call.locals) return false;
+    R::FName name{};
+    std::memcpy(&name, call.locals + off, sizeof(name));
+    return R::NameEquals(name, L"finish");
+}
+
+void* GraphFunction(void* octa) {
+    return octa ? R::FindFunction(R::ClassOf(octa), L"ExecuteUbergraph_geomOcta") : nullptr;
+}
+
+bool CallMinSphereBeginOverlap(void* octa, void* otherActor) {
+    void* fn = octa ? R::FindFunction(R::ClassOf(octa), kMinSphereOverlap) : nullptr;
+    ParamFrame f(fn);
+    if (!fn || !f.valid()) return false;
+    f.Set<void*>(L"OverlappedComponent", MinSphere(octa));
+    f.Set<void*>(L"OtherActor", otherActor);
+    return Call(octa, f);
+}
+
+bool CallFireFinishNotify(void* octa) {
+    void* fn = octa ? R::FindFunction(R::ClassOf(octa), kFireFinish) : nullptr;
+    ParamFrame f(fn);
+    if (!fn || !f.valid()) return false;
+    const R::FName name = fname_utils::StringToFName(L"finish");
+    return f.SetRaw(L"NotifyName", &name, sizeof(name)) && Call(octa, f);
+}
 
 void* LaserOwner(void* laser) { return laser ? LivePointerAt(laser, g_owner.Of(laser)) : nullptr; }
 

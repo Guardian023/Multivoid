@@ -4,6 +4,7 @@
 
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
+#include "coop/creatures/geom_octa_relay.h"
 #include "coop/creatures/npc_mirror_brain.h"
 #include "coop/element/element.h"
 #include "coop/element/registry.h"
@@ -311,19 +312,9 @@ void OnAggroPost(const sg::Call& call) {
     // peer that becomes ready later is served by the join, not by this event.
 }
 
-// The notify's name is `finish`: the fire section's other notifies are not a verdict.
-R::ParamOffset g_notifyName{L"NotifyName"};
-
-bool IsFinishNotify(const sg::Call& call) {
-    const int32_t off = g_notifyName.Of(call.function);
-    if (off < 0 || !call.locals) return false;
-    R::FName name{};
-    std::memcpy(&name, call.locals + off, sizeof(name));
-    return R::NameEquals(name, L"finish");
-}
-
 void OnFireFinishPost(const sg::Call& call) {
-    if (!IsHost() || !IsFinishNotify(call)) return;
+    // Only the notify named `finish` is a verdict: the fire section's other notifies are not.
+    if (!IsHost() || !GO::IsFinishNotify(call)) return;
     const EL::ElementId id = NpcEid(call.object);
     const uint32_t n = CountVerdict(call.object);
     const int refire = GO::TargetActor(call.object) ? 1 : 0;
@@ -508,6 +499,7 @@ void OnDisconnect() {
     g_seenCount = 0;
     g_lastTarget[0] = '\0';
     g_aggroEntry = AggroEntry{};
+    coop::geom_octa_relay::OnDisconnect();   // the client's half of the lane ends with the session too
 }
 
 }  // namespace coop::geom_octa_sync
