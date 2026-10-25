@@ -148,6 +148,7 @@
 #include "coop/creatures/npc_world_enum.h"  // RegisterExistingWorldNpcs
 #include "coop/world/world_actor_sync.h"  // non-Character event-actor transform mirror (sibling of npc_sync)
 #include "coop/creatures/piramid_sync.h"  // piramid event choreography lane (mirror brain suppression + PyramidGather)
+#include "coop/creatures/geom_octa_sync.h"  // the Geom Octa's lane: its host decisions and each peer's look, observed
 #include "coop/player/players_registry.h"
 #include "coop/props/prop_lifecycle.h"
 #include "coop/props/pile_spawn_bind.h"       // OnDisconnect: a client's own parked clumps go back to the game
@@ -215,6 +216,7 @@ void Install(coop::net::Session& session) {
     coop::npc_sync::Install(&session);
     coop::world_actor_sync::Install(&session);  // non-Character event-actor mirror (2nd BeginDeferred interceptor, disjoint allowlist)
     coop::piramid_sync::Install(&session);  // piramid event choreography lane (hooks arm lazily on the first piramid element)
+    coop::geom_octa_sync::Install(&session);  // the Geom Octa's lane: the [OCTA] watches (live once the class loads)
     coop::item_activate::Install(&session);  // flashlight
     coop::player_damage::Install(&session);  // the refusals on a peer's puppet: its impacts, damage, fire and hit verbs
     coop::weather_sync::Install(&session);  // weather
@@ -530,6 +532,7 @@ DisconnectStats DisconnectAll() {
     coop::npc_sync::OnDisconnect();
     coop::world_actor_sync::OnDisconnect();  // drain WorldActor mirrors (K2 client ones) + clear host reverse-map
     coop::piramid_sync::OnDisconnect();  // drop pending gather + gather-edge map + restored-tick set (hooks stay latched)
+    coop::geom_octa_sync::OnDisconnect();  // the host's verdict counts and the counters (the watches stay latched)
     coop::npc_adoption::OnSessionEnd();  // drop pending deferred adoptions + reset latches
     coop::kerfur_prop_adoption::OnSessionEnd();  // drop pending prop-form kerfur adoptions
     coop::dev::dev_lanes::EndSession();  // [dev] the probes' verdicts, before the prop seams reset below, then each drill back to its first step

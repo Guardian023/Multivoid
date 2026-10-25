@@ -162,6 +162,7 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/actors/kerfus.cpp
     src/ue_wrap/actors/zombie.cpp
     src/ue_wrap/actors/fossilhound.cpp
+    src/ue_wrap/actors/geom_octa.cpp
     src/ue_wrap/actors/int_objects.cpp
     src/ue_wrap/world/votv_lib.cpp
     src/ue_wrap/world/economy.cpp
@@ -348,6 +349,7 @@ set(VOTVCOOP_SOURCES
     src/coop/creatures/npc_sync_install.cpp
     src/coop/creatures/npc_world_enum.cpp
     src/coop/creatures/piramid_sync.cpp
+    src/coop/creatures/geom_octa_sync.cpp
     src/coop/creatures/roach_sync.cpp
     src/coop/creatures/owner_entity_sync.cpp
     src/coop/world/world_actor_sync.cpp
