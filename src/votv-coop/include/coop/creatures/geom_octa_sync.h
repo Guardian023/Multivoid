@@ -61,7 +61,8 @@ void OpenVerdictWindow(uint32_t n, void* octa);
 // since the event rides the spawn's lane and the client's mirror is built by it. A kept Aggro (the first aggro runs
 // inside the spawn's finish, before this) goes out here if its attack still stands, and is dropped when nothing was
 // sent. `slot` is the one peer the send reached (the join snapshot's), -1 for the live sends, which reach every
-// world-ready peer: the kept Aggro goes to that same audience. Game thread.
+// world-ready peer: the kept Aggro goes to that same audience. A snapshot's send of an Octa mid-attack on a target the
+// wire can name also sends the joiner one Aggro (the join's re-send, logged `join slot=`). Game thread.
 void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t classLen, bool sent, int slot);
 
 // The target text (`slot:1`, `none`, ...) of the last aggro the host decided, or an empty string before the first.

@@ -3,7 +3,7 @@
 // Included by config_registry_rows_dev.inc after the explosion rows, before the PI and NB rows, which stay the last
 // ones, so each row keeps its place in every expansion of the list. The entry forms are config_registry_rows.inc's.
 
-CFG_ENUM(octa_drill, "octa_drill", "dev", "off", "off|births|measure|attack", "VOTVCOOP_OCTA_DRILL",
+CFG_ENUM(octa_drill, "octa_drill", "dev", "off", "off|births|measure|attack|join", "VOTVCOOP_OCTA_DRILL",
     "Drill, the Geom Octa lane's arms; set on BOTH peers, on a fresh host world. births: the host calls the "
     "gamemode's own spawn verb with the spawn menu's Octa row, the call the night roll shares, and must enrol the "
     "Octa; the client calls the night roll's event, which must be refused, and must materialise the Octa's mirror. "
@@ -12,14 +12,19 @@ CFG_ENUM(octa_drill, "octa_drill", "dev", "off", "off|births|measure|attack", "V
     "several) have reached its explosion lane and walks out; the host prints measure DONE at the first idle after "
     "three verdicts. A measurement of the Octa's liveness with no relay. attack: the same placement, judged on the "
     "relay: the client stands until it has applied three of the host's verdicts, logs the time from each of its own "
-    "lasers to the first blast applied after it, and walks out; the host prints attack DONE. Both firing arms need "
-    "damage_probe=1, and both players hold startInvinc for the arm's span.")
-CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_source|no_parking|no_verdict", "VOTVCOOP_OCTA_RED",
+    "lasers to the first blast applied after it, and walks out; the host prints attack DONE. join (THREE peers, "
+    "slot 2 the observer, which the rig starts after the Octa has begun to fire): attack's placement with client 1 "
+    "held in the sphere, so the Octa keeps re-firing; client 2 joins mid-attack, and must replay the join's Aggro and "
+    "apply three verdicts, then says so in the lobby chat; client 1 walks out on that line, and the host prints join "
+    "DONE. The firing arms need damage_probe=1, and every player holds startInvinc for the arm's span.")
+CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_source|no_parking|no_verdict|no_join", "VOTVCOOP_OCTA_RED",
     "Developer red arm: never set. no_source (HOST): the gamemode's row of the EX spawn catch is skipped, so the "
     "births arm must fail: the host enrols nothing and the client sees no mirror. no_parking (CLIENT): the Octa's "
     "graph watch is left unregistered, so its mirror runs its own wander and the measure arm must show it (the "
     "client logs `[OCTA] mirror ran move`). no_verdict (HOST): the host counts its fire verdicts and sends none, so "
-    "the attack arm's client waits for a verdict that never comes (the client logs `[OCTA] verdict timeout`).")
+    "the attack arm's client waits for a verdict that never comes (the client logs `[OCTA] verdict timeout`). "
+    "no_join (HOST): a joiner's snapshot of an Octa mid-attack sends it no Aggro, so the join arm's observer gets host "
+    "verdicts and no Aggro (it prints `[OCTA-DRILL] FAIL: no aggro at join`).")
 CFG_ENUM(octa_measure_target, "octa_measure_target", "dev", "client", "client|host", "VOTVCOOP_OCTA_MEASURE_TARGET",
     "Control for the Octa drill's firing arms, set on BOTH peers: who walks into the Octa's sphere. client (the "
     "default): the client does, as the arm says. host: the host's own director walks the host player 2200 cm from "

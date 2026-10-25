@@ -304,9 +304,12 @@ void SendAggro(uint32_t eid, const WireTarget& target, uint32_t base, int slot =
     p.target = target.v;
     char text[40];
     TargetText(target, text);
-    if (SendEvent(p, slot))
-        UE_LOGI("[OCTA] aggro sent eid=%u target=%s base=%u t=%llu", static_cast<unsigned>(eid), text,
-                static_cast<unsigned>(base), Now());
+    if (SendEvent(p, slot)) {
+        char join[24] = "";
+        if (slot >= 0) std::snprintf(join, sizeof(join), " join slot=%d", slot);   // a joiner's snapshot, not a live send
+        UE_LOGI("[OCTA] aggro sent eid=%u target=%s base=%u%s t=%llu", static_cast<unsigned>(eid), text,
+                static_cast<unsigned>(base), join, Now());
+    }
 }
 
 void SendVerdict(uint32_t eid, uint32_t n, int refire) {
@@ -386,7 +389,7 @@ void OnLaserPost(const sg::Call& call) {
 bool ProbeOn() {
     static const bool on = [] {
         const std::string arm = coop::config::ResolveEnum(::coop::config_registry::rows::octa_drill);
-        return arm == "measure" || arm == "attack";
+        return arm == "measure" || arm == "attack" || arm == "join";
     }();
     return on;
 }
@@ -507,6 +510,23 @@ void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t cla
         return;
     }
     NoteSent(eid);
+    // A joiner's snapshot (slot >= 0) of an Octa MID-ATTACK on a target: one Aggro to that slot, the target as the wire
+    // carries it now and the verdict count now as the base. The joiner's mirror starts the chain from its beginning, and
+    // its first refused fire-finish pairs with base + 1, the host's next verdict, a fire in flight included. It replaces
+    // a kept Aggro (one Aggro per Octa per slot). An Octa between attacks, or on a target the wire cannot name (None),
+    // sends nothing here: the joiner's next Aggro is the host's next one, and a None attack in flight idles on the
+    // joiner while its blast still arrives. The spawn was sent just before, on the same lane, so the event follows it.
+    if (slot >= 0 && actor) {
+        void* target = GO::TargetActor(actor);
+        const WireTarget wt = WireTargetOf(target);
+        if (target && wt.kind != N::kGeomOctaTargetNone) {
+            if (kept) *kept = KeptAggro{};
+            // [dev] octa_red=no_join, the join arm's red: the mid-attack branch sends nothing.
+            static const bool noJoin = coop::config::ResolveEnum(::coop::config_registry::rows::octa_red) == "no_join";
+            if (!noJoin) SendAggro(eid, wt, PeekVerdicts(actor), slot);
+            return;
+        }
+    }
     if (!kept) return;
     const KeptAggro k = *kept;
     *kept = KeptAggro{};

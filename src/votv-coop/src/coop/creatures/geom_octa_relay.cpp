@@ -439,6 +439,8 @@ void OnEvent(const N::GeomOctaEventPayload& p) {
         return;
     }
     const uint64_t now = N::NowMs();
+    if (p.op == N::kGeomOctaOpAggro) ++g_counters.aggroReceived;
+    else ++g_counters.verdictReceived;
     if (p.op == N::kGeomOctaOpAggro) {
         if (st->aggroPending) SkipAggro(*st, "superseded by a newer Aggro");
         st->aggroPending = true;
