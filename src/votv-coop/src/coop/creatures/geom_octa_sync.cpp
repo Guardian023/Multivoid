@@ -523,12 +523,14 @@ void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t cla
         void* target = GO::TargetActor(actor);
         const WireTarget wt = WireTargetOf(target);
         if (target && wt.kind != N::kGeomOctaTargetNone) {
+            ++g_counters.joinMid;
             if (kept) *kept = KeptAggro{};
             // [dev] octa_red=no_join, the join arm's red: the mid-attack branch sends nothing.
             static const bool noJoin = coop::config::ResolveEnum(::coop::config_registry::rows::octa_red) == "no_join";
             if (!noJoin) SendAggro(eid, wt, PeekVerdicts(actor), slot);
             return;
         }
+        ++g_counters.joinBetween;
     }
     if (!kept) return;
     const KeptAggro k = *kept;

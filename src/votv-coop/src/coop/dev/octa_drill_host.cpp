@@ -369,10 +369,28 @@ void HostWatchMeasure() {
     }
 }
 
+// The join arm's measurement validity: the joiner's snapshot must have found the Octa mid-attack, or the Aggro path it
+// proves was not exercised. Judged once, on the first snapshot after the Octa stood, and kept up after the host's own
+// leg has ended, since the joiner's second life joins later.
+void JudgeJoinSnapshot() {
+    if (g_snapJudged || !g_octa.Get()) return;
+    const GS::Counters c = GS::GetCounters();
+    if (c.joinMid > g_base.joinMid) {
+        g_snapJudged = true;
+        UE_LOGI("[OCTA-DRILL] join snapshot: mid-attack");
+    } else if (c.joinBetween > g_base.joinBetween) {
+        g_snapJudged = true;
+        UE_LOGI("[OCTA-DRILL] join snapshot: between attacks");
+        Fail("INCONCLUSIVE -- the joiner's snapshot found the Octa between attacks");
+    }
+}
+
 }  // namespace
 
 void HostTick(coop::net::Session* s) {
-    if (!s->running() || g_hstep == HStep::Done) return;
+    if (!s->running()) return;
+    if (ArmOf() == Arm::Join) JudgeJoinSnapshot();
+    if (g_hstep == HStep::Done) return;
     void* me = coop::players::Registry::Get().Local();
     if (!me || !Due()) return;
     if (g_hstep == HStep::Wait) {

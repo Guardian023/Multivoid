@@ -100,6 +100,7 @@ extern FVector  g_puppetLast;        // the client puppet's place at the last po
 extern uint64_t g_puppetStillAt;
 extern WStep    g_wstep;             // octa_measure_target=host: the host's legs after the spawn
 extern uint32_t g_volleysSeen;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
+extern bool     g_snapJudged;        // join, host: the joiner's snapshot has been judged (mid-attack, or between attacks)
 // CLIENT (measure)
 extern uint32_t g_appliedBase;       // the explosion lane's applied count when the Octa mirror appeared
 extern uint32_t g_appliedSeen;

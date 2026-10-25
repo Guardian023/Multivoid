@@ -46,6 +46,8 @@ struct Counters {
     uint32_t overlapProp;   // [dev] the same for propAggroSphere
     bool     windowReached;    // the open window's n-th host verdict has been counted
     uint32_t idleAtWindow;      // the idle count at the moment it was counted
+    uint32_t joinMid;           // join snapshots that found an Octa mid-attack on a nameable target (the Aggro path)
+    uint32_t joinBetween;       // join snapshots that found the Octa between attacks, or on a target the wire cannot name
 };
 Counters GetCounters();
 

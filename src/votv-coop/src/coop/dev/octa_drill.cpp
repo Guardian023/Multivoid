@@ -99,8 +99,9 @@ FVector  g_puppetLast{};          // the client puppet's place at the last poll,
 uint64_t g_puppetStillAt = 0;
 WStep    g_wstep = WStep::Stand;  // octa_measure_target=host: the host's legs after the spawn
 uint32_t g_volleysSeen = 0;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
+bool     g_snapJudged = false;    // join, host: the joiner's snapshot has been judged
 // CLIENT (measure)
-uint32_t g_appliedBase = 0;       // the explosion lane's applied count when the Octa mirror appeared
+uint32_t g_appliedBase = 0;      // the explosion lane's applied count when the Octa mirror appeared
 uint32_t g_appliedSeen = 0;
 uint32_t g_volleys = 0;           // the volleys applied since then
 coop::geom_octa_relay::Counters g_relay0{};   // attack: the relay's counters when the mirror appeared
@@ -208,6 +209,7 @@ bool BeginWalkOut(void* me, void* octa, const char* who) {
         Fail("the Octa is gone before the walk-out");
         return false;
     }
+    if (g_walk && g_walk->state.load() == 0) D::CancelBackgroundWalk(*g_walk);   // a re-entry still walking ends here
     for (; g_outRing < kOutRingCount; ++g_outRing) {
         const std::vector<FVector> ring = D::ReachableStandpoints(me, at, kOutRingsCm[g_outRing], kStandpoints, kStandReachCm);
         if (ring.empty()) continue;
@@ -389,6 +391,48 @@ bool JoinerDone() {
     return g_joinerSeen;
 }
 
+// The join arm's walker stays in the Octa's reach until the joiner reports, so the Octa keeps firing for the joiner's
+// snapshot: a blast throws it out of the sphere, and the Octa then idles for want of a target. Past kReEnterFromCm (inside
+// the sphere, so the way back crosses its edge and the game's own begin-overlap fires) and once it is not tumbling, its
+// director walks it back to within kReEnterRingCm of the Octa's live place.
+constexpr float    kReEnterFromCm = 900.f;
+constexpr float    kReEnterRingCm = 300.f;   // a standpoint on this ring, reached within kStandReachCm: inside 400 cm
+constexpr int      kReEnterWalkS  = 60;
+constexpr uint64_t kSteadyMs      = 500;     // no clean ragdoll read: a position steady this long is a recovered body
+uint32_t g_reEnters = 0;
+FVector  g_reLast{};
+uint64_t g_reSteadyAt = 0;
+
+void WalkerReEnter(void* me) {
+    if (g_walk) {
+        if (g_walk->state.load() == 0) return;
+        g_walk.reset();
+    }
+    void* octa = g_octa.Get();
+    FVector op{}, mp{};
+    if (!octa || !E::TryGetActorLocation(octa, op) || !E::TryGetActorLocation(me, mp)) return;
+    const float d = FlatDist(op, mp);
+    const uint64_t now = coop::net::NowMs();
+    if (d <= kReEnterFromCm) {
+        g_reSteadyAt = 0;
+        return;
+    }
+    if (!g_reSteadyAt || FlatDist(mp, g_reLast) >= kStillCm) {
+        g_reLast = mp;
+        g_reSteadyAt = now;
+        return;
+    }
+    if (now - g_reSteadyAt < kSteadyMs) return;
+    const std::vector<FVector> ring = D::ReachableStandpoints(me, op, kReEnterRingCm, kStandpoints, kStandReachCm);
+    if (ring.empty()) {
+        Fail("no NavMesh route reaches a standpoint 300 cm from the Octa: the walker cannot re-enter its sphere");
+        return;
+    }
+    g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kReEnterWalkS);
+    g_reSteadyAt = 0;
+    UE_LOGI("[OCTA-DRILL] walker re-enters n=%u from %.0f cm", ++g_reEnters, d);
+}
+
 // Stands until the Octa has fired three volleys. measure counts them as volleys of the explosions this client's
 // explosion lane applies (one laser makes several, so an explosion more than kVolleyGapMs after the previous one starts
 // a new volley); attack counts the verdicts the relay has applied, which it can now see. The bound counts from the last
@@ -399,6 +443,7 @@ void ClientStand(void* me) {
         return;
     }
     Guard();
+    if (ArmOf() == Arm::Join && !g_joinerSeen) WalkerReEnter(me);
     const uint32_t now = AppliedSum();
     if (now > g_appliedSeen) {
         const uint64_t at = coop::net::NowMs();
@@ -572,6 +617,9 @@ void OnDisconnect() {
     g_outRing = 0;
     g_joinHoldAt = 0;
     g_joinerSeen = false;
+    g_snapJudged = false;
+    g_reEnters = 0;
+    g_reSteadyAt = 0;
     g_lifeKnown = false;
     g_isJoiner = false;
     g_joinBase = 0;
