@@ -207,6 +207,7 @@ public:
                 UE_LOGI("director/Goto: the walker got up at (%.0f,%.0f,%.0f) after a fall -- re-path from here (toPile=%.0f)",
                         ctx.pos.X, ctx.pos.Y, ctx.pos.Z, HorizDist(ctx.pos, goal_.targetPos));
                 pathed_ = false; waypoints_.clear(); wp_ = 0; lastWp_ = 0; bestWp_ = 1e9f; bestPile_ = 1e9f;
+                detour_.Cancel();   // a search begun before the fall would install a route from the pre-fall start
             }
         }
         if (detour_.Active()) {   // looking for a way round a slope the body cannot climb: stand while it does

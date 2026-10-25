@@ -205,7 +205,7 @@ coop::net::PropPoseSnapshot HeldPose(const coop::net::WireKey& key, coop::elemen
 // its own copy, until that copy is at rest, and only then sends the release: the other peers follow the same fall
 // parked and let go of a door already where it stopped. At rest is the body asleep, or the same place and
 // orientation for kCoastStillTicks equal reads (about half a second at the pump's rate), measured from the pose
-// where that still run began, so a slow creep is not rest. The release branch below is the trash flight's neighbour:
+// where that still run began, so a creep past the band is not rest. The release branch below is the trash flight's neighbour:
 // that one keeps streaming a thrown clump under its eid; this one keeps a released swinger under its key.
 // Divergence from MTA (CUnoccupiedVehicleSync.cpp, client and server): there the syncer sends while the
 // vehicle changes and the server reassigns the syncer. Here the releaser is the syncer until rest, because no
@@ -226,7 +226,6 @@ bool g_coasting = false;               // the release edge has begun a coast
 ue_wrap::FVector  g_stillFromLoc{};    // where the current still run began
 ue_wrap::FRotator g_stillFromRot{};
 int g_coastStill = 0;                  // ticks within tolerance of that pose
-bool g_coastAtRest = false;            // the coast ended at rest, not at the bound: the release carries no velocity
 
 // True while the released swinger is still moving: its pose goes out this tick and the release waits.
 bool CoastSwinger(coop::net::Session& session) {
@@ -242,7 +241,6 @@ bool CoastSwinger(coop::net::Session& session) {
         g_coasting = true;
         g_coastDeadline = std::chrono::steady_clock::now() + kCoastMax;
         g_coastStill = 0;
-        g_coastAtRest = false;
         g_stillFromLoc = loc;
         g_stillFromRot = rot;
     }
@@ -262,10 +260,7 @@ bool CoastSwinger(coop::net::Session& session) {
         g_stillFromRot = rot;
     }
     // The body's rest flag is read only on a still tick: a body in motion is not at rest.
-    if (g_coastStill >= kCoastStillTicks || (still && ue_wrap::engine::IsActorRootBodyAtRest(door))) {
-        g_coastAtRest = true;
-        return false;
-    }
+    if (g_coastStill >= kCoastStillTicks || (still && ue_wrap::engine::IsActorRootBodyAtRest(door))) return false;
     session.SetLocalPropPose(true, HeldPose(g_lastHeldKey, g_lastHeldEid, loc, rot));
     return true;
 }
@@ -306,22 +301,14 @@ void SendHeldRelease(coop::net::Session& session) {
                 }
             }
         }
-        // A swinger whose coast ended at rest has no velocity: the instantaneous one of a contact rock is noise
-        // that tips the receiver's copy over. The release pose stays.
-        const bool restRelease = g_heldSwinger && g_coastAtRest;
-        if (restRelease) {
-            vel.linearCmS = {};
-            vel.angularDegS = {};
-        }
         const float linMagSq = vel.linearCmS.X * vel.linearCmS.X +
                                vel.linearCmS.Y * vel.linearCmS.Y +
                                vel.linearCmS.Z * vel.linearCmS.Z;
-        UE_LOGI("net: held -> released (vel.ok=%d linVel=(%.1f, %.1f, %.1f) |v|=%.1f cm/s angVel=(%.1f, %.1f, %.1f))%s",
+        UE_LOGI("net: held -> released (vel.ok=%d linVel=(%.1f, %.1f, %.1f) |v|=%.1f cm/s angVel=(%.1f, %.1f, %.1f))",
                 vel.ok ? 1 : 0,
                 vel.linearCmS.X, vel.linearCmS.Y, vel.linearCmS.Z,
                 std::sqrt(linMagSq),
-                vel.angularDegS.X, vel.angularDegS.Y, vel.angularDegS.Z,
-                restRelease ? " at rest: velocity zeroed" : "");
+                vel.angularDegS.X, vel.angularDegS.Y, vel.angularDegS.Z);
         // The prop's flags as the hold left them: not frozen after a grab, frozen when a slot or
         // a dock took it from the hand. A pocketed prop is gone and reports none, a trash clump has
         // none.
@@ -359,7 +346,6 @@ void SendHeldRelease(coop::net::Session& session) {
     g_lastHeldKey = {};
     g_heldSwinger = false;
     g_coasting = false;
-    g_coastAtRest = false;
     g_lastHeldEid = coop::element::kInvalidId;  // the cached held eid goes with the release
 }
 
@@ -394,7 +380,6 @@ void OnSessionStart() {
     g_heldSwinger = false;
     g_swingerKeySaid = false;
     g_coasting = false;
-    g_coastAtRest = false;
     g_coastStill = 0;
     g_coastDeadline = {};
     g_stillFromLoc = {};
@@ -647,7 +632,6 @@ void Tick(coop::net::Session& session, void* local, void* controller) {
         g_lastHeldProp.Set(heldActor);
         g_lastHeldKey = pp.key;
         g_coasting = false;   // a re-grab of the coasting door ends the coast; the next one starts afresh
-        g_coastAtRest = false;
     } else if (g_lastHeldProp.Raw()) {
         // The carry latch owns "carrying", not the flickering holding_actor: a churn re-pile
         // destroys the held clump and the field is empty for a frame, and the held-puppet
