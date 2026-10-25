@@ -286,6 +286,7 @@ sg::Verdict OnFinishPre(const sg::Call& call) {
 void SetBase(OctaState& st, uint32_t base) {
     st.haveBase = true;
     st.base = base;
+    EnsureHook();   // the verdicts of this attack will need it, whether or not its own look is replayed
     st.counted = st.done = 0;
     for (bool& s : st.pendingSaid) s = false;
     // Kept verdicts numbered at or below the new base belong to an attack already over.
@@ -329,7 +330,6 @@ void ServeAggro(OctaState& st, void* octa, uint64_t now) {
     }
     SetBase(st, st.aggroBase);
     st.aggroPending = false;
-    EnsureHook();   // the verdicts of this attack will need it
     bool ran = false;
     {
         B::ScopedEntryPass pass(octa, {kEntryOverlap, kEntryAggro});
