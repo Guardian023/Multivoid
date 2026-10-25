@@ -1,10 +1,12 @@
 // coop/interactables/cord_sync.h -- a cord's link to its socket as the host's state. The host decides every link; the
 // player who plugs or unplugs a cord on a client runs the game's own verb first and reports its outcome as a claim, and
-// the host's answer (the cord's link as the host now has it) is what the client settles on. That is MTA's shape for an
-// element entering another (Packet_VehicleTrailer, reference/mtasa-blue/Server/mods/deathmatch/logic/CGame.cpp:3836-3897:
-// the server tests the sender and the state, applies, and the clients follow), with the divergence the floppy slot lane
-// names (coop/interactables/floppy_slot_sync.h, against VEHICLE_REQUEST_IN): the claim carries an outcome rather than
-// asking, since the verb has already run on the peer that reports it.
+// the host's answer (the cord's link as the host now has it) is what the client settles on. MTA's shape: in
+// Packet_VehicleTrailer (reference/mtasa-blue/Server/mods/deathmatch/logic/CGame.cpp:3820-3915) the client reports its
+// own attach, the server tests the sender and the state, applies, and the others follow. Divergences: the host answers
+// the claimant (MTA skips the source; the answer follows VEHICLE_REQUEST_IN's reply, CGame.cpp:3092-3098, as the floppy
+// slot lane does); a reach test; compare-first on both edges (MTA's detach only, :3901); the occupant of a socket stays
+// and the claiming cord ends unplugged, the game's connect rule, where MTA's newcomer evicts (:3845-3871); a claim on a
+// cord the host's own player drags is answered with the host's link.
 //
 // Wire: ReliableKind::CordLinkState (CordLinkPayload). Op 0 a client's claim, to the host, never relayed; op 1 the
 // canonical, the host's answer to a claim (seq = the claim's) or its broadcast of a change (seq 0); op 2 the end of

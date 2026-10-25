@@ -558,7 +558,13 @@ bool HandleStateEvent(net::Session& session,
         const bool fromHost = validSender && msg.senderPeerSlot == 0;
         const bool direction = (p.op == 0 && session.role() == net::Role::Host && fromClient) ||
                                ((p.op == 1 || p.op == 2) && session.role() == net::Role::Client && fromHost);
-        if (!direction || p.pad != 0 || p.sockForm > 2 || p.cord.len > sizeof(p.cord.data) ||
+        // The fields a form leaves empty are empty: an unplugged link names no socket, the seed's end carries
+        // nothing, and a claim is numbered from 1 (seq 0 is a broadcast's).
+        const bool fieldsAgree = !(p.sockForm == 0 && (p.sock.len != 0 || p.child.len != 0)) &&
+                                 !(p.op == 2 && (p.sockForm != 0 || p.seq != 0 || p.cord.len != 0 ||
+                                                 p.sock.len != 0 || p.child.len != 0)) &&
+                                 !(p.op == 0 && p.seq == 0);
+        if (!direction || !fieldsAgree || p.pad != 0 || p.sockForm > 2 || p.cord.len > sizeof(p.cord.data) ||
             p.sock.len > sizeof(p.sock.data) || p.child.len > sizeof(p.child.data)) {
             coop::cord_sync::CountDropped();
             break;

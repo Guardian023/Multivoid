@@ -4,11 +4,13 @@
 
 #include "ue_wrap/actors/prop.h"
 #include "ue_wrap/core/call.h"
+#include "ue_wrap/core/fname_utils.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/reflection_props.h"
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/engine/engine_component.h"
+#include "ue_wrap/engine/world_identity.h"
 #include "ue_wrap/world/world_instances.h"
 
 #include <atomic>
@@ -20,6 +22,8 @@ namespace {
 namespace R = ue_wrap::reflection;
 
 std::atomic<bool> g_resolved{false};
+// The world generation a resolve last failed in; 0 is none (generations start at 1).
+std::atomic<uint32_t> g_failedGen{0};
 void* g_cordCls = nullptr;
 void* g_socketCls = nullptr;
 void* g_propCls = nullptr;
@@ -54,10 +58,18 @@ void* LivePtr(void* obj, int32_t off) {
 
 bool EnsureResolved() {
     if (g_resolved.load(std::memory_order_acquire)) return true;
+    // A resolve that fails is not tried again in the same world: a class lookup that misses walks the object array,
+    // and the classes load with a world or not at all (ue_wrap/devices/serverbox.cpp, CountUpgradeSpawners).
+    const uint32_t gen = world_identity::Generation();
+    if (g_failedGen.load(std::memory_order_acquire) == gen) return false;
+    const auto failed = [gen]() {
+        g_failedGen.store(gen, std::memory_order_release);
+        return false;
+    };
     void* cordCls = R::FindClass(L"cord_C");
     void* socketCls = R::FindClass(L"cordSocket_C");
     void* propCls = R::FindClass(L"prop_corded_C");
-    if (!cordCls || !socketCls || !propCls) return false;
+    if (!cordCls || !socketCls || !propCls) return failed();
     const int32_t cordSocketOff = R::FindPropertyOffset(cordCls, L"socket");
     const int32_t cordParentOff = R::FindPropertyOffset(cordCls, L"parent");
     const int32_t cordHeadOff = R::FindPropertyOffset(cordCls, L"head");
@@ -68,7 +80,7 @@ bool EnsureResolved() {
     if (cordSocketOff < 0 || cordParentOff < 0 || cordHeadOff < 0 || socketCordOff < 0 || propCordOff < 0 ||
         !connectFn || !disconnectFn) {
         UE_LOGW("cord: reflected fields or functions are incomplete -- channel unavailable");
-        return false;
+        return failed();
     }
     g_cordCls = cordCls;
     g_socketCls = socketCls;
@@ -129,15 +141,26 @@ bool Disconnect(void* cord) {
     return Call(cord, p);
 }
 
-void* SocketByKey(const std::wstring& key) {
+void* SocketByKey(const std::wstring& key, bool* keyUnnamed) {
+    if (keyUnnamed) *keyUnnamed = false;
     if (!EnsureResolved() || key.empty()) return nullptr;
+    // The key is taken to an FName once per call and each socket's key FName is compared by index and number: no
+    // name is rendered to a string per socket.
+    const R::FName want = ue_wrap::fname_utils::StringToFName(key);
+    if (want.ComparisonIndex == 0) {
+        if (keyUnnamed) *keyUnnamed = true;
+        return nullptr;
+    }
     void* found[kMaxSockets];
     const int32_t n = ue_wrap::world_instances::Find(L"cordSocket_C", found, kMaxSockets);
-    if (n >= kMaxSockets) UE_LOGW("cord: %d cord sockets in this world fill the lookup -- later ones are not found", n);
-    // The key FName is compared in place: a lane that retries a parked link asks this on every tick.
+    static bool sCapSaid = false;
+    if (n >= kMaxSockets && !sCapSaid) {
+        sCapSaid = true;
+        UE_LOGW("cord: %d cord sockets in this world fill the lookup -- later ones are not found (said once)", n);
+    }
     for (int32_t i = 0; i < n; ++i) {
         const R::FName name = ue_wrap::prop::ReadKeyField(found[i], ue_wrap::prop::KeyField::ActorSave);
-        if (R::NameEquals(name, key.c_str())) return found[i];
+        if (name.ComparisonIndex == want.ComparisonIndex && name.Number == want.Number) return found[i];
     }
     return nullptr;
 }

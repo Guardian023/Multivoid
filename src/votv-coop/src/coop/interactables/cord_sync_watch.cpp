@@ -51,6 +51,9 @@ bool Running(int body) {
 bool InPlayersVerb() { return Running(kBodyAction) || Running(kBodyUsed); }
 
 bool g_applying = false;
+// All six watches live; and the release's `pressed` parameter not found missing (it is read at the first release).
+bool g_allLive = false;
+bool g_pressedUnresolved = false;
 
 // The cords the local player holds in hand. One hand, so a few slots are plenty; a latch past them is not set and the
 // drag then ends at the release as if nothing were held.
@@ -146,14 +149,24 @@ void OnDisconnectPost(const sg::Call& c) {
 
 // The press took the cord in hand: the drag begins.
 void OnActionPost(const sg::Call& c) {
-    if (Connected() && c.object) SetLatch(c.object);
+    if (LaneLive() && Connected() && c.object) SetLatch(c.object);
 }
 
-// The release ends the drag; the press also fires used, with pressed true.
+// The release ends the drag; the press also fires used, with pressed true. A `pressed` that does not resolve would
+// leave every latch unreleasable: the lane goes off as a unit instead, said once.
 void OnUsedPost(const sg::Call& c) {
     static R::ParamOffset sPressed{L"pressed"};
     const int32_t off = sPressed.Of(c.function);
-    if (off < 0 || !c.locals || *(c.locals + off) != 0 || !c.object) return;
+    if (off < 0) {
+        if (!g_pressedUnresolved) {
+            g_pressedUnresolved = true;
+            ClearLatches();
+            UE_LOGE("cord_sync: cord_C::used has no `pressed` parameter here -- the cord lane is off, each peer's "
+                    "cord link stays its own");
+        }
+        return;
+    }
+    if (!c.locals || *(c.locals + off) != 0 || !c.object) return;
     if (ClearLatch(c.object)) OnDragEnded(c.object);
 }
 
@@ -184,6 +197,8 @@ ApplyScope::~ApplyScope() { g_applying = previous_; }
 
 bool Dragging(void* cord) { return LatchIndex(cord) >= 0; }
 
+bool LaneLive() { return g_allLive && !g_pressedUnresolved; }
+
 void ClearLatches() {
     for (auto& l : g_latch) l.Reset();
 }
@@ -213,11 +228,12 @@ void TickWatches() {
     }
     if (live == kWatchCount) {
         g_settled = true;
+        g_allLive = true;
         UE_LOGI("cord_sync: the cord gates are live (connect, disconnect, the press, the release, the tick, the "
                 "destroy)");
     } else if (settled == kWatchCount) {
         g_settled = true;
-        UE_LOGE("cord_sync: %d of %d cord gates are dead -- those parts of a cord's link stay each peer's own",
+        UE_LOGE("cord_sync: %d of %d cord gates are dead -- the cord lane is off, each peer's cord link stays its own",
                 kWatchCount - live, kWatchCount);
     }
 }
