@@ -6,6 +6,9 @@
 
 #pragma once
 
+#include "ue_wrap/core/types.h"
+
+#include <cmath>
 #include <cstdint>
 
 namespace coop::prop_drive_rules {
@@ -27,5 +30,17 @@ constexpr float kRestVelCmS = 1.0f;
 // A syncing client sends its prop's pose at most this often; the host sizes its late-syncer window by it. 25 ms
 // is 40 Hz, the ATV's kStreamBudget refill, so the host's burst of 16 absorbs the jitter of a send at this rate.
 constexpr uint64_t kClientDriveSendMs = 25;
+
+// True when a pose moved past the send epsilons on any axis since `sentLoc`/`sentRot`, the last one that went out.
+inline bool MovedPastEps(const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot,
+                         const ue_wrap::FVector& sentLoc, const ue_wrap::FRotator& sentRot) {
+    if (std::fabs(loc.X - sentLoc.X) > kSendEpsCm) return true;
+    if (std::fabs(loc.Y - sentLoc.Y) > kSendEpsCm) return true;
+    if (std::fabs(loc.Z - sentLoc.Z) > kSendEpsCm) return true;
+    if (std::fabs(ue_wrap::NormalizeAxis(rot.Pitch - sentRot.Pitch)) > kSendEpsDeg) return true;
+    if (std::fabs(ue_wrap::NormalizeAxis(rot.Yaw   - sentRot.Yaw))   > kSendEpsDeg) return true;
+    if (std::fabs(ue_wrap::NormalizeAxis(rot.Roll  - sentRot.Roll))  > kSendEpsDeg) return true;
+    return false;
+}
 
 }  // namespace coop::prop_drive_rules

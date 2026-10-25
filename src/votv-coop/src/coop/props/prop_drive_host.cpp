@@ -11,6 +11,7 @@
 #include "coop/props/prop_drive_stream.h"     // Pump: the apply tick that follows the publish
 #include "coop/props/prop_element_tracker.h"  // GetPropElementIdForActor
 #include "coop/props/prop_lifecycle.h"        // IsWireSuppressedPropClass: a class no peer holds
+#include "coop/props/prop_syncer.h"           // Pump: the role and a client's rows; OnDisconnect
 #include "coop/props/prop_syncer_host.h"      // Pump: admit a client's rows; OnDisconnect
 #include "coop/props/prop_wire_parity.h"      // PhysFlagsOf: the flags the end edge carries
 #include "coop/props/remote_prop.h"           // IsActorUnderAnyDrive: a peer's held-prop stream
@@ -39,8 +40,6 @@ namespace R  = ue_wrap::reflection;
 using coop::prop_drive_rules::kRestMs;
 using coop::prop_drive_rules::kRestProbeMs;
 using coop::prop_drive_rules::kRestVelCmS;
-using coop::prop_drive_rules::kSendEpsCm;
-using coop::prop_drive_rules::kSendEpsDeg;
 
 std::vector<Driven> g_driven;   // game thread only
 size_t              g_turn = 0; // where the next tick's publishing starts, so no prop waits forever
@@ -57,42 +56,16 @@ Driven* Find(void* actor) {
 
 bool Moved(const Driven& d, const ue_wrap::FVector& loc, const ue_wrap::FRotator& rot) {
     if (!d.everSent || d.resend) return true;
-    if (std::fabs(loc.X - d.sentLoc.X) > kSendEpsCm) return true;
-    if (std::fabs(loc.Y - d.sentLoc.Y) > kSendEpsCm) return true;
-    if (std::fabs(loc.Z - d.sentLoc.Z) > kSendEpsCm) return true;
-    if (std::fabs(ue_wrap::NormalizeAxis(rot.Pitch - d.sentRot.Pitch)) > kSendEpsDeg) return true;
-    if (std::fabs(ue_wrap::NormalizeAxis(rot.Yaw   - d.sentRot.Yaw))   > kSendEpsDeg) return true;
-    if (std::fabs(ue_wrap::NormalizeAxis(rot.Roll  - d.sentRot.Roll))  > kSendEpsDeg) return true;
-    return false;
+    return coop::prop_drive_rules::MovedPastEps(loc, rot, d.sentLoc, d.sentRot);
 }
 
 void SendEnd(coop::net::Session& s, const Driven& d, void* actor, const ue_wrap::FVector& loc,
              const ue_wrap::FRotator& rot, const char* why) {
-    coop::net::PropDriveEndPayload p{};
-    p.eid = d.eid;
-    p.gen = d.gen;
-    // The host's own flags at this instant: the receiver restores the same parity the join's
-    // converge applies, rather than guessing that a simulating prop is what it took off.
-    p.physFlags = coop::prop_wire_parity::PhysFlagsOf(actor);
-    p.x = loc.X; p.y = loc.Y; p.z = loc.Z;
-    p.pitch = ue_wrap::NormalizeAxis(rot.Pitch);
-    p.yaw   = ue_wrap::NormalizeAxis(rot.Yaw);
-    p.roll  = ue_wrap::NormalizeAxis(rot.Roll);
-    // The body's velocity at this instant. At rest it is noise below kRestVelCmS and goes out as
-    // zero, so no receiver wakes a resting body by writing a velocity into it. MTA's syncer
-    // (CUnoccupiedVehicleSync.cpp, bSyncVelocity) streams a velocity in every packet it moved in;
-    // ours rides the end edge only, since the receiver interpolates a parked body and has no use
-    // for one before that.
-    const PR::VelocityState v = PR::GetPhysicsVelocity(actor);
-    const float lin = std::sqrt(v.linearCmS.X * v.linearCmS.X + v.linearCmS.Y * v.linearCmS.Y +
-                                v.linearCmS.Z * v.linearCmS.Z);
-    if (v.ok && lin >= kRestVelCmS) {
-        p.linVelX = v.linearCmS.X;   p.linVelY = v.linearCmS.Y;   p.linVelZ = v.linearCmS.Z;
-        p.angVelX = v.angularDegS.X; p.angVelY = v.angularDegS.Y; p.angVelZ = v.angularDegS.Z;
-    }
+    float lin = 0.f;
+    const coop::net::PropDriveEndPayload p = EndFromBody(actor, d.eid, d.gen, loc, rot, &lin);
     s.SendReliable(coop::net::ReliableKind::PropDriveEnd, &p, sizeof(p));
     UE_LOGI("[PROP-DRIVE] HOST END eid=%u gen=%u %s -> (%.1f,%.1f,%.1f) |v|=%.1f cm/s flags=0x%02x",
-            d.eid, static_cast<unsigned>(d.gen), why, loc.X, loc.Y, loc.Z, v.ok ? lin : 0.f,
+            d.eid, static_cast<unsigned>(d.gen), why, loc.X, loc.Y, loc.Z, lin,
             static_cast<unsigned>(p.physFlags));
 }
 
@@ -167,6 +140,34 @@ uint8_t BumpGen(uint32_t eid) {
     uint8_t& gen = g_genByEid[eid];
     if (++gen == 0) ++gen;   // 0 is the stream's "no generation"
     return gen;
+}
+
+coop::net::PropDriveEndPayload EndFromBody(void* actor, uint32_t eid, uint8_t gen, const ue_wrap::FVector& loc,
+                                           const ue_wrap::FRotator& rot, float* speedCmS) {
+    coop::net::PropDriveEndPayload p{};
+    p.eid = eid;
+    p.gen = gen;
+    // This peer's own flags at this instant: the receiver restores the same parity the join's
+    // converge applies, rather than guessing that a simulating prop is what it took off.
+    p.physFlags = coop::prop_wire_parity::PhysFlagsOf(actor);
+    p.x = loc.X; p.y = loc.Y; p.z = loc.Z;
+    p.pitch = ue_wrap::NormalizeAxis(rot.Pitch);
+    p.yaw   = ue_wrap::NormalizeAxis(rot.Yaw);
+    p.roll  = ue_wrap::NormalizeAxis(rot.Roll);
+    // The body's velocity at this instant. At rest it is noise below kRestVelCmS and goes out as
+    // zero, so no receiver wakes a resting body by writing a velocity into it. MTA's syncer
+    // (CUnoccupiedVehicleSync.cpp, bSyncVelocity) streams a velocity in every packet it moved in;
+    // ours rides the end edge only, since the receiver interpolates a parked body and has no use
+    // for one before that.
+    const PR::VelocityState v = PR::GetPhysicsVelocity(actor);
+    const float lin = std::sqrt(v.linearCmS.X * v.linearCmS.X + v.linearCmS.Y * v.linearCmS.Y +
+                                v.linearCmS.Z * v.linearCmS.Z);
+    if (v.ok && lin >= kRestVelCmS) {
+        p.linVelX = v.linearCmS.X;   p.linVelY = v.linearCmS.Y;   p.linVelZ = v.linearCmS.Z;
+        p.angVelX = v.angularDegS.X; p.angVelY = v.angularDegS.Y; p.angVelZ = v.angularDegS.Z;
+    }
+    if (speedCmS) *speedCmS = v.ok ? lin : 0.f;
+    return p;
 }
 
 Driven* OpenClientRow(void* actor, uint8_t slot, const char* why) {
@@ -369,6 +370,7 @@ static void Tick(coop::net::Session& s) {
 }
 
 void Pump(coop::net::Session& s, bool isHost) {
+    coop::prop_syncer::Tick(s, isHost);   // first: the role for a feeder's Claim, and a client's rows of the props it syncs
     if (isHost) {
         // The order is the point: a client's rows are judged first, so the row's turn in Tick publishes what
         // this tick admitted, and the apply tick then advances the host's copies they just fed.
@@ -383,6 +385,7 @@ void OnDisconnect() {
     g_turn = 0;
     g_genByEid.clear();
     coop::prop_syncer_host::OnDisconnect();   // its buckets, hand-back records and counters go with the rows
+    coop::prop_syncer::OnDisconnect();        // a client's table, backoffs and counters (a link that drops ends the session)
 }
 
 }  // namespace coop::prop_drive_host

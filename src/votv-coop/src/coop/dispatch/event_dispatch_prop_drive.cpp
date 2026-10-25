@@ -58,6 +58,7 @@ bool HandlePropDriveEvent(net::Session& session,
             ::coop::prop_syncer_host::OnClientEnd(session, p, static_cast<uint8_t>(msg.senderPeerSlot));
             break;
         }
+        ::coop::prop_syncer::OnHostEnd(p.eid, p.gen);   // the entry of the generation the host ended goes
         ::coop::prop_drive_stream::OnEnd(p);   // the router is on the game thread; PropRelease's shape
         break;
     }

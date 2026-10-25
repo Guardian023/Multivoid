@@ -53,6 +53,12 @@ Driven* FindByEid(uint32_t eid);
 // "no generation". Game thread.
 uint8_t BumpGen(uint32_t eid);
 
+// The PropDriveEnd of generation `gen` of `eid`, read off `actor` now and placed at `loc`/`rot`: this peer's
+// physics flags and the body's velocity, zero under kRestVelCmS. The one build for the host's End and a syncing
+// client's. `*speedCmS`, when given, gets the speed read (0 when unreadable). Game thread.
+coop::net::PropDriveEndPayload EndFromBody(void* actor, uint32_t eid, uint8_t gen, const ue_wrap::FVector& loc,
+                                           const ue_wrap::FRotator& rot, float* speedCmS = nullptr);
+
 // A row for `actor` authored by client `slot`, under the Open refusals (a keyed prop with a host element id,
 // in no hand, of a class peers hold); null otherwise. Fresh admission state: nothing admitted, a full
 // bucket, the silence clock at now. Game thread.

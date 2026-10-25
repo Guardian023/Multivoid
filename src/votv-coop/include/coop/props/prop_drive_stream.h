@@ -48,6 +48,12 @@ void ReleaseHost(const coop::net::PropDriveEndPayload& end);
 // CLIENT, game thread: the host closed a prop's stream. Validated at the router.
 void OnEnd(const coop::net::PropDriveEndPayload& p);
 
+// CLIENT, game thread: this peer ended generation `gen` of `eid` itself -- a syncing client's rest End, or the End
+// it sends for a grant it no longer holds. The generation is recorded the way a hand's yield records it (closed
+// and yielded), minus the hand's physics bookkeeping, so the host's echo of that End and any late pose of that
+// generation are dropped here.
+void CloseGen(uint32_t eid, uint8_t gen);
+
 // True while this stream has `actor` parked: its pose is the host's stream's, so a converge that
 // would move it or re-run its init() leaves it alone, as it leaves a held prop. Game thread.
 bool IsParked(void* actor);

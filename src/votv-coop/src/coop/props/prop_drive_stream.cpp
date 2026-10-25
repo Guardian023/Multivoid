@@ -9,6 +9,7 @@
 #include "coop/props/prop_drive_host.h"        // InAHand: who is a hand
 #include "coop/props/prop_key_index.h"  // Find: the index only, never the cold walk
 #include "coop/props/prop_park.h"             // Park / Unpark: the parked prop, and a Character welded on it
+#include "coop/props/prop_syncer.h"           // SkipsHostPose: the prop this peer authors
 #include "coop/props/prop_wire_parity.h"      // the join converge's own physics restore
 #include "coop/player/local_streams.h"
 #include "coop/player/hand_item.h"
@@ -272,8 +273,15 @@ void TickApplyAndDrive(coop::net::Session& s) {
     UE_ASSERT_GAME_THREAD("prop_drive_stream::TickApplyAndDrive");
     const uint64_t nowMs = AD::NowMs();
     g_batch.clear();
-    if (s.TakeRemotePropDriveBatch(g_batch))
-        for (const coop::net::PropPoseSnapshot& e : g_batch) ApplyPose(e, nowMs, "CLIENT");
+    if (s.TakeRemotePropDriveBatch(g_batch)) {
+        for (const coop::net::PropPoseSnapshot& e : g_batch) {
+            // The one skip: a prop this peer authors (a claim pending or granted) is moved by this peer's own
+            // physics, and the host's poses for it are its own rows relayed, or a coast it parks onto once a
+            // claim is refused. Skipping closes no generation, and an End is never skipped (OnEnd).
+            if (coop::prop_syncer::SkipsHostPose(e.elementId)) continue;
+            ApplyPose(e, nowMs, "CLIENT");
+        }
+    }
     for (auto it = g_drives.begin(); it != g_drives.end();) {
         Drive& dr = it->second;
         void* actor = dr.d.LiveActor();
@@ -334,14 +342,16 @@ void OnEnd(const coop::net::PropDriveEndPayload& p) {
         // Never parked here. The generation still closes, so a pose of it in flight cannot park
         // the prop now; the rest pose is applied if the prop is here, kept for it if not, and
         // dropped for a prop a hand holds -- that stream owns it -- or one a hand took this generation
-        // over from: the hand moved it since, so this pose is older than where it lies. An end older than
-        // the generation already closed here is stale outright and touches nothing.
+        // over from: the hand moved it since, so this pose is older than where it lies. The same for a
+        // generation this peer closed itself (CloseGen). An end older than the generation already closed
+        // here is stale outright and touches nothing.
         if (auto closed = g_endedGen.find(p.eid); closed != g_endedGen.end() && GenAfter(closed->second, p.gen))
             return;
         if (YieldedAtOrAfter(p.eid, p.gen)) {
             AdvanceGen(g_endedGen, p.eid, p.gen);
-            UE_LOGI("[PROP-DRIVE] CLIENT END eid=%u gen=%u -- a hand took this generation over; "
-                    "closed, pose not applied", p.eid, static_cast<unsigned>(p.gen));
+            UE_LOGI("[PROP-DRIVE] CLIENT END eid=%u gen=%u -- this generation was yielded or closed here (a "
+                    "hand took it over, or this peer ended it); pose not applied", p.eid,
+                    static_cast<unsigned>(p.gen));
             return;
         }
         AdvanceGen(g_endedGen, p.eid, p.gen);
@@ -377,6 +387,12 @@ void OnEnd(const coop::net::PropDriveEndPayload& p) {
     }
     g_drives.erase(it);
     AdvanceGen(g_endedGen, p.eid, p.gen);
+}
+
+void CloseGen(uint32_t eid, uint8_t gen) {
+    UE_ASSERT_GAME_THREAD("prop_drive_stream::CloseGen");
+    AdvanceGen(g_endedGen, eid, gen);
+    AdvanceGen(g_yieldedGen, eid, gen);
 }
 
 bool IsParked(void* actor) {
