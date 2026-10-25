@@ -21,6 +21,7 @@
 #include "coop/creatures/npc_sync.h"
 #include "coop/world/creature_event_relay.h"  // OnMirrorBound: the host's event count for a new mirror
 #include "ue_wrap/core/call.h"
+#include "ue_wrap/core/fname_utils.h"
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/actors/kerfur.h"  // NeutralizeAiTimers
 #include "ue_wrap/actors/spawner_stamp.h"
@@ -89,10 +90,40 @@ constexpr MirrorTickRow kMirrorTicks[] = {
     {ue_wrap::profile::name::NpcClass_GeomOcta, true, nullptr},
 };
 
+constexpr size_t kMirrorTickCount = sizeof(kMirrorTicks) / sizeof(kMirrorTicks[0]);
+
+// The rows' class names as engine FNames, resolved once (as npc_mirror_brain_table resolves its tables'), so a class is
+// told from a row by two integers and no spawn renders a name. Null until every name has resolved.
+const R::FName* MirrorTickNames() {
+    static bool resolved = false;
+    static R::FName held[kMirrorTickCount];
+    if (!resolved) {
+        if (!ue_wrap::fname_utils::Resolved()) return nullptr;
+        for (size_t i = 0; i < kMirrorTickCount; ++i) {
+            held[i] = ue_wrap::fname_utils::StringToFName(kMirrorTicks[i].cls);
+            if (held[i].ComparisonIndex == 0 && held[i].Number == 0) return nullptr;
+        }
+        resolved = true;
+    }
+    return held;
+}
+
+// The row of the spawned actor's class, or null for a class with none (and, said once, while the names cannot yet be
+// resolved: such a class takes both ticks off, the default).
 const MirrorTickRow* MirrorTickRowOf(void* actor) {
+    const R::FName* names = MirrorTickNames();
+    if (!names) {
+        static bool said = false;
+        if (!said) {
+            said = true;
+            UE_LOGW("npc-sync[client OnSpawn]: the tick table's class names are not resolved -- a mirror takes both "
+                    "ticks off");
+        }
+        return nullptr;
+    }
     const R::FName& name = R::NameOf(R::ClassOf(actor));
-    for (const MirrorTickRow& row : kMirrorTicks)
-        if (R::NameEquals(name, row.cls)) return &row;
+    for (size_t i = 0; i < kMirrorTickCount; ++i)
+        if (name.ComparisonIndex == names[i].ComparisonIndex && name.Number == names[i].Number) return &kMirrorTicks[i];
     return nullptr;
 }
 
