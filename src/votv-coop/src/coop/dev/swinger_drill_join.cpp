@@ -40,6 +40,9 @@ Word g_word = Word::None;           // CLIENT: the host's word, once heard
 bool g_wordArmed = false;           // the word clock runs from the first PollWord of a life
 Clock::time_point g_wordSince{}, g_nextPoll{};
 
+bool g_armClockOn = false, g_armGaveUp = false;   // HOST: the arm's bound runs from its first try
+Clock::time_point g_armSince{}, g_armNext{};
+
 bool g_active = false;
 bool g_clockOn = false;   // the judge's bound runs from its first tick: the word may arrive before the drill arms
 std::wstring g_key;
@@ -215,7 +218,24 @@ void Tick(Clock::time_point now) {
     Finish(deg <= kSettleDeg && cm <= kSettleCm ? "PASS" : "FAIL", detail);
 }
 
+bool HostArmDue(coop::net::Session& session, Clock::time_point now) {
+    if (g_armGaveUp || !session.AnyWorldReadyPeer()) return false;
+    if (!g_armClockOn) {
+        g_armClockOn = true;
+        g_armSince = g_armNext = now;
+    }
+    if (now - g_armSince > kArmBoundMs) {
+        g_armGaveUp = true;
+        UE_LOGW("[SWING-DRILL] host INVALID: no non-lockable lid to watch after the bound");
+        return false;
+    }
+    if (now < g_armNext) return false;
+    g_armNext = now + kSampleEvery;
+    return true;
+}
+
 void Reset() {
+    g_armClockOn = g_armGaveUp = false;
     g_greeted.fill(false);
     g_word = Word::None;
     g_wordArmed = false;

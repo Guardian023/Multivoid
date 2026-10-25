@@ -31,6 +31,8 @@ inline constexpr float kSettleDeg = 3.f;
 inline constexpr float kSettleCm  = 5.f;
 inline constexpr auto  kSampleEvery = std::chrono::milliseconds(250);
 inline constexpr auto  kClientBound = std::chrono::seconds(60);
+// The host's lid census may stay empty this long after a peer's world-ready before the host calls the run INVALID.
+inline constexpr auto  kArmBoundMs  = std::chrono::milliseconds(60000);
 // A client that has heard no word this long after its first connected tick fails: a bound on a lost word, never a
 // wait the run depends on.
 inline constexpr auto  kWordBound   = std::chrono::seconds(240);
@@ -51,6 +53,11 @@ void NoteVerdict(const std::wstring& laneKey, const char* result, float fromArmD
 // (life1-FAIL, life1-INVALID, rest-at-start, door-unreadable, rest-closed).
 using SayFn = void (*)(const std::string&);
 void GreetReadySlots(coop::net::Session& session, SayFn say);
+
+// HOST: true on a tick when the host may try to arm its lid census: a peer's world is ready (the milestone the rig
+// waits on, as door_drill's) and kSampleEvery has passed since the last try. A try that finds no lid is asked again;
+// when kArmBoundMs has passed since the first try, it prints `host INVALID` once and is never true again.
+bool HostArmDue(coop::net::Session& session, std::chrono::steady_clock::time_point now);
 
 // The host's word as the client heard it.
 enum class Word : uint8_t { None, Go, Rest, Void };

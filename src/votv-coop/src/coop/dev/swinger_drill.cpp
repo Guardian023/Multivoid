@@ -171,6 +171,7 @@ void ArmWatch() {
         g_lids.push_back(std::move(l));
         Say("lid", g_lids.back(), r);
     }
+    if (g_lids.empty() && coop::roster::LocalIsHost()) return;   // not latched: the host retries (J::HostArmDue)
     g_armed = true;
     g_nextScan = Clock::now();
     UE_LOGI("[SWING-DRILL] %s armed: %zu non-lockable lid(s) watched", Role(), g_lids.size());
@@ -723,12 +724,14 @@ void Tick(coop::net::Session* session) {
     if (Rejoin() && Acts() && J::PollWord(kTag, Clock::now()) == J::Word::Void) EndActor();
     if (!SW::EnsureResolved()) return;
     if (!g_armed) {
-        // The host's world is up at once; a client's once its join is over.
-        if (!coop::roster::LocalIsHost() &&
-            (!coop::net_pump::HasAnnouncedWorldReady() ||
-             coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle))
+        // The host's once a peer's world is up and its lids exist (J::HostArmDue); a client's once its join is over.
+        const bool host = coop::roster::LocalIsHost();
+        if (host ? !J::HostArmDue(*session, Clock::now())
+                 : (!coop::net_pump::HasAnnouncedWorldReady() ||
+                    coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle))
             return;
         ArmWatch();
+        if (!g_armed) return;   // the host found no lid: it asks again on a later tick
         if (!Rejoin()) MarkChat();   // the rejoin arm tells a past life's rows by their tier instead
     }
     const Clock::time_point now = Clock::now();
