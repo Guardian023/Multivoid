@@ -66,6 +66,9 @@ bool Fires();
 bool RelayJudged();
 // The join arm's client 1: the joiner. Its first life stands away; its second joins mid-attack.
 bool IsJoiner();
+// The join arm's walker (the observer, slot 2) has its puppet registered on this peer: the edge the join arm's waits
+// for the Octa count from, since the host spawns only once the observer has booted and walked into place.
+bool ObserverRegistered();
 const char* FiringArmName();
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
 // own spawn verb with the spawn menu's Octa row, whose Octa the host's EX catch enrols at the drain.

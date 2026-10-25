@@ -62,6 +62,8 @@ Arm ArmOf() {
 bool Fires() { return ArmOf() == Arm::Measure || RelayJudged(); }
 bool RelayJudged() { return ArmOf() == Arm::Attack || ArmOf() == Arm::Join; }
 bool IsJoiner() { return ArmOf() == Arm::Join && coop::players::Registry::Get().LocalPeerId() == 1; }
+// The join arm's observer is the walker, client 2 (slot 2): true once its puppet is registered on this peer.
+bool ObserverRegistered() { return coop::players::Registry::Get().Puppet(2) != nullptr; }
 const char* FiringArmName() { return ArmOf() == Arm::Join ? "join" : ArmOf() == Arm::Attack ? "attack" : "measure"; }
 
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
@@ -230,7 +232,10 @@ void ClientFindMirror() {
     void* octa = FirstInstance(kOctaClass);
     const uint32_t eid = NpcEidOf(octa);
     if (!eid) {
-        if (Expired(kBirthsBoundMs)) Fail("the host's Octa never materialised as a mirror on this client");
+        // The join arm's host spawns only after the observer has booted, joined and walked into place: the bound counts
+        // from the observer's puppet first registering here, the phase that leads to the mirror.
+        if (IsJoiner() && !ObserverRegistered()) g_stepMs = coop::net::NowMs();
+        else if (Expired(kBirthsBoundMs)) Fail("the host's Octa never materialised as a mirror on this client");
         return;
     }
     if (ArmOf() == Arm::Births) {

@@ -228,7 +228,10 @@ void HostPlace(void* me) {
     FVector hp{}, pp{};
     if (!E::TryGetActorLocation(me, hp)) return;
     if (!puppet || !E::TryGetActorLocation(puppet, pp)) {
-        if (Expired(kBirthsBoundMs)) Fail("the client's puppet never resolved on the host");
+        // The join arm's walker is the observer, which boots after the joiner: the bound counts from its puppet first
+        // registering here, not from the joiner's world-ready.
+        if (ArmOf() == Arm::Join && !ObserverRegistered()) g_stepMs = coop::net::NowMs();
+        else if (Expired(kBirthsBoundMs)) Fail("the client's puppet never resolved on the host");
         return;
     }
     if (HostWalks()) {
