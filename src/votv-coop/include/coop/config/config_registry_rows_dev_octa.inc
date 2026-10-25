@@ -1,7 +1,17 @@
-// coop/config/config_registry_rows_dev_octa.inc -- the [dev] rows of the Geom Octa lane: its drill and its red arm.
+// coop/config/config_registry_rows_dev_octa.inc -- the [dev] rows of the Geom Octa lane: its drill and its red arms.
 // Included by config_registry_rows_dev.inc after the explosion rows, before the PI and NB rows, which stay the last
 // ones, so each row keeps its place in every expansion of the list. The entry forms are config_registry_rows.inc's.
 
-CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_parking", "VOTVCOOP_OCTA_RED",
-    "Developer red arm: never set. no_parking (CLIENT): the Octa's graph watch is left unregistered, so its mirror "
-    "runs its own wander and the Octa drill's measure arm must show it (the client logs `[OCTA] mirror ran move`).")
+CFG_ENUM(octa_drill, "octa_drill", "dev", "off", "off|births|measure", "VOTVCOOP_OCTA_DRILL",
+    "Drill, the Geom Octa lane's arms; set on BOTH peers, on a fresh host world. births: the host calls the "
+    "gamemode's own spawn verb with the spawn menu's Octa row, the call the night roll shares, and must enrol the "
+    "Octa; the client calls the night roll's event, which must be refused, and must materialise the Octa's mirror. "
+    "measure: the host spawns an Octa on the ground 1500 cm away and stands still; the client walks to its mirror "
+    "with the director, stands until three host blasts have reached its explosion lane, and walks out; the host "
+    "prints measure DONE at the first idle after three verdicts. A measurement of the Octa's liveness with no relay; "
+    "it needs damage_probe=1, and both players hold startInvinc for the arm's span.")
+CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_source|no_parking", "VOTVCOOP_OCTA_RED",
+    "Developer red arm: never set. no_source (HOST): the gamemode's row of the EX spawn catch is skipped, so the "
+    "births arm must fail: the host enrols nothing and the client sees no mirror. no_parking (CLIENT): the Octa's "
+    "graph watch is left unregistered, so its mirror runs its own wander and the measure arm must show it (the "
+    "client logs `[OCTA] mirror ran move`).")

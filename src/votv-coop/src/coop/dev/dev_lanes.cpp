@@ -47,6 +47,7 @@
 #include "coop/dev/laptop_power_drill.h"  // [dev] the laptop's power pressed on each peer, its replay silent
 #include "coop/dev/laptop_tab_drill.h"  // [dev] everyone sees the tab the PC's user is on, judged on the viewing peer
 #include "coop/dev/explosion_drill.h"  // [dev] the explosion lane's drill: dissolve, apply, coast, malformed spawns
+#include "coop/dev/octa_drill.h"  // [dev] the Geom Octa lane's drill: the host's births and the Octa's measured liveness
 #include "coop/dev/fire_ignite_drill.h"  // [dev] a client's light on a salt rocket is performed by the host and flown
 #include "coop/dev/cord_drill.h"  // [dev] cords plugged on both peers, judged by the host's word
 #include "coop/dev/grid_drill.h"  // [dev] the power grid: a client's presses and repair, the host's break and lockout
@@ -220,6 +221,7 @@ void EndSession() {
     coop::dev::laptop_power_drill::OnDisconnect();  // [dev] a rejoin's peers press again
     coop::dev::laptop_tab_drill::OnDisconnect();  // [dev] a rejoin's peers run their legs again
     coop::dev::explosion_drill::OnDisconnect();  // [dev] a rejoin's peers run their halves and arms again
+    coop::dev::octa_drill::OnDisconnect();  // [dev] the arm's state back to its start, the guard put back
     coop::dev::fire_ignite_drill::OnDisconnect();  // [dev] a rejoin's peers run their steps again
     coop::dev::cord_drill::OnDisconnect();  // [dev] the client's steps start over; the host keeps its cast for a rejoin after its seven arms
     coop::dev::grid_drill::OnDisconnect();  // [dev] the panel and the legs belong to one world
@@ -330,6 +332,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::laptop_power_drill::Tick(&session);  // [dev] the laptop power drill (a bool read when off)
     coop::dev::laptop_tab_drill::Tick(&session);  // [dev] the PC tab drill (a latched string compare when off)
     coop::dev::explosion_drill::Tick(&session);  // [dev] the explosion lane's drill: dissolve's world half, the other arms' ticks (a latched string compare when off)
+    coop::dev::octa_drill::Tick(&session);  // [dev] the Geom Octa drill (a latched string compare when off)
     coop::dev::fire_ignite_drill::Tick();  // [dev] the salt rocket ignite drill (a latched enum read when off)
     coop::dev::cord_drill::Tick();  // [dev] the cord drill (a latched read when off)
     coop::dev::grid_drill::Tick(&session);  // [dev] the power grid drill (a latched read when off)

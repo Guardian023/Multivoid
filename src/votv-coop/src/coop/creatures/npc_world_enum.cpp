@@ -8,6 +8,8 @@
 
 #include "coop/creatures/npc_world_enum.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
@@ -221,6 +223,10 @@ void OnBeginDeferredExSpawn(void* /*context*/, void* srcObj, void* spawned) {
     for (const ExSpawnSource& e : kExSpawnSources)
         if (_wcsicmp(srcName.c_str(), e.cls) == 0) { source = &e; break; }
     if (!source) return;
+    // [dev] octa_red=no_source, the Octa drill's red arm: the gamemode's row is left out of the catch.
+    static const bool s_noGamemodeSource =
+        coop::config::ResolveEnum(::coop::config_registry::rows::octa_red) == "no_source";
+    if (s_noGamemodeSource && _wcsicmp(srcName.c_str(), L"mainGamemode_C") == 0) return;
     void* cls = R::ClassOf(spawned);
     if (!cls) return;
     // A scoped source's outputs first: one render, before the world-actor list's per-entry renders.
