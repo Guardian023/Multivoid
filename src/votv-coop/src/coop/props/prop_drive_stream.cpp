@@ -8,6 +8,7 @@
 #include "coop/element/registry.h"             // IsCorrectionStale: the eid's bound actor
 #include "coop/props/active_drive.h"
 #include "coop/props/prop_drive_host.h"        // InAHand: who is a hand
+#include "coop/props/prop_child_release.h"      // OnParentReleased: a jointed door waits for its parent
 #include "coop/props/prop_key_index.h"  // Find: the index only, never the cold walk
 #include "coop/props/prop_park.h"             // Park / Unpark: the parked prop, and a Character welded on it
 #include "coop/props/prop_syncer.h"           // SkipsHostPose: the prop this peer authors
@@ -118,6 +119,7 @@ void YieldToHand(uint32_t eid, uint8_t gen, Drive* dr, void* actor) {
     if (dr && actor && IsOwnHand(actor)) GiveBackPhysics(*dr, actor);
     AdvanceGen(g_endedGen, eid, gen);
     AdvanceGen(g_yieldedGen, eid, gen);
+    if (actor) coop::prop_child_release::OnParentReleased(actor);   // the stream let go: a waiting door goes next
 }
 bool YieldedAtOrAfter(uint32_t eid, uint8_t gen) {
     auto y = g_yieldedGen.find(eid);
@@ -171,6 +173,7 @@ void ApplyEnd(void* actor, const coop::net::PropDriveEndPayload& p, bool parkedH
     }
     // The park is over, whatever the flags left the body: a Character it stopped moves again.
     coop::prop_park::Unpark(actor, /*mesh=*/nullptr, /*rootSimulates=*/false);
+    coop::prop_child_release::OnParentReleased(actor);   // a door jointed to it was waiting for this
 }
 
 // One pose of a driven prop: parks the copy on a new generation's first, a lerp target after. The client's
@@ -363,6 +366,7 @@ void TickApplyAndDrive(coop::net::Session& s) {
         }
         it = g_pendingEnd.erase(it);
     }
+    coop::prop_child_release::Tick(nowMs);   // a waiting door's liveness and its failure bound
 }
 
 void OnEnd(const coop::net::PropDriveEndPayload& p) {
@@ -451,6 +455,7 @@ bool IsCorrectionStale(uint32_t eid, uint8_t gen, bool open) {
 
 void OnDisconnect() {
     for (auto& kv : g_drives) GiveBackPhysics(kv.second, kv.second.d.LiveActor());
+    coop::prop_child_release::OnDisconnect();   // the waiting doors are given back with their parents
     g_drives.clear();
     g_endedGen.clear();
     g_endOnActor.clear();

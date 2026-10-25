@@ -22,6 +22,7 @@
 #include "coop/props/pile_look.h"
 #include "coop/props/prop_drive_host.h"    // OverrideClientSyncer: a release that writes the copy ends a client's row on it
 #include "coop/props/prop_drive_stream.h"  // IsParked: the host's channel owns a parked copy
+#include "coop/props/prop_child_release.h"  // Defer: a jointed door waits for its parent
 #include "coop/props/prop_park.h"  // Park / Unpark: a held prop, and a Character welded on it
 #include "coop/props/prop_echo_suppress.h"
 #include "coop/props/prop_element_tracker.h"
@@ -320,7 +321,15 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
                 "the host's pose stream and its ToPile convert place it",
                 payload.elementId, linSpeed);
     } else if (meshToActOn && ue_wrap::swinger::IsSwinger(propActor)) {
-        coop::prop_park::Unpark(propActor, meshToActOn, /*rootSimulates=*/true);  // a door: no throw
+        // A door: no throw. Jointed to a parent the stream still has parked, it is let go after the parent
+        // (prop_child_release.h), not dragged by it.
+        void* const parent = E::ParentActorOf(propActor);
+        if (parent && coop::prop_drive_stream::IsParked(parent))
+            coop::prop_child_release::Defer(propActor, parent);
+        else {
+            coop::prop_child_release::Forget(propActor);   // a wait left by an earlier release is stale
+            coop::prop_park::Unpark(propActor, meshToActOn, /*rootSimulates=*/true);
+        }
     } else if (meshToActOn) {
         // Simulate first, then the velocities: a kinematic body ignores a velocity write.
         coop::prop_park::Unpark(propActor, meshToActOn, /*rootSimulates=*/true);
