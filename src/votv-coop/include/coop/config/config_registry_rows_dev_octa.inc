@@ -15,3 +15,9 @@ CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_source|no_parking", "VOTVCO
     "births arm must fail: the host enrols nothing and the client sees no mirror. no_parking (CLIENT): the Octa's "
     "graph watch is left unregistered, so its mirror runs its own wander and the measure arm must show it (the "
     "client logs `[OCTA] mirror ran move`).")
+CFG_ENUM(octa_measure_target, "octa_measure_target", "dev", "client", "client|host", "VOTVCOOP_OCTA_MEASURE_TARGET",
+    "Control for the Octa drill's measure arm, set on BOTH peers: who walks into the Octa's sphere. client (the "
+    "default): the client does, as the arm says. host: the host's own director walks the host player to the Octa "
+    "(the same 500 cm reach, three blasts read from the host's own explosion capture count, the same walk-out) and "
+    "the client stands where it spawned; the done line is unchanged. It tells an Octa that never aggros from one that "
+    "never sees a puppet.")
