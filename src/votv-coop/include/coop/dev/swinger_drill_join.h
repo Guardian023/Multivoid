@@ -48,7 +48,7 @@ void NoteVerdict(const std::wstring& laneKey, const char* result, float fromArmD
 
 // HOST: for each client slot that became world-ready since the last call, say its word through `say`: `go` with no
 // verdict yet; `rest` with the pose of the verdict's door after a PASS that moved it; else `void <token>`
-// (life1-FAIL, life1-INVALID, rest-at-start, door-unreadable).
+// (life1-FAIL, life1-INVALID, rest-at-start, door-unreadable, rest-closed).
 using SayFn = void (*)(const std::string&);
 void GreetReadySlots(coop::net::Session& session, SayFn say);
 

@@ -39,18 +39,26 @@ struct Pending {
     std::chrono::steady_clock::time_point deadline;
 };
 
-// The receive boundary's bound on a store this peer's messages grow (every such store has one): the host sends one
-// pose per open lid, a few dozen at most, and a key is parked
-// without bound otherwise. A new key past it is refused, said once per session.
+// The receive boundary's bound on a store this peer's messages grow (every such store has one): the host sends
+// one pose per open lid, a few dozen at most, and a key is parked without bound otherwise. A new key past it is
+// refused, said once per session.
 constexpr size_t kPendingCap = 256;
 std::unordered_map<std::wstring, Pending> g_pending;
 uint64_t g_lastPass = 0;
 bool g_capSaid = false;
 // How each key's last pose ended: true placed, false dropped (a stream or a drag owned the lid, the wait ran out,
-// or the pending cap refused it). Read by the dev query only (COLD: one write per pose, bounded by the world's lids
-// and kPendingCap, cleared with the session; the shape of remote_prop.h's dev::).
+// or the pending cap refused it). Read by the dev query only (COLD: one write per pose). A key the host invents
+// is recorded too, so an insert that would grow it past kEndedCap clears it first (the shape of
+// unresolved_pose_ledger): the dev reader loses only old outcomes. Cleared with the session.
+constexpr size_t kEndedCap = 512;
 std::unordered_map<std::wstring, bool> g_ended;
-std::unordered_set<std::wstring> g_failSaid;   // the keys whose failed placement has been said
+std::unordered_set<std::wstring> g_placeSaid;   // the keys whose failed teleport has been said
+std::unordered_set<std::wstring> g_zeroSaid;    // the keys whose failed velocity zeroing has been said
+
+void Ended(const std::wstring& key, bool placed) {
+    if (g_ended.size() >= kEndedCap && g_ended.find(key) == g_ended.end()) g_ended.clear();
+    g_ended[key] = placed;
+}
 
 enum class Try { Applied, Owned, Wait };
 
@@ -65,12 +73,14 @@ Try TryApply(const std::wstring& key, const Rest& rest) {
                        ue_wrap::engine::SetActorRotation(lid, rest.rot);
     const bool still = ue_wrap::engine::SetActorRootPhysicsVelocity(lid, ue_wrap::FVector{}, ue_wrap::FVector{});
     if (!moved) {
-        // Not placed: kept and retried on the next pass, and the lane's drop rule ends it with a warning naming the key.
-        if (g_failSaid.insert(key).second)
-            UE_LOGW("swinger_join_pose: '%ls' could not be placed (the teleport failed) -- retried each index pass", key.c_str());
+        // Not placed: kept and retried on the next pass, and the lane's drop rule ends it with a warning that
+        // names this cause.
+        if (g_placeSaid.insert(key).second)
+            UE_LOGW("swinger_join_pose: '%ls' could not be placed (the teleport failed) -- retried each index pass",
+                    key.c_str());
         return Try::Wait;
     }
-    if (!still && g_failSaid.insert(key).second)
+    if (!still && g_zeroSaid.insert(key).second)
         UE_LOGW("swinger_join_pose: '%ls' placed, but its velocity could not be zeroed", key.c_str());
     UE_LOGI("swinger_join_pose: '%ls' placed at (%.1f, %.1f, %.1f) rot(%.1f, %.1f, %.1f)", key.c_str(),
             rest.loc.X, rest.loc.Y, rest.loc.Z, rest.rot.Pitch, rest.rot.Yaw, rest.rot.Roll);
@@ -116,12 +126,13 @@ void OnReliable(const coop::net::SwingerRestPosePayload& p) {
     switch (TryApply(key, rest)) {
     case Try::Applied:
         g_pending.erase(key);
-        g_ended[key] = true;
+        Ended(key, true);
         return;
     case Try::Owned:
         g_pending.erase(key);
-        g_ended[key] = false;
-        UE_LOGI("swinger_join_pose: '%ls' is driven here now -- its stream owns it, the rest pose is dropped", key.c_str());
+        Ended(key, false);
+        UE_LOGI("swinger_join_pose: '%ls' is driven here now -- its stream owns it, the rest pose is dropped",
+                key.c_str());
         return;
     case Try::Wait:
         break;
@@ -131,7 +142,7 @@ void OnReliable(const coop::net::SwingerRestPosePayload& p) {
             g_capSaid = true;
             UE_LOGW("swinger_join_pose: %zu rest poses already wait -- '%ls' refused", kPendingCap, key.c_str());
         }
-        g_ended[key] = false;
+        Ended(key, false);
         return;
     }
     g_ended.erase(key);
@@ -148,17 +159,19 @@ void Tick() {
     const auto now = std::chrono::steady_clock::now();
     for (auto it = g_pending.begin(); it != g_pending.end();) {
         if (const Try t = TryApply(it->first, it->second.rest); t != Try::Wait) {
-            g_ended[it->first] = t == Try::Applied;
+            Ended(it->first, t == Try::Applied);
             it = g_pending.erase(it);
         } else if (coop::interactable_sync::ContainerWaitSettled(it->second.queuedAt)) {
-            UE_LOGW("swinger_join_pose: '%ls' rest pose dropped -- the container index settled and this peer's lid "
-                    "is absent or never read open", it->first.c_str());
-            g_ended[it->first] = false;
+            UE_LOGW("swinger_join_pose: '%ls' rest pose dropped -- the container index settled and %s",
+                    it->first.c_str(),
+                    g_placeSaid.count(it->first) ? "the teleport onto this peer's lid kept failing"
+                                                 : "this peer's lid is absent or never read open");
+            Ended(it->first, false);
             it = g_pending.erase(it);
         } else if (now >= it->second.deadline) {
             UE_LOGW("swinger_join_pose: '%ls' rest pose hit the backstop -- the container index never settled",
                     it->first.c_str());
-            g_ended[it->first] = false;
+            Ended(it->first, false);
             it = g_pending.erase(it);
         } else {
             ++it;
@@ -167,8 +180,10 @@ void Tick() {
 }
 
 void Forget(const std::wstring& key) {
-    if (g_pending.empty() || g_pending.erase(key) == 0) return;
-    g_ended[key] = false;
+    if (g_pending.empty()) return;
+    UE_ASSERT_GAME_THREAD("swinger_join_pose::Forget");
+    if (g_pending.erase(key) == 0) return;
+    Ended(key, false);
     UE_LOGI("swinger_join_pose: '%ls' is streamed or released now -- the connect pose is older and is dropped",
             key.c_str());
 }
@@ -184,7 +199,8 @@ State Outcome(const std::wstring& key) {
 void OnDisconnect() {
     g_pending.clear();
     g_ended.clear();
-    g_failSaid.clear();
+    g_placeSaid.clear();
+    g_zeroSaid.clear();
     g_lastPass = 0;
     g_capSaid = false;
 }

@@ -62,6 +62,7 @@ std::string GreetingWord(int slot) {
     if (!g_haveVerdict) return "go";
     if (g_verdictResult == "INVALID") return "void life1-INVALID";
     if (g_verdictResult != "PASS") return "void life1-FAIL";
+    // A joiner's copy starts at the hinge default, as the host's did at its arm: the game saves no swinger pose.
     if (g_verdictFromArmDeg <= kSettleDeg) return "void rest-at-start";
     void* const door = g_verdictKey.empty() ? nullptr : coop::interactable_sync::ContainerActor(g_verdictKey);
     void* const mesh = door ? PR::GetStaticMesh(door) : nullptr;
@@ -70,6 +71,9 @@ std::string GreetingWord(int slot) {
         UE_LOGW("[SWING-DRILL] host cannot read the verdict's door for slot %d -- says void", slot);
         return "void door-unreadable";
     }
+    // The connect snapshot sends no pose for a lid that reads closed, so a closed door has no pose to wait for.
+    bool open = false;
+    if (!ue_wrap::swinger::TryReadOpen(door, open) || !open) return "void rest-closed";
     const ue_wrap::FRotator w = E::GetComponentWorldRotation(mesh);
     char line[160];
     std::snprintf(line, sizeof(line), "rest %ls %.2f %.2f %.2f %.1f %.1f %.1f", g_verdictKey.c_str(), w.Pitch, w.Yaw,

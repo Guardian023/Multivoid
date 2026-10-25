@@ -707,10 +707,11 @@ bool IsEnabled() { return ArmOf() != Arm::Off; }
 
 void Tick(coop::net::Session* session) {
     if (!IsEnabled() || !session || !session->connected()) return;
-    if (!SW::EnsureResolved()) return;
-    // The rejoin client reads the host's word from its first connected tick, ahead of the arm gate: a live row fades
-    // after a few seconds and the join takes longer. A `void` word or the word bound ends this life.
+    // The rejoin client reads the host's word from its first connected tick, ahead of the class resolve and the arm
+    // gate: a live row fades after a few seconds and the join takes longer. A `void` word or the word bound ends
+    // this life.
     if (Rejoin() && Acts() && J::PollWord(kTag, Clock::now()) == J::Word::Void) EndActor();
+    if (!SW::EnsureResolved()) return;
     if (!g_armed) {
         // The host's world is up at once; a client's once its join is over.
         if (!coop::roster::LocalIsHost() &&

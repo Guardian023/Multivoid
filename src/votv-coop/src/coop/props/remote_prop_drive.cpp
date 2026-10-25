@@ -132,9 +132,10 @@ bool LocalDragsDoor(void* door, int slot, uint16_t gen) {
 
 void* ResolveKeyedActor(const std::wstring& keyW) {
     // A dragged swinger streams under the container lane's key, and as a child actor it is not in the prop
-    // key index. The portable token is minted only by element::PortableWireKey ("mv_" + hex, portable_identity.cpp),
-    // and the other keys this mod mints start differently (cs_ and rk_ in prop_synth_key.cpp, mvhook_ in hook_anchor.cpp),
-    // so a key that starts with it is not one we made for a prop and skips that index, whose miss runs a catch-up drain.
+    // key index. The portable token is minted only by element::PortableWireKey ("mv_" + hex,
+    // portable_identity.cpp), and the other keys this mod mints start differently (cs_ and rk_ in
+    // prop_synth_key.cpp, mvhook_ in hook_anchor.cpp), so a key that starts with it is not one we made for a
+    // prop and skips that index, whose miss runs a catch-up drain.
     // A game Key is the game's own and could in principle start with it; the skip trades that for the miss's drain.
     if (keyW.rfind(L"mv_", 0) == 0) return coop::interactable_sync::ContainerActor(keyW);
     void* prop = coop::prop_key_index::Find(keyW);
