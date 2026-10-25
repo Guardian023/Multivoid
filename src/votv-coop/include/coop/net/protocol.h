@@ -4044,6 +4044,14 @@ inline bool ValidatePose(const PoseSnapshot& p) {
     return true;
 }
 
+// The world bounds of a held or driven prop's pose, for a pose already known finite: |xyz| within kMaxCoord and
+// every angle a canonical axis in [-180, 180] (senders normalise at the wire boundary). One rule for a client's
+// PropPose and for the rows of a client's PropDrivePose batch. true == in bounds.
+inline bool PropPoseInBounds(const PropPoseSnapshot& p) {
+    if (std::fabs(p.x) > kMaxCoord || std::fabs(p.y) > kMaxCoord || std::fabs(p.z) > kMaxCoord) return false;
+    return std::fabs(p.pitch) <= 180.f && std::fabs(p.yaw) <= 180.f && std::fabs(p.roll) <= 180.f;
+}
+
 // Reject a clock sample no clock can hold, BEFORE it is stored: a NaN or absurd value written into the
 // cycle reaches the sun and moon rotation (a black sky, a rotator assert). The accumulators are cycle
 // units, 4500 a day by default, and `day` goes below zero while the game's rewind runs the clock back;

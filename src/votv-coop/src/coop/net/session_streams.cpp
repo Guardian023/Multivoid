@@ -231,12 +231,7 @@ void Session::StoreStreamPacket(MsgType type, int routeSlot, int peerSlot,
         const float vals[6] = {pkt.pose.x, pkt.pose.y, pkt.pose.z,
                                pkt.pose.pitch, pkt.pose.yaw, pkt.pose.roll};
         for (float v : vals) if (!std::isfinite(v)) return;
-        if (std::fabs(pkt.pose.x) > kMaxCoord ||
-            std::fabs(pkt.pose.y) > kMaxCoord ||
-            std::fabs(pkt.pose.z) > kMaxCoord) return;
-        if (std::fabs(pkt.pose.pitch) > 180.f ||
-            std::fabs(pkt.pose.yaw)   > 180.f ||
-            std::fabs(pkt.pose.roll)  > 180.f) return;
+        if (!PropPoseInBounds(pkt.pose)) return;
         if (pkt.pose.key.len > 31) return;
         {
             std::lock_guard<std::mutex> lk(remoteMutex_);

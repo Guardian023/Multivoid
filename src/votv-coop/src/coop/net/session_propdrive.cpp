@@ -74,12 +74,13 @@ void Session::StoreRemotePropDriveBatch(int originSlot, const void* data, int le
                     static_cast<const uint8_t*>(data) + sizeof(PacketHeader) + sizeof(EntityPoseBatchHeader),
                     static_cast<size_t>(count) * sizeof(PropPoseSnapshot));
     // Strict on format: a batch carrying a non-finite pose, an over-long key or an eid of zero is
-    // refused whole rather than filtered.
+    // refused whole rather than filtered; on the host a client's rows also meet the bounds a client's
+    // held-prop pose meets (PropPoseInBounds), since a client's rows reach the host's copy of the prop.
     for (int i = 0; i < count; ++i) {
         const PropPoseSnapshot& e = batch[i];
         if (!std::isfinite(e.x) || !std::isfinite(e.y) || !std::isfinite(e.z) ||
             !std::isfinite(e.pitch) || !std::isfinite(e.yaw) || !std::isfinite(e.roll) ||
-            e.key.len > sizeof(e.key.data) || e.elementId == 0u) {
+            e.key.len > sizeof(e.key.data) || e.elementId == 0u || (onHost && !PropPoseInBounds(e))) {
             static uint32_t sMalformed = 0;
             if (++sMalformed <= 3 || (sMalformed % 100) == 0)
                 UE_LOGW("propdrive: malformed entry in a %d-entry batch -- dropping the batch (#%u)",
