@@ -30,7 +30,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // This file is past the 1500-line hard cap and stays there: it is the single-feature exception the
 // rule names. One wire format, whose enum, payload structs and static_asserts are read together;
 // splitting it would put a kind's number in one file and its bytes in another.
-inline constexpr uint16_t kProtocolVersion = 252;
+inline constexpr uint16_t kProtocolVersion = 253;
 
 // Default LAN port (overridable via multivoid.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -1162,6 +1162,14 @@ enum class ReliableKind : uint8_t {
     // client at the host's receive edge; never relayed; not pre-world; lost only with the session. Late join:
     // none. PropSyncAnswerPayload.
     PropSyncAnswer = 202,
+    // HOST->CLIENT: one decision of a Geom Octa, to be replayed into the client's own Blueprint (coop/creatures/
+    // geom_octa_relay): op 0, an Aggro, the Octa took a target (the replay runs minSphere's begin-overlap handler with
+    // the target's counterpart here), carrying the host's verdict count as the base; op 1, a FireVerdict, the host's
+    // number n for one fire-finish and whether the Octa fires again. The Octa is the NPC element `octaEid`. Rides the
+    // spawn lane (Bulk), so an event is ordered behind its Octa's EntitySpawn; the host sends none for an Octa whose
+    // EntitySpawn it has not sent. Host-authoritative: a client's copy is refused at the host's receive edge; never
+    // relayed; not pre-world. Late join: none yet (a join re-send is the join increment's). GeomOctaEventPayload.
+    GeomOctaEvent = 200,
 };
 
 #pragma pack(push, 1)
@@ -3790,6 +3798,29 @@ struct CreatureEventActivePayload {
 static_assert(sizeof(CreatureEventActivePayload) == 5, "CreatureEventActivePayload must be 5 bytes");
 static_assert(sizeof(CreatureEventActivePayload) <= 256 - 20 - 8,
               "CreatureEventActivePayload must fit in one reliable datagram");
+
+// A Geom Octa's decision (GeomOctaEvent). `op`: 0 Aggro, 1 FireVerdict. `verdictNo`: an Aggro's base (the host's count
+// of verdicts sent for this Octa, for its life) or a FireVerdict's own number; any uint32, the receiver pairs by
+// modular difference. `targetKind`: 0 none, 1 a player slot, 2 an element; `target` is the slot (below kMaxPeers) or
+// the element id (host-allocated), and both are zero on an op 1 and for kind 0. `refire` is the FireVerdict's answer
+// (1: the Octa fires again) and zero on an Aggro.
+inline constexpr uint8_t kGeomOctaOpAggro   = 0;
+inline constexpr uint8_t kGeomOctaOpVerdict = 1;
+inline constexpr uint8_t kGeomOctaTargetNone    = 0;
+inline constexpr uint8_t kGeomOctaTargetSlot    = 1;
+inline constexpr uint8_t kGeomOctaTargetElement = 2;
+
+struct GeomOctaEventPayload {
+    uint8_t  op;
+    uint32_t octaEid;      // the Octa's NPC element id (host-allocated)
+    uint32_t verdictNo;
+    uint8_t  targetKind;
+    uint32_t target;
+    uint8_t  refire;
+};
+static_assert(sizeof(GeomOctaEventPayload) == 15, "GeomOctaEventPayload must be 15 bytes");
+static_assert(sizeof(GeomOctaEventPayload) <= 256 - 20 - 8,
+              "GeomOctaEventPayload must fit in one reliable datagram");
 
 // A client's hit on a creature (CreatureHitIntent): the creature's host-allocated element id, the verb, the damage the
 // client's swing claimed, the point the hit struck and the hit's impulse, in world centimetres. The host judges all of

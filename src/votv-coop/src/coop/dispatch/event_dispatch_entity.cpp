@@ -1,6 +1,6 @@
 // coop/dispatch/event_dispatch_entity.cpp -- the entity-lifecycle and held-item reliable kinds:
 // PropStickState, PropRelease, PropSpawn, PropDestroy, PropConvert, PropSnapPos, the
-// owner-entity lane, EntitySpawn and EntityDestroy, the world-actor pair, PyramidGather and
+// owner-entity lane, EntitySpawn and EntityDestroy, GeomOctaEvent, the world-actor pair, PyramidGather and
 // ItemActivate. Each case validates at the trust boundary and hands off to its module. The driven
 // prop's kinds are in event_dispatch_prop_drive.cpp. See coop/dispatch/event_dispatch.h.
 
@@ -20,6 +20,7 @@
 #include "coop/player/players_registry.h"
 #include "coop/world/world_actor_sync.h"  // the world-actor mirror receivers
 #include "coop/creatures/piramid_sync.h"      // the PyramidGather receiver
+#include "coop/creatures/geom_octa_relay.h"   // the Geom Octa's decisions replayed on a client
 #include "coop/props/prop_save_data.h"    // the per-prop save record lane
 #include "coop/props/prop_stick_sync.h"
 #include "coop/props/prop_drive_stream.h"  // the driven-prop correction gate
@@ -525,6 +526,19 @@ bool HandleEntityEvent(net::Session& session,
         ue_wrap::game_thread::Post([pCopy] {
             ::coop::npc_mirror::OnEntityDestroy(pCopy);
         });
+        break;
+    }
+    case net::ReliableKind::GeomOctaEvent: {
+        // A host Geom Octa decision. Exact length (a stated departure from the `<` cases: the payload has no tail);
+        // geom_octa_relay does the per-field validation on the game thread.
+        if (msg.payloadLen != sizeof(net::GeomOctaEventPayload)) {
+            UE_LOGW("event_feed: GeomOctaEvent payload is %zu bytes, not %zu -- dropping",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::GeomOctaEventPayload));
+            break;
+        }
+        net::GeomOctaEventPayload p{};
+        std::memcpy(&p, msg.payload, sizeof(p));
+        ue_wrap::game_thread::Post([p] { ::coop::geom_octa_relay::OnEvent(p); });
         break;
     }
     case net::ReliableKind::WorldActorSpawn: {

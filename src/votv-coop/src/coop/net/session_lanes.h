@@ -98,6 +98,9 @@ inline Lane LaneForKind(ReliableKind k) {
     // destroy. Host-authoritative: not relayable, not pre-world (the snapshot at world-ready carries it).
     // Matches MTA's one ordered channel (reference/mtasa-blue/Server/mods/deathmatch/logic/packets/CPacket.h:43).
     case ReliableKind::CreatureEventActive: return Lane::Bulk;
+    // A Geom Octa's decision rides the same lane for the same reason: its replay needs the Octa's mirror, which its
+    // EntitySpawn builds, and the host sends none before that spawn. Host-authoritative: not relayable, not pre-world.
+    case ReliableKind::GeomOctaEvent: return Lane::Bulk;
     // The world-actor pair shares the spawn lane for the same reason. Host-authoritative: not
     // relayable, not pre-world.
     case ReliableKind::WorldActorSpawn:   return Lane::Bulk;
