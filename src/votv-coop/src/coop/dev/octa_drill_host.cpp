@@ -79,8 +79,8 @@ void HostWait(coop::net::Session* s, void* me) {
         Fail("damage_probe=1 is required: each blast must still log its [DMG] line");
         return;
     }
-    if (ArmOf() == Arm::Attack && HostWalks()) {
-        Fail("the attack arm judges the client's relay: octa_measure_target=host belongs to measure");
+    if (RelayJudged() && HostWalks()) {
+        Fail("the attack and join arms judge the client's relay: octa_measure_target=host belongs to measure");
         return;
     }
     if (!Guard()) {
@@ -323,7 +323,11 @@ void HostWatchMeasure() {
     // An idle after the third verdict, with the puppet out of the sphere. The lane keeps the idle count at the moment
     // it counted the third verdict, so an idle between that and this poll is not absorbed.
     if (c.windowReached && c.idle > c.idleAtWindow && haveBoth && dist > kSphereCm) {
-        if (ArmOf() == Arm::Attack)
+        if (ArmOf() == Arm::Join)
+            UE_LOGI("[OCTA-DRILL] join DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
+                    c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
+                    c.laser - g_base.laser, Now());
+        else if (ArmOf() == Arm::Attack)
             UE_LOGI("[OCTA-DRILL] attack DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
                     c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
                     c.laser - g_base.laser, Now());

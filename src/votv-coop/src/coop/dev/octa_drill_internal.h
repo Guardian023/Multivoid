@@ -54,10 +54,14 @@ constexpr uint64_t kBirthsBoundMs    = 60000;   // births: the enrol, and either
 
 // ---- the arm and its rows (octa_drill.cpp) ----
 
-enum class Arm : uint8_t { Off, Births, Measure, Attack };
+enum class Arm : uint8_t { Off, Births, Measure, Attack, Join };
 Arm ArmOf();
-// The arms that place a walker and let the Octa fire: measure (no relay judged) and attack (the relay judged).
+// The arms that place a walker and let the Octa fire: measure (no relay judged), attack and join (the relay judged).
 bool Fires();
+// The arms the client's relay is judged on: attack, and join (where client 2 joins mid-attack).
+bool RelayJudged();
+// The join arm's client 2: the observer, which joins mid-attack and does not walk.
+bool IsObserver();
 const char* FiringArmName();
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
 // own spawn verb with the spawn menu's Octa row, whose Octa the host's EX catch enrols at the drain.
@@ -97,6 +101,8 @@ extern coop::geom_octa_relay::Counters g_relay0;   // attack: the relay's counte
 extern uint32_t g_verdictsSeen;      // attack: the verdicts it has applied since
 extern uint32_t g_laserSeen;         // attack: this client's own lasers counted so far
 extern uint64_t g_laserPendingMs;    // attack: the stamp of a laser still waiting for the blast that follows it
+extern uint64_t g_joinHoldAt;       // join: when client 1 first had its three verdicts and began to wait for client 2
+extern bool     g_observerSeen;      // join: client 2 has said it is done
 extern size_t   g_outRing;           // the walk-out ring in use (kOutRingsCm)
 extern uint64_t g_lastAppliedMs;     // when the last explosion was seen applied
 extern bool     g_calledEvent;       // CLIENT (births): the night roll's event has been called
