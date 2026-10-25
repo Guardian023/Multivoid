@@ -516,6 +516,9 @@ void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t cla
     // a kept Aggro (one Aggro per Octa per slot). An Octa between attacks, or on a target the wire cannot name (None),
     // sends nothing here: the joiner's next Aggro is the host's next one, and a None attack in flight idles on the
     // joiner while its blast still arrives. The spawn was sent just before, on the same lane, so the event follows it.
+    // MTA joins a ped by a phase snapshot (animation block, elapsed time):
+    // reference/mtasa-blue/Server/mods/deathmatch/logic/CEntityAddPacket.cpp:954-975. A Blueprint timeline cannot be
+    // seeked, so the decision is replayed here and the joiner's own graph runs it from its start.
     if (slot >= 0 && actor) {
         void* target = GO::TargetActor(actor);
         const WireTarget wt = WireTargetOf(target);
