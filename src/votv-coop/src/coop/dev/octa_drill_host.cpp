@@ -95,6 +95,21 @@ void HostWait(coop::net::Session* s, void* me) {
     HostBirths(me);
 }
 
+constexpr uint64_t kSpawnWaitMs = 5000;   // the gamemode route's new Octa must be live within this of the call
+
+// The gamemode route's spawn while it is not yet live: the instances before the call, where it was placed, and the
+// distances the READY line will say.
+struct Pending {
+    OctaSet  before;
+    FVector  at{};
+    float    walkerD = 0.f;
+    float    otherD = 0.f;
+    uint64_t since = 0;
+};
+Pending g_pending;
+
+void OctaSpawned(void* octa, const FVector& at, float walkerD, float otherD);
+
 // measure: spawns the Octa about 600 cm from the walker, on the side away from the other player (a reachable point of a
 // ring about the walker, the one farthest from the other, at least 1300 cm from it). The Octa's sphere registers inside
 // its own finish-spawn and reports the walker's capsule as an overlap there, which is how it aggros, with the other
@@ -122,9 +137,23 @@ void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
     // spawn's finish, then precedes both, and the lane keeps it until the spawn has been sent.
     void* octa = nullptr;
     if (SpawnByGamemode()) {
-        OctaSet before;
-        CollectOctas(before);
-        if (CallGamemodeSpawn(*best)) octa = NewOctaSince(before, *best);
+        // The gamemode's verb spawns through a deferred spawn the engine finishes after the call returns, so the new
+        // Octa is not yet among the live instances: the diff is retried each tick (HostAwaitOcta), up to kSpawnWaitMs.
+        g_pending = Pending{};
+        CollectOctas(g_pending.before);
+        if (!CallGamemodeSpawn(*best)) {
+            Fail("the Octa did not spawn");
+            return;
+        }
+        g_pending.at = *best;
+        g_pending.walkerD = FlatDist(*best, walker);
+        g_pending.otherD = bestD;
+        octa = NewOctaSince(g_pending.before, *best);
+        if (!octa) {
+            g_pending.since = coop::net::NowMs();
+            g_hstep = HStep::Spawning;
+            return;
+        }
     } else {
         octa = coop::dev::spawn_npc::SpawnAt(kOctaClass, *best);
     }
@@ -132,6 +161,11 @@ void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
         Fail("the Octa did not spawn");
         return;
     }
+    OctaSpawned(octa, *best, FlatDist(*best, walker), bestD);
+}
+
+// The Octa is live: the run's state for it, and the line that says where it stands.
+void OctaSpawned(void* octa, const FVector& at, float walkerD, float otherD) {
     g_octa.Set(octa);
     GS::OpenVerdictWindow(kBlastsWanted, octa);
     g_volleysSeen = 0;
@@ -144,8 +178,18 @@ void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
     if (eid) std::snprintf(eidText, sizeof(eidText), "%u", eid);
     else std::snprintf(eidText, sizeof(eidText), "pending");
     UE_LOGI("[OCTA-DRILL] host READY %s: Octa (%s route) eid=%s at=%.0f,%.0f,%.0f, %.0f cm from the walker (slot %u), "
-            "%.0f from the other player", FiringArmName(), SpawnByGamemode() ? "gamemode" : "sat", eidText, best->X,
-            best->Y, best->Z, FlatDist(*best, walker), static_cast<unsigned>(g_walkerSlot), bestD);
+            "%.0f from the other player", FiringArmName(), SpawnByGamemode() ? "gamemode" : "sat", eidText, at.X, at.Y,
+            at.Z, walkerD, static_cast<unsigned>(g_walkerSlot), otherD);
+}
+
+// The gamemode route, one tick on: the new Octa, or the wait's end.
+void HostAwaitOcta() {
+    void* octa = NewOctaSince(g_pending.before, g_pending.at);
+    if (octa) {
+        OctaSpawned(octa, g_pending.at, g_pending.walkerD, g_pending.otherD);
+        return;
+    }
+    if (coop::net::NowMs() - g_pending.since > kSpawnWaitMs) Fail("the Octa did not spawn");
 }
 
 // measure: the walker takes its place. The client's: its director walks it (the client's own half) and the host spawns
@@ -302,6 +346,7 @@ void HostTick(coop::net::Session* s) {
         return;
     }
     if (g_hstep == HStep::Place) HostPlace(me);
+    else if (g_hstep == HStep::Spawning) HostAwaitOcta();
     else if (ArmOf() == Arm::Births) HostWatchBirths();
     else HostWatchMeasure();
     if (g_hstep == HStep::Done) Unguard();

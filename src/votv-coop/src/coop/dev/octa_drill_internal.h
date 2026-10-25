@@ -67,7 +67,7 @@ bool HostWalks();
 
 // ---- the run's state ----
 
-enum class HStep : uint8_t { Wait, Place, Watch, Done };
+enum class HStep : uint8_t { Wait, Place, Spawning, Watch, Done };
 enum class WStep : uint8_t { Stand, Out, Finished };   // the host's own legs after the spawn (octa_measure_target=host)
 enum class CStep : uint8_t { Ready, Place, Find, Stand, Out, Done };
 extern HStep g_hstep;
