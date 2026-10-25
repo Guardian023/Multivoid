@@ -465,8 +465,11 @@ void Install(coop::net::Session* session) {
 
 Counters GetCounters() { return g_counters; }
 
-void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, bool sent) {
-    if (!className || std::strcmp(className, "geomOcta_C") != 0 || !IsHost()) return;
+void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t classLen, bool sent) {
+    // Every NPC spawn send passes here: the class is told by its bytes, with no string made.
+    constexpr char kOctaName[] = "geomOcta_C";
+    if (!className || classLen != sizeof(kOctaName) - 1 || std::memcmp(className, kOctaName, classLen) != 0 || !IsHost())
+        return;
     KeptAggro* kept = actor ? FindKept(actor) : nullptr;
     if (!sent) {
         // No peer was world-ready, so the spawn went nowhere and neither does its Aggro: a peer that becomes ready later

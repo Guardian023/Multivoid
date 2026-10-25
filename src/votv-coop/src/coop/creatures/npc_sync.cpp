@@ -307,8 +307,7 @@ bool NpcSuppress_Interceptor(void* self, void* params) {
         }
         // The Geom Octa's lane sends none of its events before the spawn's send; this is before the actor exists. When no
         // peer was world-ready nothing was sent, and the join's snapshot carries the spawn instead.
-        coop::geom_octa_sync::OnNpcSpawnSent(p.elementId, nullptr, std::string(p.className.data, p.className.len).c_str(),
-                                             spawnSent);
+        coop::geom_octa_sync::OnNpcSpawnSent(p.elementId, nullptr, p.className.data, p.className.len, spawnSent);
         // The original spawn always proceeds on the host (false = pass-through).
         return false;
     }
