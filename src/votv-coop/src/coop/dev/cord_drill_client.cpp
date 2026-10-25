@@ -12,7 +12,6 @@
 #include "coop/session/net_pump.h"  // HasAnnouncedWorldReady
 
 #include "ue_wrap/core/log.h"
-#include "ue_wrap/devices/cord.h"
 
 #include <cstdint>
 #include <cstdio>
@@ -21,7 +20,6 @@
 namespace coop::dev::cord_drill::detail {
 namespace {
 
-namespace CD = ue_wrap::cord;
 namespace CS = coop::cord_sync;
 
 constexpr uint64_t kFindEveryMs = 250;   // the cast's props are found by key; a miss catches the object index up
@@ -79,7 +77,7 @@ bool Resolve(int socks) {
     }
     for (int k = 0; k < socks; ++k) {
         if (!c.sock[k].Get() && due) {
-            if (void* s = CD::SocketByKey(Wide(g_c.sockKeys[k]))) c.sock[k].Set(s);
+            if (void* s = CS::LevelSocket(Wide(g_c.sockKeys[k]))) c.sock[k].Set(s);
         }
         all = all && c.sock[k].Get() != nullptr;
     }

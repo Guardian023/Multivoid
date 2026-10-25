@@ -186,9 +186,7 @@ void* ResolveSocket(uint8_t form, const std::wstring& sock, const std::wstring& 
     if (form == 0) return nullptr;
     void* socket = nullptr;
     if (form == 1) {
-        bool unnamed = false;
-        socket = CD::SocketByKey(sock, &unnamed);
-        if (unnamed) ++detail::Stat().keyUnnamed;
+        socket = LevelSocket(sock);
     } else if (form == 2) {
         void* owner = nullptr;
         const auto read = coop::prop_key_index::Resolve(sock, &owner);
@@ -557,12 +555,12 @@ void PrintStats(bool summary) {
     if (std::memcmp(&c, &g_lastPrinted, sizeof(c)) == 0) return;
     g_lastPrinted = c;
     UE_LOGI("cord_sync: %s claims=%u applied=%u equal=%u refusedRate=%u refusedDead=%u refusedReach=%u "
-            "refusedHostDrag=%u unresolved=%u keyPending=%u laneOff=%u keyUnnamed=%u broadcasts=%u answers=%u "
+            "refusedHostDrag=%u unresolved=%u keyPending=%u laneOff=%u sockBuilds=%u broadcasts=%u answers=%u "
             "seeds=%u seedLinks=%u | claimsSent=%u "
             "applied=%u equal=%u stillDiffering=%u applyFailed=%u pendingDropped=%u held=%u parked=%u "
             "parkOverflow=%u parkDead=%u parkLeft=%u stretchRefused=%u | badWire=%u unsyncable=%u sendFailed=%u",
             summary ? "summary" : "stats", c.claims, c.claimsApplied, c.claimsEqual, c.refusedRate, c.refusedDead,
-            c.refusedReach, c.refusedHostDrag, c.unresolved, c.keyPending, c.laneOff, c.keyUnnamed, c.broadcasts,
+            c.refusedReach, c.refusedHostDrag, c.unresolved, c.keyPending, c.laneOff, c.sockBuilds, c.broadcasts,
             c.answers, c.seeds, c.seedLinks,
             c.claimsSent, c.applied, c.equal, c.stillDiffering, c.applyFailed, c.pendingDropped, c.held, c.parked,
             c.parkOverflow, c.parkDead, c.parkLeft, c.stretchRefused, c.badWire, c.unsyncable, c.sendFailed);
@@ -707,6 +705,7 @@ void OnDisconnect() {
     detail::Stat() = Counters{};
     g_lastPrinted = Counters{};
     detail::ClearLatches();
+    detail::ClearSockets();
 }
 
 }  // namespace coop::cord_sync

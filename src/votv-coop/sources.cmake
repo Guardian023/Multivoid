@@ -234,6 +234,7 @@ set(VOTVCOOP_SOURCES
     src/coop/interactables/upgrade_sync.cpp
     src/coop/interactables/interactable_sync.cpp
     src/coop/interactables/cord_sync.cpp
+    src/coop/interactables/cord_sync_sockets.cpp
     src/coop/interactables/cord_sync_watch.cpp
     src/coop/creatures/kerfur_convert.cpp
     src/coop/creatures/kerfur_convert_client.cpp

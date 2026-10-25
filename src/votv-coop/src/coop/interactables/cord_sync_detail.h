@@ -32,13 +32,13 @@ inline constexpr size_t kKeyMax = sizeof(coop::net::WireKey::data);
 
 // Every refusal and drop of the lane, said in one line a minute (cord_sync.cpp). Host: claims taken, applied, found
 // equal, refused (every refusal is answered; keyPending a key lookup that could not answer yet, laneOff a claim met
-// while the lane's watches were not all live, keyUnnamed a socket key the engine could not name), the broadcasts and
-// the seeds. Client: claims sent, canonicals applied or
+// while the lane's watches were not all live), the broadcasts and the seeds. Both: sockBuilds, the times the level
+// sockets' table was read from the object index. Client: claims sent, canonicals applied or
 // found equal, those dropped by the pending rule, held for a drag, parked, and the stretch breaks refused.
 struct Counters {
     uint32_t claims = 0, claimsApplied = 0, claimsEqual = 0;
     uint32_t refusedRate = 0, refusedDead = 0, refusedReach = 0, refusedHostDrag = 0, unresolved = 0;
-    uint32_t keyPending = 0, laneOff = 0, keyUnnamed = 0;
+    uint32_t keyPending = 0, laneOff = 0, sockBuilds = 0;
     uint32_t broadcasts = 0, answers = 0, seeds = 0, seedLinks = 0;
     uint32_t claimsSent = 0, applied = 0, equal = 0, stillDiffering = 0, applyFailed = 0;
     uint32_t pendingDropped = 0, held = 0;
@@ -82,6 +82,9 @@ void InstallWatches();
 void TickWatches();
 // The session's end: the drag latches go.
 void ClearLatches();
+
+// The session's end: the level sockets' table goes (cord_sync_sockets.cpp).
+void ClearSockets();
 
 // Whether the lane runs: all six watches live and the release's `pressed` parameter resolved. A watch that is dead or
 // a parameter that does not resolve turns the lane off as a unit (said once), since half its rules would hold a

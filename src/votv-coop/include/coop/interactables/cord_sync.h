@@ -18,6 +18,8 @@
 
 #include "coop/net/protocol.h"
 
+#include <string>
+
 namespace coop::net { class Session; }
 
 namespace coop::cord_sync {
@@ -42,6 +44,11 @@ void QueueConnectBroadcastForSlot(int peerSlot);
 
 // The session's end: the lane's tables and counters, after a summary line.
 void OnDisconnect();
+
+// The level socket (a socket no prop owns) whose actor-save key is `key`, or null. The wire names a socket by this
+// key, and the lookup is a table the lane reads from the object index once per world generation: a key a peer sends
+// is only ever looked up, never made a name the engine's pool keeps. Game thread.
+void* LevelSocket(const std::wstring& key);
 
 // What the cord drill reads of a client's lane: whether the seed's op 2 has arrived, the claims sent (the latest
 // claim's seq, since the seq starts at 1 and counts each claim), and the stretch breaks refused. A read; zeroes on a host.

@@ -4,7 +4,6 @@
 
 #include "ue_wrap/actors/prop.h"
 #include "ue_wrap/core/call.h"
-#include "ue_wrap/core/fname_utils.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/reflection_props.h"
@@ -34,9 +33,6 @@ int32_t g_socketCordOff = -1;
 int32_t g_propCordOff = -1;
 void* g_connectFn = nullptr;
 void* g_disconnectFn = nullptr;
-
-// More sockets than this in a world is a level this lane has not been measured on (61 were).
-constexpr int32_t kMaxSockets = 512;
 
 bool IsA(void* actor, void* cls) {
     if (!actor || !cls || !R::IsLive(actor)) return false;
@@ -141,28 +137,9 @@ bool Disconnect(void* cord) {
     return Call(cord, p);
 }
 
-void* SocketByKey(const std::wstring& key, bool* keyUnnamed) {
-    if (keyUnnamed) *keyUnnamed = false;
-    if (!EnsureResolved() || key.empty()) return nullptr;
-    // The key is taken to an FName once per call and each socket's key FName is compared by index and number: no
-    // name is rendered to a string per socket.
-    const R::FName want = ue_wrap::fname_utils::StringToFName(key);
-    if (want.ComparisonIndex == 0) {
-        if (keyUnnamed) *keyUnnamed = true;
-        return nullptr;
-    }
-    void* found[kMaxSockets];
-    const int32_t n = ue_wrap::world_instances::Find(L"cordSocket_C", found, kMaxSockets);
-    static bool sCapSaid = false;
-    if (n >= kMaxSockets && !sCapSaid) {
-        sCapSaid = true;
-        UE_LOGW("cord: %d cord sockets in this world fill the lookup -- later ones are not found (said once)", n);
-    }
-    for (int32_t i = 0; i < n; ++i) {
-        const R::FName name = ue_wrap::prop::ReadKeyField(found[i], ue_wrap::prop::KeyField::ActorSave);
-        if (name.ComparisonIndex == want.ComparisonIndex && name.Number == want.Number) return found[i];
-    }
-    return nullptr;
+int32_t Sockets(void** out, int32_t cap) {
+    if (!EnsureResolved() || !out || cap <= 0) return 0;
+    return ue_wrap::world_instances::Find(L"cordSocket_C", out, cap);
 }
 
 void* ChildSocket(void* owner, const std::wstring& childName) {

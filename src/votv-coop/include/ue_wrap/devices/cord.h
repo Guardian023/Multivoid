@@ -5,6 +5,7 @@
 
 #include "ue_wrap/core/types.h"
 
+#include <cstdint>
 #include <string>
 
 namespace ue_wrap::cord {
@@ -29,10 +30,9 @@ bool HeadLocation(void* cord, ue_wrap::FVector& out);
 bool Connect(void* cord, void* socket);
 bool Disconnect(void* cord);
 
-// The socket whose actor-save key is `key`, among the running world's cordSocket_C instances (the object index,
-// no cache). Null when none. The key is taken to an FName once and each socket's key compared by index; a key the
-// engine cannot name matches nothing, and `keyUnnamed` (when given) says so.
-void* SocketByKey(const std::wstring& key, bool* keyUnnamed = nullptr);
+// Up to `cap` of the running world's cordSocket_C instances, in no particular order (the object index); returns the
+// count. A caller that keys them reads each one's key with prop::GetActorSaveKeyString.
+int32_t Sockets(void** out, int32_t cap);
 
 // The socket that the UChildActorComponent named `childName` on `owner` spawned. Null when `owner` has no such
 // component: the name is a peer's word, so only a property that is an object property holding a live
