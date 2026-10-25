@@ -126,6 +126,7 @@ inline constexpr const wchar_t* kNpcAllowlist[] = {
     NpcClass_WispO,
     NpcClass_WispP,
     NpcClass_WispBlu,
+    L"geomOcta_C",              // the Geom Octahedron; host-authored ACharacter, pose rides EntityPose
 };
 inline constexpr size_t kNpcAllowlistSize = sizeof(kNpcAllowlist) / sizeof(kNpcAllowlist[0]);
 
