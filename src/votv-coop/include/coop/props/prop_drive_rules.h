@@ -1,0 +1,28 @@
+// coop/props/prop_drive_rules.h -- the send and rest rules of a driven prop, one rule for both authors.
+//
+// The host's driven rows (prop_drive_host) and a client that syncs a prop its interaction moves
+// (prop_syncer_client) publish a pose when it moved past the same epsilons and end the drive when the
+// body rested for the same time, so neither author carries a copy of the other's numbers.
+
+#pragma once
+
+#include <cstdint>
+
+namespace coop::prop_drive_rules {
+
+// A pose goes out when it moved past these since the last one that went out, so a creeping body
+// still steps and a resting one costs nothing. One threshold on every axis, where MTA's
+// unoccupied syncer (reference/mtasa-blue/Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp)
+// holds x/y to FLOAT_EPSILON in WriteVehicleInformation and z to 0.1 -- 1.2 for a boat riding
+// waves -- because z is where a parked vehicle is noisy; a prop on a floor has no such axis.
+constexpr float kSendEpsCm  = 0.5f;
+constexpr float kSendEpsDeg = 0.5f;
+// A released prop that has not moved past the epsilons for this long has rested: the end edge.
+constexpr uint64_t kRestMs = 500;
+// A prop that has rested that long is read at 4 Hz, the hook lane's own resting cadence, instead
+// of two dispatches per tick: an anchored tie holds a resting prop for as long as the hook stands.
+constexpr uint64_t kRestProbeMs = 250;
+// A velocity below this at the end goes out as zero: assigning a velocity wakes a body at rest.
+constexpr float kRestVelCmS = 1.0f;
+
+}  // namespace coop::prop_drive_rules

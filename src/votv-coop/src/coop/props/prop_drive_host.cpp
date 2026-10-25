@@ -7,10 +7,12 @@
 #include "coop/player/hand_item.h"            // IsHandAxisActor: the hotbar hand and its mirrors
 #include "coop/player/local_streams.h"        // LastHeldActor: this player's grab slot
 #include "coop/props/active_drive.h"          // NowMs
+#include "coop/props/prop_drive_rules.h"      // the epsilons and the rest rule both authors share
 #include "coop/props/prop_element_tracker.h"  // GetPropElementIdForActor
 #include "coop/props/prop_lifecycle.h"        // IsWireSuppressedPropClass: a class no peer holds
 #include "coop/props/prop_wire_parity.h"      // PhysFlagsOf: the flags the end edge carries
 #include "coop/props/remote_prop.h"           // IsActorUnderAnyDrive: a peer's held-prop stream
+#include "prop_drive_rows.h"                  // co-located private header (src tree, not include/)
 #include "ue_wrap/actors/prop.h"
 #include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/hot_path_guard.h"
@@ -32,36 +34,11 @@ namespace E  = ue_wrap::engine;
 namespace PR = ue_wrap::prop;
 namespace R  = ue_wrap::reflection;
 
-// A pose goes out when it moved past these since the last one that went out, so a creeping body
-// still steps and a resting one costs nothing. One threshold on every axis, where MTA's
-// unoccupied syncer (reference/mtasa-blue/Client/mods/deathmatch/logic/CUnoccupiedVehicleSync.cpp)
-// holds x/y to FLOAT_EPSILON in WriteVehicleInformation and z to 0.1 -- 1.2 for a boat riding
-// waves -- because z is where a parked vehicle is noisy; a prop on a floor has no such axis.
-constexpr float kSendEpsCm  = 0.5f;
-constexpr float kSendEpsDeg = 0.5f;
-// A released prop that has not moved past the epsilons for this long has rested: the end edge.
-constexpr uint64_t kRestMs = 500;
-// A prop that has rested that long is read at 4 Hz, the hook lane's own resting cadence, instead
-// of two dispatches per tick: an anchored tie holds a resting prop for as long as the hook stands.
-constexpr uint64_t kRestProbeMs = 250;
-// A velocity below this at the end goes out as zero: assigning a velocity wakes a body at rest.
-constexpr float kRestVelCmS = 1.0f;
-
-struct Driven {
-    ue_wrap::CachedObjRef ref;
-    uint32_t              eid = 0;
-    coop::net::WireKey    key{};
-    uint8_t               gen = 0;
-    bool                  claimed  = true;   // false: coasting after the verb let go
-    bool                  everSent = false;  // a pose of this drive went out; sentLoc/sentRot hold the last
-    bool                  resend   = false;  // a joiner needs the pose again, moved or not
-    bool                  unreadSaid = false;  // the unreadable-location line went out for this row
-    bool                  dead     = false;  // closed this tick; erased after the pass
-    ue_wrap::FVector      sentLoc{};
-    ue_wrap::FRotator     sentRot{};
-    uint64_t              lastMoveMs  = 0;
-    uint64_t              nextProbeMs = 0;   // 0 = every tick; set while resting
-};
+using coop::prop_drive_rules::kRestMs;
+using coop::prop_drive_rules::kRestProbeMs;
+using coop::prop_drive_rules::kRestVelCmS;
+using coop::prop_drive_rules::kSendEpsCm;
+using coop::prop_drive_rules::kSendEpsDeg;
 
 std::vector<Driven> g_driven;   // game thread only
 size_t              g_turn = 0; // where the next tick's publishing starts, so no prop waits forever
@@ -118,8 +95,9 @@ void SendEnd(coop::net::Session& s, const Driven& d, void* actor, const ue_wrap:
 }
 
 // A new row for `actor` when the channel can carry it: a keyed prop with a host element id, in no
-// hand, of a class peers hold. Null otherwise. `claimed` false opens it coasting.
-Driven* Open(void* actor, bool claimed, const char* why) {
+// hand, of a class peers hold. Null otherwise. `claimed` false opens it coasting. `syncer` 0 is a host
+// verb's row, n a client slot's grant.
+Driven* Open(void* actor, bool claimed, const char* why, uint8_t syncer = 0) {
     if (!PR::IsDescendantOfProp(actor)) return nullptr;
     if (InAHand(actor)) return nullptr;   // the held-prop lane owns a prop in a hand
     const coop::element::ElementId eid = coop::prop_element_tracker::GetPropElementIdForActor(actor);
@@ -140,22 +118,45 @@ Driven* Open(void* actor, bool claimed, const char* why) {
     d.ref.Set(actor);
     d.eid = static_cast<uint32_t>(eid);
     d.claimed = claimed;
+    d.syncer = syncer;
     const std::wstring keyW = PR::GetInteractableKeyString(actor);
     d.key.len = 0;
     for (size_t i = 0; i < keyW.size() && i < sizeof(d.key.data); ++i)
         d.key.data[d.key.len++] = static_cast<char>(keyW[i]);
-    uint8_t& gen = g_genByEid[d.eid];
-    if (++gen == 0) ++gen;   // 0 is the stream's "no generation"
-    d.gen = gen;
+    d.gen = BumpGen(d.eid);
     d.lastMoveMs = coop::active_drive::NowMs();
     g_driven.push_back(std::move(d));
     UE_LOGI("[PROP-DRIVE] HOST %s eid=%u gen=%u key='%ls' (%s) -- %zu driven",
-            claimed ? "CLAIM" : "COAST", g_driven.back().eid, static_cast<unsigned>(g_driven.back().gen),
-            keyW.c_str(), why, g_driven.size());
+            syncer ? "GRANT" : (claimed ? "CLAIM" : "COAST"), g_driven.back().eid,
+            static_cast<unsigned>(g_driven.back().gen), keyW.c_str(), why, g_driven.size());
     return &g_driven.back();
 }
 
 }  // namespace
+
+Driven* FindByEid(uint32_t eid) {
+    for (Driven& d : g_driven)
+        if (!d.dead && d.eid == eid) return &d;
+    return nullptr;
+}
+
+uint8_t BumpGen(uint32_t eid) {
+    uint8_t& gen = g_genByEid[eid];
+    if (++gen == 0) ++gen;   // 0 is the stream's "no generation"
+    return gen;
+}
+
+Driven* OpenClientRow(void* actor, uint8_t slot, const char* why) {
+    UE_ASSERT_GAME_THREAD("prop_drive_host::OpenClientRow");
+    if (!actor || slot == 0) return nullptr;
+    Driven* d = Open(actor, /*claimed=*/true, why ? why : "", slot);
+    if (d) d->admitMs = d->lastMoveMs;   // the silence clock starts at the grant
+    return d;
+}
+
+void EraseRow(Driven& row) {
+    row.dead = true;   // Tick's sweep erases it; every reader skips a dead row
+}
 
 bool InAHand(void* actor) {
     UE_ASSERT_GAME_THREAD("prop_drive_host::InAHand");
