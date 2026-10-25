@@ -6,7 +6,8 @@
 //   measure  -- the walker takes its place first (the client's director walks it 2200 cm from the host; with
 //               octa_measure_target=host the host's does, from the client), then the host spawns the Octa 600 cm from
 //               it and 1300 cm or more from the other player, so the sphere's register-time overlap picks the walker.
-//               The walker stands until three host blasts, then walks 1800 cm out. Liveness only: the host prints
+//               The walker stands until three volleys (one laser makes several explosions: the host counts its
+//               verdicts, the client explosions 400 ms apart), then walks 1800 cm out. Liveness only: the host prints
 //               `[OCTA-DRILL] measure DONE` at the first `[OCTA] idle` after three verdicts with the walker out of the
 //               sphere, or `FAIL: no host aggro` 30 s after the spawn; the client prints `[OCTA-DRILL] client out`, or
 //               `FAIL: no host fire` after 90 s with no blast applied. Red: octa_red=no_parking.

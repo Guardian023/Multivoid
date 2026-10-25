@@ -66,7 +66,11 @@ constexpr int      kStandpoints      = 8;
 constexpr float    kStandReachCm     = 60.f;    // a standpoint is reached within this
 constexpr int      kFirstWalkDeadlineS = 400;
 constexpr int      kOutWalkDeadlineS   = 120;
-constexpr uint32_t kBlastsWanted     = 3;       // the blasts the client waits for, and the verdicts the host waits for
+constexpr uint32_t kBlastsWanted     = 3;       // the volleys the walker waits for, and the verdicts the host waits for
+// One laser makes several explosions, which land within a tick of each other on loopback, and a re-fire follows about
+// 1.8 s after. The client cannot see verdicts before the relay, so an explosion applied later than this after the
+// previous one starts a new volley. It is above the 250 ms poll, so two explosions straddling a poll stay one volley.
+constexpr uint64_t kVolleyGapMs      = 400;
 constexpr uint64_t kAggroBoundMs     = 30000;   // HOST: no aggro this long after the spawn is a dead Octa
 constexpr uint64_t kFireBoundMs      = 90000;   // CLIENT: this long with no new blast applied is a stalled wait
 constexpr uint64_t kBirthsBoundMs    = 60000;   // births: the enrol, and either arm's mirror, within this
@@ -107,11 +111,12 @@ uint8_t  g_walkerSlot = 0;        // the slot the Octa must aggro: the host's ow
 FVector  g_puppetLast{};          // the client puppet's place at the last poll, and since when it has not moved
 uint64_t g_puppetStillAt = 0;
 WStep    g_wstep = WStep::Stand;  // octa_measure_target=host: the host's legs after the spawn
-uint32_t g_capturedBase = 0;      // the host's explosion capture count when the Octa was spawned
-uint32_t g_capturedSeen = 0;
+uint32_t g_volleysSeen = 0;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
 // CLIENT (measure)
-uint32_t g_appliedBase = 0;       // the explosion lane's applied count when the client reached the Octa
+uint32_t g_appliedBase = 0;       // the explosion lane's applied count when the Octa mirror appeared
 uint32_t g_appliedSeen = 0;
+uint32_t g_volleys = 0;           // the volleys applied since then
+uint64_t g_lastAppliedMs = 0;     // when the last explosion was seen applied
 bool     g_calledEvent = false;   // CLIENT (births): the night roll's event has been called
 
 bool Due() {
@@ -272,7 +277,7 @@ void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
     }
     g_octa.Set(octa);
     GS::OpenVerdictWindow(kBlastsWanted, octa);
-    g_capturedBase = g_capturedSeen = coop::explosion_sync::GetCounters().captured;
+    g_volleysSeen = 0;
     g_wstep = WStep::Stand;
     g_spawnMs = g_stepMs = coop::net::NowMs();
     g_hstep = HStep::Watch;
@@ -340,20 +345,19 @@ void HostWatchBirths() {
     if (Expired(kBirthsBoundMs)) Fail("births host: the Octa the gamemode spawned was never enrolled as an NPC element");
 }
 
-uint32_t CapturedCount() { return coop::explosion_sync::GetCounters().captured; }
-
-// octa_measure_target=host: the host's own player, in place beside the Octa it spawned, stands until three blasts have
-// been captured on this machine and walks out, from the Octa's live place. The same bounds as the client's.
+// octa_measure_target=host: the host's own player, in place beside the Octa it spawned, stands until the Octa has fired
+// three volleys and walks out, from the Octa's live place. A volley is one fire, which is one host verdict: a laser
+// makes several explosions, so the host counts its verdicts, not its explosions. The bound is the client's.
 void HostWalkTick(void* octa, void* me) {
     switch (g_wstep) {
     case WStep::Stand: {
-        const uint32_t now = CapturedCount();
-        if (now > g_capturedSeen) {
-            g_capturedSeen = now;
+        const uint32_t now = GS::GetCounters().hostVerdict - g_base.hostVerdict;
+        if (now > g_volleysSeen) {
+            g_volleysSeen = now;
             g_stepMs = coop::net::NowMs();
-            UE_LOGI("[OCTA-DRILL] host: blast %u of %u captured", now - g_capturedBase, kBlastsWanted);
+            UE_LOGI("[OCTA-DRILL] host: volley %u of %u fired", now, kBlastsWanted);
         }
-        if (g_capturedSeen - g_capturedBase >= kBlastsWanted) {
+        if (g_volleysSeen >= kBlastsWanted) {
             FVector at{};
             if (!E::TryGetActorLocation(octa, at)) {
                 Fail("the Octa is gone before the host's walk-out");
@@ -368,7 +372,7 @@ void HostWalkTick(void* octa, void* me) {
             g_wstep = WStep::Out;
             return;
         }
-        if (Expired(kFireBoundMs)) Fail("no host fire (the host's explosion capture counted no blast for 90 s)");
+        if (Expired(kFireBoundMs)) Fail("no host fire (the host's Octa fired no volley for 90 s)");
         return;
     }
     case WStep::Out: {
@@ -507,17 +511,25 @@ void ClientPlace(void* me) {
     Go(CStep::Find);
 }
 
-// Stands until three host blasts have reached this client's explosion lane. The bound counts from the last blast that
-// arrived (or from the arrival), so a wait that is still progressing is never cut.
+// Stands until three volleys of the host's blasts have reached this client's explosion lane. One laser makes several
+// explosions, so they are counted as volleys: an applied explosion more than kVolleyGapMs after the previous one starts
+// a new volley. The bound counts from the last blast that arrived (or from the arrival), so a wait that is still
+// progressing is never cut.
 void ClientStand(void* me) {
     Guard();
     const uint32_t now = AppliedSum();
     if (now > g_appliedSeen) {
+        const uint64_t at = coop::net::NowMs();
         g_appliedSeen = now;
-        g_stepMs = coop::net::NowMs();
-        UE_LOGI("[OCTA-DRILL] client: blast %u of %u applied", now - g_appliedBase, kBlastsWanted);
+        g_stepMs = at;
+        if (g_volleys == 0 || at - g_lastAppliedMs > kVolleyGapMs) {
+            ++g_volleys;
+            UE_LOGI("[OCTA-DRILL] client: volley %u of %u applied (%u explosions so far)", g_volleys, kBlastsWanted,
+                    now - g_appliedBase);
+        }
+        g_lastAppliedMs = at;
     }
-    if (g_appliedSeen - g_appliedBase >= kBlastsWanted) {
+    if (g_volleys >= kBlastsWanted) {
         void* octa = g_octa.Get();
         FVector at{};
         if (!octa || !E::TryGetActorLocation(octa, at)) {
@@ -631,9 +643,11 @@ void OnDisconnect() {
     g_walkerSlot = 0;
     g_puppetStillAt = 0;
     g_wstep = WStep::Stand;
-    g_capturedBase = g_capturedSeen = 0;
+    g_volleysSeen = 0;
     coop::dev::octa_probe::Reset();
     g_appliedBase = g_appliedSeen = 0;
+    g_volleys = 0;
+    g_lastAppliedMs = 0;
     g_calledEvent = false;
 }
 
