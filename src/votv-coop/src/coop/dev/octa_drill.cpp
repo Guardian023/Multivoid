@@ -25,6 +25,7 @@
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
+#include "ue_wrap/core/sdk_profile.h"  // NpcClass_GeomOcta
 #include "ue_wrap/core/types.h"
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/world/world_singleton.h"
@@ -46,7 +47,7 @@ namespace GS = coop::geom_octa_sync;
 using ue_wrap::FVector;
 
 constexpr const char*    kTag         = "[OCTA-DRILL]";
-constexpr const wchar_t* kOctaClass   = L"geomOcta_C";
+constexpr const wchar_t* kOctaClass   = ue_wrap::profile::name::NpcClass_GeomOcta;
 constexpr const wchar_t* kGuardMember = L"startInvinc";
 
 constexpr uint64_t kEveryMs          = 250;
