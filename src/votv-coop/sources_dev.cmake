@@ -108,6 +108,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/prop_act_drill_race.cpp
     src/coop/dev/prop_act_drill_race_client.cpp
     src/coop/dev/prop_syncer_drill.cpp
+    src/coop/dev/prop_syncer_drill_host.cpp
     src/coop/dev/prop_syncer_drill_observer.cpp
     src/coop/dev/sack_drill.cpp
     src/coop/dev/fall_drill.cpp

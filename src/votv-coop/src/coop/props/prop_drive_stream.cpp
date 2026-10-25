@@ -25,6 +25,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <mutex>
 #include <string>
 #include <unordered_map>
 #include <vector>
@@ -134,6 +135,11 @@ dev::DriveView* DevViewOf(uint32_t eid, uint8_t gen) {
     return &v;
 }
 
+// Rows that reached the receive store per eid, counted on the net thread before the store keeps the newest per eid
+// (dev::NoteMerged); against the view's rows (taken and applied) it tells coalescing from loss.
+std::mutex g_mergedMu;
+std::unordered_map<uint32_t, uint32_t> g_merged;
+
 // The last stream ends applied here, a ring of kRecentEnds (prop_drive_stream.h).
 AppliedEnd g_ends[kRecentEnds];
 size_t g_endCount = 0;   // ends recorded since the session began; the newest is at (g_endCount - 1) % kRecentEnds
@@ -184,7 +190,10 @@ void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char*
             // The steady state: the row already names the actor. No resolve, no string.
             if (void* live = it->second.d.LiveActor()) {
                 if (!coop::prop_drive_host::InAHand(live)) {   // a hand's stream wins
-                    if (dev::DriveView* v = DevViewOf(eid, e.ctx)) ++v->rows;
+                    if (dev::DriveView* v = DevViewOf(eid, e.ctx)) {
+                        ++v->rows;
+                        v->lastRowLoc = ue_wrap::FVector{e.x, e.y, e.z};
+                    }
                     AD::BeginLerpToPose(it->second.d, ue_wrap::FVector{e.x, e.y, e.z},
                                         ue_wrap::FRotator{e.pitch, e.yaw, e.roll}, nowMs);
                 }
@@ -219,6 +228,7 @@ void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char*
     if (dev::DriveView* seen = DevViewOf(eid, e.ctx)) {
         seen->startRead = E::TryGetActorLocation(actor, seen->startLoc);
         ++seen->rows;
+        seen->lastRowLoc = ue_wrap::FVector{e.x, e.y, e.z};
     }
     Drive& dr = g_drives[eid];
     if (dr.d.actor && dr.d.actor != actor) GiveBackPhysics(dr, dr.d.LiveActor());
@@ -448,6 +458,10 @@ void OnDisconnect() {
     g_miss.clear();
     g_pendingEnd.clear();
     g_devView.clear();
+    {
+        std::lock_guard<std::mutex> lk(g_mergedMu);
+        g_merged.clear();
+    }
     g_endCount = 0;
     g_batch.clear();
 }
@@ -457,6 +471,18 @@ namespace dev {
 DriveView ViewOf(uint32_t eid) {
     const auto it = g_devView.find(eid);
     return it == g_devView.end() ? DriveView{} : it->second;
+}
+
+void NoteMerged(uint32_t eid) {
+    if (!coop::dev::prop_syncer_drill::IsEnabled()) return;
+    std::lock_guard<std::mutex> lk(g_mergedMu);
+    ++g_merged[eid];
+}
+
+uint32_t MergedOf(uint32_t eid) {
+    std::lock_guard<std::mutex> lk(g_mergedMu);
+    const auto it = g_merged.find(eid);
+    return it == g_merged.end() ? 0u : it->second;
 }
 
 }  // namespace dev

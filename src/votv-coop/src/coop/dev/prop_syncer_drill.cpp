@@ -1,8 +1,8 @@
 // coop/dev/prop_syncer_drill.cpp -- see coop/dev/prop_syncer_drill.h. Three roles, each advancing on an edge another
 // peer printed in the lobby chat or on a counter of its own, and ending on its own DONE PASS or FAIL: line.
-//   host: "PSYNC go" once both clients are world-ready; on "rested" waits for its End, says "ended", judges.
-//   client 1: on "go" walks to the nearest keyed prop, claims, kicks, claims for kKickHoldMs, then says "kicked" and
-//   "rested <eid> <cm> <p y r x y z>". client 2: the observer (prop_syncer_drill_observer.cpp).
+//   host: prop_syncer_drill_host.cpp. client 1: says its ready line, then on the host's "go" walks to the nearest keyed
+//   prop, claims, kicks, claims for kKickHoldMs, then says "kicked" and "rested <eid> <cm> <p y r x y z>".
+//   client 2: the observer (prop_syncer_drill_observer.cpp).
 
 #include "coop/dev/prop_syncer_drill.h"
 
@@ -17,12 +17,10 @@
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"
-#include "coop/props/prop_drive_stream.h"
 #include "coop/props/join_membership_sweep.h"
 #include "coop/props/prop_drive_host.h"
 #include "coop/props/prop_lifecycle.h"
 #include "coop/props/prop_syncer.h"
-#include "coop/props/prop_syncer_host.h"
 #include "coop/props/remote_prop.h"
 #include "coop/session/join_progress.h"
 #include "coop/session/net_pump.h"
@@ -121,11 +119,11 @@ Verdict JudgeCopy(const Rested& r, const coop::prop_drive_stream::dev::DriveView
     FRotator rot{};
     if (!actor || !ue_wrap::engine::TryGetActorLocation(actor, at) || !ue_wrap::engine::TryGetActorRotation(actor, rot))
         return Verdict{"the copy does not read here"};
-    if (needTravel) {
+    if (needTravel) {   // at the last row applied before the End: the End's pose would satisfy any distance alone
         if (!v.startRead) return Verdict{"the copy's start place was never read"};
-        out.travelled = dist(v.startLoc, at);
+        out.travelled = dist(v.startLoc, v.lastRowLoc);
         if (out.travelled < kTravelFrac * r.cm) {
-            out.why = Fmt("copy travelled %.1f cm of the client's %.1f", out.travelled, r.cm);
+            out.why = Fmt("the stream took the copy %.1f cm of the client's %.1f", out.travelled, r.cm);
             return out;
         }
     }
@@ -136,15 +134,19 @@ Verdict JudgeCopy(const Rested& r, const coop::prop_drive_stream::dev::DriveView
     return out;
 }
 
+bool StreamsRun() {
+    return coop::net_pump::HasAnnouncedWorldReady() &&
+           coop::join_progress::CurrentPhase() == coop::join_progress::Phase::Idle &&
+           coop::net_pump::IsWorldSettled() && coop::join_membership_sweep::HasLoadTailQuiesced();
+}
+
 }  // namespace detail
 
 using namespace detail;
 
 namespace {
 namespace DC  = coop::dev::drill_chat;
-namespace PDS = coop::prop_drive_stream;
 namespace PS  = coop::prop_syncer;
-namespace PSH = coop::prop_syncer_host;
 namespace PR  = ue_wrap::prop;
 namespace E   = ue_wrap::engine;
 using ue_wrap::FRotator;
@@ -156,74 +158,9 @@ constexpr float    kReachCm = 150.f;          // the walk ends this close to the
 constexpr int      kWalkDeadlineS = 120, kMaxTargets = 4;
 constexpr float    kKickSpeedCmS = 500.f, kKickUpCmS = 150.f;
 constexpr float    kMinTravelCm = 50.f;       // a kick that moved the prop less proves nothing
-constexpr uint64_t kReadyBoundMs = 180000;    // host: start to both clients world-ready; client: to the go line
 constexpr uint64_t kGrantBoundMs = 15000, kRestBoundMs = 30000;   // client: the claim to its answer; the hold to the rest End
 const char* const kRefusalName[8] = {"None", "NotReady", "Unknown", "InHand", "HostAuthored", "OtherSyncer",
                                      "OutOfReach", "Paced"};
-
-// The client's streams run, as a player in a settled world.
-bool StreamsRun() {
-    return coop::net_pump::HasAnnouncedWorldReady() &&
-           coop::join_progress::CurrentPhase() == coop::join_progress::Phase::Idle &&
-           coop::net_pump::IsWorldSettled() && coop::join_membership_sweep::HasLoadTailQuiesced();
-}
-
-// ---- the host ----
-struct HostState {
-    bool     done = false, goSaid = false, restedSeen = false, endedSaid = false;
-    uint64_t at = 0, goAt = 0, restedAt = 0;
-    Rested   r;
-} g_h;
-
-void HostJudge(Arm a) {
-    HostState& h = g_h;
-    if (a == Arm::Forge) {
-        const uint32_t admitted = PSH::dev::NonSyncerAdmitted(), counted = PSH::dev::NotSyncerCount();
-        if (admitted > 0) return Fail("host", h.done, Fmt("admitted %u rows from a non-syncer", admitted));
-        if (counted < 1) return Fail("host", h.done, "no forged row was counted NotSyncer");
-        const Verdict v = JudgeCopy(h.r, PDS::dev::ViewOf(h.r.eid), false);
-        if (!v.why.empty()) return Fail("host", h.done, v.why);
-        return Pass("host", h.done, Fmt("eid=%u not_syncer=%u admitted_from_non_syncer=0 off=%.1f cm", h.r.eid, counted, v.offCm));
-    }
-    const PSH::dev::Admitted adm = PSH::dev::AdmittedOf(h.r.eid);
-    if (adm.rows < kMinRows)
-        return Fail("host", h.done, Fmt("admitted %u rows of the granted generation (want >= %u)", adm.rows, kMinRows));
-    const Verdict v = JudgeCopy(h.r, PDS::dev::ViewOf(h.r.eid), true);
-    if (!v.why.empty()) return Fail("host", h.done, v.why);
-    Pass("host", h.done, Fmt("eid=%u gen=%u rows=%u travelled=%.1f of %.1f cm off=%.1f cm", h.r.eid,
-                             static_cast<unsigned>(adm.gen), adm.rows, v.travelled, h.r.cm, v.offCm));
-}
-
-void HostTick(coop::net::Session* s, Arm a) {
-    HostState& h = g_h;
-    if (h.done) return;
-    const uint64_t now = Now();
-    if (h.at == 0) h.at = now;
-    if (!h.goSaid) {
-        if (s->IsSlotWorldReady(kActorSlot) && s->IsSlotWorldReady(kObserverSlot)) {
-            DC::Say(kGoLine);
-            h.goSaid = true;
-            h.goAt = now;
-        } else if (now - h.at > kReadyBoundMs) {
-            Fail("host", h.done, "the clients never became world-ready");
-        }
-        return;
-    }
-    if (!h.restedSeen) {
-        if (DC::PollDue() && ReadRested(&h.r)) { h.restedSeen = true; h.restedAt = now; }
-        else if (now - h.goAt > kSayBoundMs) Fail("host", h.done, "the client never said it rested");
-        return;
-    }
-    if (!PDS::dev::ViewOf(h.r.eid).endApplied) {
-        if (now - h.restedAt > kEndBoundMs) Fail("host", h.done, "no End applied for the client's prop");
-        return;
-    }
-    if (!h.endedSaid) {
-        DC::Say(std::string(kEndedPrefix) + std::to_string(h.r.eid));
-        h.endedSaid = true;
-    }
-    HostJudge(a);
-}
 
 // ---- the acting client ----
 enum class CPh : uint8_t { Go, Walk, Claim, Kick };
@@ -235,7 +172,7 @@ struct Target {
 };
 
 struct ClientState {
-    bool                                            done = false;
+    bool                                            done = false, readySaid = false;
     CPh                                             phase = CPh::Go;
     uint64_t                                        at = 0, phaseAt = 0, kickAt = 0;
     std::vector<Target>                             targets;
@@ -300,7 +237,11 @@ bool Kick(void* player, void* prop) {
 }
 
 void ClientGo(void* player) {
-    if (DC::PollDue() && DC::ChatHasLive(kGoLine) && StreamsRun()) {
+    if (!g_c.readySaid && StreamsRun()) {   // the host's go waits on this line and the observer's
+        DC::Say(kClientReadyLine);
+        g_c.readySaid = true;
+    }
+    if (g_c.readySaid && DC::PollDue() && DC::ChatHasLive(kGoLine) && StreamsRun()) {
         if (!PickTargets(player)) return ClientFail("no keyed prop with a host element id, simulating, near the player");
         return StartWalk();
     }
@@ -383,7 +324,7 @@ bool IsEnabled() { return ArmOf() != Arm::Off; }
 void Tick(coop::net::Session* s) {
     const Arm a = ArmOf();
     if (a == Arm::Off || !s) return;
-    if (s->role() == coop::net::Role::Host) return HostTick(s, a);
+    if (s->role() == coop::net::Role::Host) return HostTick(a);
     if (!s->connected()) return;
     if (coop::players::Registry::Get().LocalPeerId() == kObserverSlot && coop::net_pump::HasAnnouncedWorldReady())
         ObserverTick(s, a);
@@ -393,7 +334,7 @@ void Tick(coop::net::Session* s) {
 
 void OnDisconnect() {
     WalkCancel();
-    g_h = HostState{};
+    HostReset();
     g_c = ClientState{};
     ObserverReset();
 }

@@ -30,7 +30,7 @@ namespace PR  = ue_wrap::prop;
 namespace E   = ue_wrap::engine;
 
 struct ObserverState {
-    bool               done = false, started = false;
+    bool               done = false, started = false, readySaid = false;
     uint64_t           at = 0, endedAt = 0, kickedAt = 0;
     uint32_t           forged = 0, eid = 0;
     Rested             r;
@@ -50,26 +50,37 @@ void Kick(uint64_t now) {
         if (now - o.endedAt > kEndBoundMs) Fail("observer", o.done, "no End applied after the host's end");
         return;
     }
-    if (view.rows == 0) return Fail("observer", o.done, "no relayed row before the host's end");
+    // Rows applied to this copy before its End, against the rows that reached the receive store: the store keeps the
+    // newest per eid, so a hitching frame coalesces many into one (merged high, applied low) where a lost datagram
+    // lowers both.
+    const uint32_t merged = PDS::dev::MergedOf(o.r.eid);
+    if (view.rows == 0)
+        return Fail("observer", o.done, Fmt("no relayed row applied before the host's end (%u reached the receive store)", merged));
     if (view.rows < kMinRows)
-        return Fail("observer", o.done, Fmt("only %u relayed rows before the host's end (want >= %u)", view.rows, kMinRows));
+        return Fail("observer", o.done, Fmt("only %u relayed rows applied before the host's end (want >= %u; %u reached the receive store)",
+                                            view.rows, kMinRows, merged));
     const Verdict v = JudgeCopy(o.r, view, true);
     if (!v.why.empty()) return Fail("observer", o.done, v.why);
-    Pass("observer", o.done, Fmt("eid=%u gen=%u rows=%u travelled=%.1f of %.1f cm off=%.1f cm", o.r.eid,
-                                 static_cast<unsigned>(view.gen), view.rows, v.travelled, o.r.cm, v.offCm));
+    Pass("observer", o.done, Fmt("eid=%u gen=%u rows=%u merged=%u travelled=%.1f of %.1f cm off=%.1f cm", o.r.eid,
+                                 static_cast<unsigned>(view.gen), view.rows, merged, v.travelled, o.r.cm, v.offCm));
 }
 
 void Forge(coop::net::Session* s, uint64_t now) {
     ObserverState& o = g_o;
+    // Both lines are read on every tick, never on the chat poll's cadence: the kick's whole hold fits inside one poll
+    // at a low frame rate, and a verdict on the first poll that sees "ended" could land before a row was forged.
     if (o.eid == 0) {
-        if (!DC::PollDue() || !ReadEid(kKickedPrefix, &o.eid)) {
+        if (!ReadEid(kKickedPrefix, &o.eid)) {
             if (now - o.at > kSayBoundMs) Fail("observer", o.done, "the client never said it kicked");
             return;
         }
         o.kickedAt = now;
     }
     uint32_t endedEid = 0;
-    if (ReadEid(kEndedPrefix, &endedEid) && endedEid == o.eid) return Pass("observer", o.done, Fmt("eid=%u forged=%u rows", o.eid, o.forged));
+    if (ReadEid(kEndedPrefix, &endedEid) && endedEid == o.eid) {
+        if (o.forged == 0) return Fail("observer", o.done, "forged no row");
+        return Pass("observer", o.done, Fmt("eid=%u forged=%u rows", o.eid, o.forged));
+    }
     const PDS::dev::DriveView view = PDS::dev::ViewOf(o.eid);
     if (view.rows == 0 || view.endApplied) {
         if (view.rows == 0 && now - o.kickedAt > kGenBoundMs) Fail("observer", o.done, "no relayed row to read the generation from");
@@ -102,7 +113,17 @@ void Forge(coop::net::Session* s, uint64_t now) {
 
 void ObserverTick(coop::net::Session* s, Arm a) {
     if (g_o.done) return;
-    if (!g_o.started) { g_o.started = true; g_o.at = Now(); }
+    if (!g_o.readySaid) {   // the host's go waits on this line and the acting client's: same readiness as its
+        if (!g_o.started) { g_o.started = true; g_o.at = Now(); }
+        if (StreamsRun()) {
+            DC::Say(kObserverReadyLine);
+            g_o.readySaid = true;
+            g_o.at = Now();   // the later bounds count from here
+        } else if (Now() - g_o.at > kReadyBoundMs) {
+            Fail("observer", g_o.done, "this client's streams never settled");
+        }
+        return;
+    }
     if (a == Arm::Forge) Forge(s, Now());
     else Kick(Now());
 }

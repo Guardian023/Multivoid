@@ -96,9 +96,14 @@ struct DriveView {
     bool             endApplied = false;   // that generation's End was applied to the copy here
     ue_wrap::FVector startLoc{};           // the copy's place at the generation's first row, before the park
     bool             startRead = false;
+    ue_wrap::FVector lastRowLoc{};         // the place the last row applied in that generation named, before its End
 };
 // Kept after the End and cleared with the session; a default view when the eid was never driven here.
 DriveView ViewOf(uint32_t eid);
+// NET THREAD: a row of `eid` reached this peer's receive store, which keeps the newest per eid. Counted for the drill.
+void NoteMerged(uint32_t eid);
+// Rows of `eid` that reached the receive store this session: against the view's rows it tells coalescing from loss.
+uint32_t MergedOf(uint32_t eid);
 }  // namespace dev
 
 }  // namespace coop::prop_drive_stream
