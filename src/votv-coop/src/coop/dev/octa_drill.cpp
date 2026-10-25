@@ -283,8 +283,8 @@ const char* RelayDirty() {
     if (r.verdictTimeout > b.verdictTimeout) return "a verdict timed out";
     if (r.verdictDropped > b.verdictDropped) return "a verdict was dropped";
     if (r.eventDropped > b.eventDropped) return "an event was dropped";
-    if (r.overwriteWrites - b.overwriteWrites < r.verdictApplied - b.verdictApplied)
-        return "the overwrite did not write: fewer answers were written than verdicts applied";
+    if (r.overwriteWrites - b.overwriteWrites != r.verdictApplied - b.verdictApplied)
+        return "the overwrite did not write once per verdict applied";
     return nullptr;
 }
 
