@@ -30,7 +30,7 @@ namespace PR  = ue_wrap::prop;
 namespace E   = ue_wrap::engine;
 
 struct ObserverState {
-    bool               done = false, started = false, readySaid = false;
+    bool               done = false, started = false, readySaid = false, restedSeen = false;
     uint64_t           at = 0, endedAt = 0, kickedAt = 0;
     uint32_t           forged = 0, eid = 0;
     Rested             r;
@@ -40,9 +40,13 @@ struct ObserverState {
 void Kick(uint64_t now) {
     ObserverState& o = g_o;
     if (o.endedAt == 0) {
-        uint32_t endedEid = 0;
-        if (DC::PollDue() && ReadRested(&o.r) && ReadEid(kEndedPrefix, &endedEid) && endedEid == o.r.eid) o.endedAt = now;
-        else if (now - o.at > kSayBoundMs + kEndBoundMs) Fail("observer", o.done, "the client's rested or the host's ended line never came");
+        uint32_t endedEid = 0;   // the rested row is latched (with its numbers) when seen: it retires before the ended one comes
+        if (DC::PollDue()) {
+            if (!o.restedSeen) o.restedSeen = ReadRested(&o.r);
+            if (o.restedSeen && ReadEid(kEndedPrefix, &endedEid) && endedEid == o.r.eid) o.endedAt = now;
+        }
+        if (o.endedAt == 0 && now - o.at > kSayBoundMs + kEndBoundMs)
+            Fail("observer", o.done, "the client's rested or the host's ended line never came");
         return;
     }
     const PDS::dev::DriveView view = PDS::dev::ViewOf(o.r.eid);

@@ -19,7 +19,9 @@ namespace PDS = coop::prop_drive_stream;
 namespace PSH = coop::prop_syncer_host;
 
 struct HostState {
-    bool     done = false, goSaid = false, restedSeen = false, endedSaid = false;
+    // The ready lines are latched the first time they are seen: a chat row is live for a short while, and the two
+    // clients can join further apart than that.
+    bool     done = false, clientReady = false, observerReady = false, goSaid = false, restedSeen = false, endedSaid = false;
     uint64_t at = 0, goAt = 0, restedAt = 0;
     Rested   r;
 } g_h;
@@ -55,7 +57,11 @@ void HostTick(Arm a) {
     const uint64_t now = Now();
     if (h.at == 0) h.at = now;
     if (!h.goSaid) {
-        if (DC::PollDue() && DC::ChatHasLive(kClientReadyLine) && DC::ChatHasLive(kObserverReadyLine)) {
+        if (DC::PollDue()) {
+            h.clientReady = h.clientReady || DC::ChatHasLive(kClientReadyLine);
+            h.observerReady = h.observerReady || DC::ChatHasLive(kObserverReadyLine);
+        }
+        if (h.clientReady && h.observerReady) {
             DC::Say(kGoLine);
             h.goSaid = true;
             h.goAt = now;

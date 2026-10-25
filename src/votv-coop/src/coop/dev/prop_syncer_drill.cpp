@@ -172,7 +172,7 @@ struct Target {
 };
 
 struct ClientState {
-    bool                                            done = false, readySaid = false;
+    bool                                            done = false, readySaid = false, goSeen = false;
     CPh                                             phase = CPh::Go;
     uint64_t                                        at = 0, phaseAt = 0, kickAt = 0;
     std::vector<Target>                             targets;
@@ -241,7 +241,8 @@ void ClientGo(void* player) {
         DC::Say(kClientReadyLine);
         g_c.readySaid = true;
     }
-    if (g_c.readySaid && DC::PollDue() && DC::ChatHasLive(kGoLine) && StreamsRun()) {
+    if (g_c.readySaid && !g_c.goSeen && DC::PollDue()) g_c.goSeen = DC::ChatHasLive(kGoLine);   // latched: the row retires
+    if (g_c.goSeen && StreamsRun()) {
         if (!PickTargets(player)) return ClientFail("no keyed prop with a host element id, simulating, near the player");
         return StartWalk();
     }
