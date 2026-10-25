@@ -87,8 +87,6 @@ std::shared_ptr<D::BackgroundWalk> g_walk;
 GS::Counters g_base{};            // the lane's counters when the Octa stood
 uint64_t g_nearAt = 0;            // the first tick a puppet stood inside the sphere
 bool     g_aggroSaid = false;
-uint32_t g_idleMark = 0;          // the idle count when the third verdict came
-bool     g_third = false;
 // CLIENT (measure)
 uint32_t g_appliedBase = 0;       // the explosion lane's applied count when the client reached the Octa
 uint32_t g_appliedSeen = 0;
@@ -222,6 +220,7 @@ void HostWait(coop::net::Session* s, void* me) {
         }
         g_octa.Set(octa);
         g_base = GS::GetCounters();
+        GS::OpenVerdictWindow(kBlastsWanted);
         UE_LOGI("[OCTA-DRILL] host READY measure: Octa eid=%u at=%.0f,%.0f,%.0f", NpcEidOf(octa), at.X, at.Y, at.Z);
     }
     g_hstep = HStep::Watch;
@@ -265,11 +264,9 @@ void HostWatchMeasure() {
         Fail("no host aggro (the client's puppet stood within 1000 cm of the Octa for 30 s)");
         return;
     }
-    if (!g_third && c.hostVerdict - g_base.hostVerdict >= kBlastsWanted) {
-        g_third = true;
-        g_idleMark = c.idle;
-    }
-    if (g_third && c.idle > g_idleMark && haveBoth && dist > kSphereCm) {
+    // An idle after the third verdict, with the puppet out of the sphere. The lane keeps the idle count at the moment
+    // it counted the third verdict, so an idle between that and this poll is not absorbed.
+    if (c.windowReached && c.idle > c.idleAtWindow && haveBoth && dist > kSphereCm) {
         UE_LOGI("[OCTA-DRILL] measure DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
                 c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
                 c.laser - g_base.laser, Now());
@@ -443,8 +440,6 @@ void OnDisconnect() {
     g_base = GS::Counters{};
     g_nearAt = 0;
     g_aggroSaid = false;
-    g_idleMark = 0;
-    g_third = false;
     g_appliedBase = g_appliedSeen = 0;
     g_calledEvent = false;
 }

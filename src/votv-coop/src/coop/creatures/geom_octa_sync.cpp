@@ -54,6 +54,8 @@ bool g_watched = false;
 
 Counters g_counters{};
 char     g_lastTarget[40] = {};
+uint32_t g_windowWanted = 0;    // OpenVerdictWindow: the verdict to mark, 0 for no window
+uint32_t g_windowCounted = 0;   // the host verdicts counted since it opened
 
 // The host's count of "fire" finish verdicts per Octa, for its life, keyed by the Octa's object slot and the slot's
 // serial (the shape of npc_mirror_brain's mark): an element id or an address recycled for another Octa never inherits a
@@ -175,6 +177,10 @@ void OnFireFinishPost(const sg::Call& call) {
     char eid[16];
     EidText(id, eid);
     ++g_counters.hostVerdict;
+    if (g_windowWanted > 0 && !g_counters.windowReached && ++g_windowCounted == g_windowWanted) {
+        g_counters.windowReached = true;
+        g_counters.idleAtWindow = g_counters.idle;
+    }
     UE_LOGI("[OCTA] host verdict eid=%s n=%u refire=%d t=%llu", eid, static_cast<unsigned>(n), refire, Now());
 }
 
@@ -246,12 +252,20 @@ void Install(coop::net::Session* session) {
 
 Counters GetCounters() { return g_counters; }
 
+void OpenVerdictWindow(uint32_t n) {
+    g_windowWanted = n;
+    g_windowCounted = 0;
+    g_counters.windowReached = false;
+    g_counters.idleAtWindow = 0;
+}
+
 const char* LastAggroTarget() { return g_lastTarget; }
 
 void OnDisconnect() {
     for (VerdictCount& v : g_verdicts) v = VerdictCount{};
     g_verdictNext = 0;
     g_counters = Counters{};
+    g_windowWanted = g_windowCounted = 0;
     g_lastTarget[0] = '\0';
     g_aggroEntry = AggroEntry{};
 }
