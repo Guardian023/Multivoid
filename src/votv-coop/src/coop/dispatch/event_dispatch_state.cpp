@@ -543,21 +543,27 @@ bool HandleStateEvent(net::Session& session,
         break;
     }
     case net::ReliableKind::CordLinkState: {
+        // A cord's link, one kind in three ops by direction: op 0 (a client's claim) reaches the host alone, ops 1
+        // (a canonical) and 2 (the seed's end) reach a client from the host alone. The format and the direction are
+        // judged here, every other check in the module; a message that fails either is counted there, not logged,
+        // so a flood costs no line. coop::cord_sync::OnReliable.
         if (msg.payloadLen != sizeof(net::CordLinkPayload)) {
-            UE_LOGW("event_feed: CordLinkState payload size mismatch (%zu != %zu)",
-                    static_cast<size_t>(msg.payloadLen), sizeof(net::CordLinkPayload));
+            coop::cord_sync::CountDropped();
             break;
         }
         net::CordLinkPayload p{};
         std::memcpy(&p, msg.payload, sizeof(p));
-        if (p.propKey.len == 0 || p.propKey.len > sizeof(p.propKey.data) ||
-            p.socketKey.len > sizeof(p.socketKey.data)) {
-            UE_LOGW("event_feed: CordLinkState key length is invalid");
+        const bool validSender = msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers;
+        const bool fromClient = validSender && msg.senderPeerSlot != 0;
+        const bool fromHost = validSender && msg.senderPeerSlot == 0;
+        const bool direction = (p.op == 0 && session.role() == net::Role::Host && fromClient) ||
+                               ((p.op == 1 || p.op == 2) && session.role() == net::Role::Client && fromHost);
+        if (!direction || p.pad != 0 || p.sockForm > 2 || p.cord.len > sizeof(p.cord.data) ||
+            p.sock.len > sizeof(p.sock.data) || p.child.len > sizeof(p.child.data)) {
+            coop::cord_sync::CountDropped();
             break;
         }
-        const uint8_t senderSlot = msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers
-            ? static_cast<uint8_t>(msg.senderPeerSlot) : static_cast<uint8_t>(0xFF);
-        coop::cord_sync::OnReliable(p, senderSlot);
+        coop::cord_sync::OnReliable(p, static_cast<uint8_t>(msg.senderPeerSlot));
         break;
     }
     case net::ReliableKind::ServerSetting:

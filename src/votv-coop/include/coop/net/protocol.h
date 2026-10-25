@@ -1128,10 +1128,11 @@ enum class ReliableKind : uint8_t {
     // AtvSetCompletePayload.
     AtvSetComplete = 199,
 
-    // Any peer, relayed by the host: one corded prop's socket relationship, named by the prop's
-    // save key and the socket's actor-save key (empty socket key means unplugged). Receivers
-    // resolve both actors locally and replay the game's cordPlugged/cordUnplugged chain. The host
-    // sends the current relationships to a joining peer at its world-ready edge. CordLinkPayload.
+    // One corded prop's cord-to-socket link, decided by the host. A client claims the outcome of its own player's
+    // plug or unplug (op 0, client to host, never relayed); the host answers every claim with the cord's link as it
+    // now stands (op 1, seq = the claim's, to the sender) and broadcasts every change of a link (op 1, seq 0); at a
+    // joiner's world-ready it sends every corded prop's link, then op 2 (the seed's end). Rides PropSpawn's lane, so
+    // a link never passes the birth of the prop it names. Not pre-world. CordLinkPayload.
     CordLinkState = 195,
 };
 
@@ -1271,11 +1272,20 @@ struct WireKey {
 };
 static_assert(sizeof(WireKey) == 32, "WireKey must be 32 bytes");
 
+// op 0 claim, 1 canonical, 2 seed end (the other fields zero). `cord` is the corded prop's key. sockForm 0 =
+// unplugged (`sock` and `child` empty), 1 = a socket by its own key (`sock`), 2 = a child socket by its owner prop's
+// key (`sock`) and the owner's child component name (`child`). `seq` is a client's claim number from 1; an answer
+// carries the claim's, a broadcast 0.
 struct CordLinkPayload {
-    WireKey propKey;
-    WireKey socketKey;
+    uint8_t  op;
+    uint8_t  sockForm;
+    uint16_t pad;
+    uint32_t seq;
+    WireKey  cord;
+    WireKey  sock;
+    WireKey  child;
 };
-static_assert(sizeof(CordLinkPayload) == 64, "CordLinkPayload must be 64 bytes");
+static_assert(sizeof(CordLinkPayload) == 104, "CordLinkPayload must be 104 bytes");
 
 // A Blueprint class leaf name ("Aprop_equipment_flashlight_C"). Bytes beyond len are zero.
 struct WireClassName {

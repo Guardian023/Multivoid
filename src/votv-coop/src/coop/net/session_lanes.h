@@ -74,6 +74,8 @@ inline Lane LaneForKind(ReliableKind k) {
     // its disc.
     case ReliableKind::FloppySlotState:    return Lane::Bulk;
     case ReliableKind::LaptopQuad:         return Lane::Bulk;
+    // A cord link names a prop by key: it never passes that prop's spawn, and an answer keeps the host's send order.
+    case ReliableKind::CordLinkState:      return Lane::Bulk;
     // PropConvert destroys the ball and spawns the pile, so it shares the spawn lane; on another
     // lane a convert could overtake the ball's spawn and leave a never-destroyed ball.
     case ReliableKind::PropConvert:    return Lane::Bulk;
@@ -274,7 +276,6 @@ constexpr bool IsClientRelayableReliableKind(ReliableKind k) {
     // as DoorVerbIntent, an intent addressed to the host alone. PowerControlState likewise: a press
     // reaches the host alone and the host authors the canonical.
     case ReliableKind::LightState:
-    case ReliableKind::CordLinkState:
     case ReliableKind::ContainerState:
     case ReliableKind::GarageDoorState:   // symmetric
     case ReliableKind::ApplianceState:    // symmetric
