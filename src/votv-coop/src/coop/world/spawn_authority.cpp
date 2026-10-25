@@ -12,8 +12,7 @@
 // master's tick drives roach movement, the food-eat mutation and crush traces, which a client running
 // it would diverge, so it and its summoner are refused while the roach sync drives the client
 // population. The jellyfish path's spawn makes seven fish inside its graph, and the host's are
-// mirrored through the source-gated catch, so a client's own, its 18:00 roll's, is refused. The gamemode's night
-// roll mints a Geom Octa or a night egg and re-arms its own timer in one body, mirrored the same way.
+// mirrored through the source-gated catch, so a client's own, its 18:00 roll's, is refused.
 
 #include "coop/world/spawn_authority.h"
 
