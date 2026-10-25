@@ -110,8 +110,8 @@ struct OctaState {
     uint64_t unresolvedAt = 0;   // when its target first failed to resolve
     bool     heldSaid = false;
 
-    // The pairing since the last Aggro, latest wins: a refused fire-finish applies the NEWEST kept verdict numbered past
-    // `done` (relative to `base`, modular), and every older kept one is retired as superseded. A verdict's number
+    // The pairing since the last Aggro, latest wins: the pending refused fire-finishes take the NEWEST min(P, K) kept
+    // verdicts numbered past `done` (relative to `base`, modular), oldest first; older kept ones retire as superseded. A number
     // d = n - base; `done` is the highest d replayed or timed out.
     bool     haveBase = false;
     uint32_t base = 0;
@@ -269,8 +269,8 @@ void EnsureHook() {
 
 // ---- the refused notify, counted ----
 
-// Before the mirror's own "fire" finish notify: the body is refused by the brain, so the notify is only counted, and
-// paired with the host's verdict in Tick. The lane's own replay of the same function is not counted, or a re-fire's
+// Before the mirror's own "fire" finish notify: the body is refused by the brain, so the notify is queued, and Tick
+// serves it with one of the host's kept verdicts (latest wins) or times it out. The lane's own replay of the same function is not counted, or a re-fire's
 // replay would shift every later pairing by one.
 sg::Verdict OnFinishPre(const sg::Call& call) {
     if (call.fromOurCode || !GO::IsFinishNotify(call) || !B::IsMarkedMirror(call.object)) return sg::Verdict::Run;
@@ -382,32 +382,35 @@ Replay ReplayFinish(void* octa, uint8_t refire) {
 void ServeVerdicts(OctaState& st, void* octa, uint64_t now) {
     if (!st.haveBase) return;
     while (st.waitCount > 0) {
-        // The newest kept verdict numbered past `done` (relative to the base, modular).
-        size_t at = st.keptCount;
-        uint32_t newest = st.done;
+        // The kept verdicts numbered past `done` (relative to the base, modular), ascending by that number.
+        size_t order[kMaxKept];
+        size_t k = 0;
         for (size_t i = 0; i < st.keptCount; ++i) {
             const uint32_t d = st.kept[i].n - st.base;
-            if (static_cast<int32_t>(d) > 0 && d > newest) {
-                newest = d;
-                at = i;
-            }
+            if (static_cast<int32_t>(d) <= 0 || d <= st.done) continue;
+            size_t j = k++;
+            for (; j > 0 && st.kept[order[j - 1]].n - st.base > d; --j) order[j] = order[j - 1];
+            order[j] = i;
         }
         const uint32_t want = st.base + st.done + 1;   // what is waited for when none is kept
         const size_t slot = st.waitHead;
-        if (at < st.keptCount) {
+        if (k > 0) {
+            // Latest wins: the P pending notifies are served oldest first with the NEWEST min(P, K) kept verdicts in
+            // ascending order, and the kept verdicts older than those retire as superseded, never as dropped. A
+            // joiner's chain reaches its first notify long after the host began to re-fire (P = 1, K > 1: the newest).
+            const size_t served = k < st.waitCount ? k : st.waitCount;
+            const size_t retire = k - served;
+            bool gone[kMaxKept] = {};
+            for (size_t i = 0; i < retire; ++i) gone[order[i]] = true;
+            const size_t at = order[retire];
+            gone[at] = true;
             const Kept v = st.kept[at];
-            // Latest wins: the freshest decision is the one shown, and every older one retires as superseded, never as
-            // dropped. A joiner's chain reaches its first notify long after the host began to re-fire.
-            uint32_t retired = 0;
             size_t w = 0;
-            for (size_t i = 0; i < st.keptCount; ++i) {
-                if (i == at) continue;
-                if (static_cast<int32_t>(st.kept[i].n - st.base) > 0 && st.kept[i].n - st.base < newest) ++retired;
-                else st.kept[w++] = st.kept[i];   // none: a verdict ahead of the applied one stays kept
-            }
+            for (size_t i = 0; i < st.keptCount; ++i)
+                if (!gone[i]) st.kept[w++] = st.kept[i];
             st.keptCount = w;
-            if (retired) NoteSuperseded(st, v.n, retired);
-            st.done = newest;
+            if (retire) NoteSuperseded(st, v.n, static_cast<uint32_t>(retire));
+            st.done = v.n - st.base;
             st.waitHead = (st.waitHead + 1) % kMaxWaiting;
             --st.waitCount;
             const Replay r = ReplayFinish(octa, v.refire);
@@ -493,7 +496,8 @@ void OnEvent(const N::GeomOctaEventPayload& p) {
         st->heldSaid = false;
         return;
     }
-    // A FireVerdict: kept for the notify it pairs with. One numbered at or below the base, or already paired, is over.
+    // A FireVerdict: kept until a refused notify is served (latest wins: Tick shows the newest, retires the older).
+    // One numbered at or below the base, or already shown, is over.
     const uint32_t d = p.verdictNo - st->base;
     if (st->haveBase && (static_cast<int32_t>(d) <= 0 || d <= st->done)) {
         LogDroppedVerdict(p.octaEid, p.verdictNo, "at or below the base");
@@ -506,8 +510,12 @@ void OnEvent(const N::GeomOctaEventPayload& p) {
         }
     }
     if (st->keptCount == kMaxKept) {
-        NoteSuperseded(*st, p.verdictNo, 1);   // the oldest kept goes: the newer verdict is the one that would win
-        for (size_t i = 1; i < kMaxKept; ++i) st->kept[i - 1] = st->kept[i];
+        // The kept verdict nearest the base goes (the Bulk lane is ordered, so it is also the oldest: this is defensive).
+        size_t ev = 0;
+        for (size_t i = 1; i < st->keptCount; ++i)
+            if (st->kept[i].n - st->base < st->kept[ev].n - st->base) ev = i;
+        NoteSuperseded(*st, p.verdictNo, 1);
+        for (size_t i = ev + 1; i < st->keptCount; ++i) st->kept[i - 1] = st->kept[i];
         --st->keptCount;
     }
     st->kept[st->keptCount++] = Kept{p.verdictNo, p.refire};
