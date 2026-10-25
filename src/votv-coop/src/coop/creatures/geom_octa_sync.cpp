@@ -20,7 +20,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
-#include <unordered_map>
 
 namespace coop::geom_octa_sync {
 namespace {
@@ -56,8 +55,41 @@ bool g_watched = false;
 Counters g_counters{};
 char     g_lastTarget[40] = {};
 
-// The host's count of "fire" finish verdicts per Octa, for its life, keyed by the Octa's element id.
-std::unordered_map<uint32_t, uint32_t> g_verdicts;
+// The host's count of "fire" finish verdicts per Octa, for its life, keyed by the Octa's object slot and the slot's
+// serial (the shape of npc_mirror_brain's mark): an element id or an address recycled for another Octa never inherits a
+// count. A fixed table; entries whose slot no longer holds their serial are the first to be replaced, and when more
+// Octas live than it holds the oldest entry goes.
+struct VerdictCount {
+    int32_t  index = -1;
+    int32_t  serial = 0;
+    uint32_t n = 0;
+};
+constexpr size_t kMaxOctas = 16;
+VerdictCount g_verdicts[kMaxOctas];
+size_t       g_verdictNext = 0;
+
+// `octa`'s verdict count, counted up by one; 0 when its slot gives no serial.
+uint32_t CountVerdict(void* octa) {
+    const int32_t index = R::InternalIndexOf(octa);
+    if (index < 0) return 0;
+    for (VerdictCount& v : g_verdicts)
+        if (v.index == index && R::SlotSerial(index) == v.serial) return ++v.n;
+    const int32_t serial = R::AllocateSlotSerial(index);
+    if (serial == 0) return 0;
+    VerdictCount* slot = nullptr;
+    for (VerdictCount& v : g_verdicts) {
+        if (v.index < 0 || R::SlotSerial(v.index) != v.serial) {
+            slot = &v;
+            break;
+        }
+    }
+    if (!slot) {
+        slot = &g_verdicts[g_verdictNext];
+        g_verdictNext = (g_verdictNext + 1) % kMaxOctas;
+    }
+    *slot = VerdictCount{index, serial, 1};
+    return 1;
+}
 
 // `aggro`'s entry as the PRE saw it: whether the Octa had a target, kept for the POST of the same call. The body's
 // guard tests the old target, not the argument, so the POST alone cannot tell a passed guard from a refused one.
@@ -138,7 +170,7 @@ void OnAggroPost(const sg::Call& call) {
 void OnFireFinishPost(const sg::Call& call) {
     if (!IsHost()) return;
     const EL::ElementId id = NpcEid(call.object);
-    const uint32_t n = id != EL::kInvalidId ? ++g_verdicts[static_cast<uint32_t>(id)] : 0;
+    const uint32_t n = CountVerdict(call.object);
     const int refire = GO::TargetActor(call.object) ? 1 : 0;
     char eid[16];
     EidText(id, eid);
@@ -217,7 +249,8 @@ Counters GetCounters() { return g_counters; }
 const char* LastAggroTarget() { return g_lastTarget; }
 
 void OnDisconnect() {
-    g_verdicts.clear();
+    for (VerdictCount& v : g_verdicts) v = VerdictCount{};
+    g_verdictNext = 0;
     g_counters = Counters{};
     g_lastTarget[0] = '\0';
     g_aggroEntry = AggroEntry{};
