@@ -194,6 +194,21 @@ public:
     }
     ProcStatus OnTick(const PlayerContext& ctx) override {
         ++tick_;
+        bool isRagdoll = false, dead = false;
+        if (E::ReadMainPlayerRagdollState(ctx.player, isRagdoll, dead) && !dead) {
+            if (isRagdoll) {   // down: no steering, no stuck count, no run key until it is up
+                fell_ = true;
+                sinceProgress_ = 0;
+                LetRunGo();
+                return ProcStatus::Working;
+            }
+            if (fell_) {   // a walker knocked down gets up somewhere else, and a route followed from the spot it
+                fell_ = false;   // fell would steer it at the waypoint it was heading for, through whatever stands between
+                UE_LOGI("director/Goto: the walker got up at (%.0f,%.0f,%.0f) after a fall -- re-path from here (toPile=%.0f)",
+                        ctx.pos.X, ctx.pos.Y, ctx.pos.Z, HorizDist(ctx.pos, goal_.targetPos));
+                pathed_ = false; waypoints_.clear(); wp_ = 0; lastWp_ = 0; bestWp_ = 1e9f; bestPile_ = 1e9f;
+            }
+        }
         if (detour_.Active()) {   // looking for a way round a slope the body cannot climb: stand while it does
             std::vector<ue_wrap::FVector> route;
             const detour::Search::Step step = detour_.Advance(ctx.player, &route);
@@ -396,6 +411,7 @@ private:
     int    legs_ = 0;
     float  legFrom_ = 0.f;     // the walker's distance to the goal where the current route began
     bool   routed_ = false;    // a NavMesh route was had: a later failed query is no reason to beeline
+    bool   fell_ = false;      // the last read found the walker in ragdoll: the edge to standing re-paths
     bool   runHeld_ = false;   // the run key is down (kRunFromCm), let go near the goal or on losing control
     ue_wrap::CachedObjRef runPlayer_;   // the pawn it was pressed on
     int    retryRouteAt_ = -1; // standing with no route: the tick to ask again at
