@@ -11,12 +11,12 @@
 
 #pragma once
 
-//   join     -- TWO peers, run with the rig's --rejoin: the host is the walker, held in the sphere (it walks back in after
-//               each knockback). Client 1's first life applies two verdicts and prints `[OCTA-DRILL] JOIN LIFE 1 DONE` (the
-//               rejoin marker); the relaunched client is the joiner, replays the snapshot's Aggro, applies three verdicts,
-//               prints `join DONE role=joiner` and says so in chat; the host leaves on that and prints `join DONE`, after
-//               saying `join snapshot: mid-attack` (a snapshot between attacks ends the arm `FAIL: INCONCLUSIVE`).
-//               Red: octa_red=no_join (`FAIL: no aggro at join`).
+//   join     -- THREE peers, run with the rig's --observer: the host walks 2200 cm from client 1 (a witness that stands
+//               where it spawned) and spawns the Octa 600 cm from itself, timed off client 1's load time, so the Octa
+//               aggros the host about 8 s before the observer (the joiner) is world-ready. The observer's snapshot carries
+//               the Octa and the join Aggro: it replays it, applies one verdict, prints `join DONE role=joiner` and says so
+//               in chat; the host leaves on that and prints `join DONE`, after `join snapshot: mid-attack` (a snapshot
+//               between attacks ends the arm `FAIL: INCONCLUSIVE`). Red: octa_red=no_join (`FAIL: no aggro at join`).
 // Every player holds `startInvinc` for the arm's span, and the firing arms demand `damage_probe=1` so each blast logs [DMG].
 
 namespace coop::net { class Session; }

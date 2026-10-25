@@ -235,6 +235,11 @@ void HostPlace(void* me) {
         if (PlaceWalkTick(me, pp, "host") != PlaceStep::Reached) return;
         g_walkerSlot = 0;
         UE_LOGI("[OCTA-DRILL] host in place t=%llu", Now());
+        if (ArmOf() == Arm::Join) {   // the Octa is spawned on the joiner's schedule (HostTiming), not now
+            g_hstep = HStep::Timing;
+            g_stepMs = coop::net::NowMs();
+            return;
+        }
         if (!E::TryGetActorLocation(me, hp)) return;
         SpawnOctaBeside(me, hp, OthersOf(me, true, 0));
         return;
@@ -257,25 +262,24 @@ void HostPlace(void* me) {
 void HostWalkTick(void* octa, void* me) {
     switch (g_wstep) {
     case WStep::Stand: {
+        if (ArmOf() == Arm::Join) {
+            // The join arm's host stands where it is until the joiner's chat line, then walks out.
+            if (!g_joinHoldAt) g_joinHoldAt = coop::net::NowMs();
+            if (!JoinerDone()) {
+                if (coop::net::NowMs() - g_joinHoldAt > kJoinWaitMs) Fail("the joiner never said it was done (360 s)");
+                return;
+            }
+            g_idleAtRelease = GS::GetCounters().idle;
+            if (BeginWalkOut(me, octa, "host")) g_wstep = WStep::Out;
+            return;
+        }
         const uint32_t now = GS::GetCounters().hostVerdict - g_base.hostVerdict;
         if (now > g_volleysSeen) {
             g_volleysSeen = now;
             g_stepMs = coop::net::NowMs();
             UE_LOGI("[OCTA-DRILL] host: volley %u of %u fired", now, kBlastsWanted);
         }
-        // The join arm's host holds in the sphere, re-entering after each knockback, so the Octa keeps firing for the
-        // joiner's snapshot; the joiner's chat line releases it (counted from its three verdicts, since the joiner's
-        // life 2 comes later).
-        const bool join = ArmOf() == Arm::Join;
-        if (join && !g_joinerSeen) WalkerReEnter(me);
         if (g_volleysSeen >= kBlastsWanted) {
-            if (join && !JoinerDone()) {
-                if (!g_joinHoldAt) g_joinHoldAt = coop::net::NowMs();
-                g_stepMs = coop::net::NowMs();   // holding is progress: the verdicts still come
-                if (coop::net::NowMs() - g_joinHoldAt > kJoinWaitMs) Fail("the joiner never said it was done (360 s)");
-                return;
-            }
-            g_idleAtRelease = GS::GetCounters().idle;
             if (BeginWalkOut(me, octa, "host")) g_wstep = WStep::Out;
             return;
         }
@@ -365,23 +369,54 @@ void HostWatchMeasure() {
     }
 }
 
-// The join arm's measurement validity: the joiner's snapshot must have found the Octa mid-attack, or the Aggro path it
-// proves was not exercised. Judged once, on the first snapshot after the Octa stood, and kept up after the host's own
-// leg has ended, since the joiner's second life joins later. A snapshot the drill holds no Octa for, or one between
-// attacks, ends the arm INCONCLUSIVE, and so does a peer back in the world while the drill holds none: never silence.
-void JudgeJoinSnapshot(coop::net::Session* s) {
+// The join arm's timing, read from the session's own edges. The witness (slot 1) is admitted and world-ready first: its
+// load time L is the span between the two. The observer (slot 2, the joiner) is admitted later; the Octa is spawned at
+// its admit + max(0, L - kJoinLeadMs), so the Octa aggros the host about kJoinLeadMs before the observer's world-ready,
+// and the observer's snapshot finds the attack in its pre-fire window.
+uint64_t g_admitAt[3] = {};   // the net clock at each slot's admit and world-ready edge on the host (0: not yet)
+uint64_t g_readyAt[3] = {};
+uint64_t g_spawnAt = 0;       // when the Octa is to be spawned (0: not yet decided)
+
+void NoteJoinEdges(coop::net::Session* s) {
+    const uint64_t now = coop::net::NowMs();
+    for (int slot = 1; slot <= 2; ++slot) {
+        if (!g_admitAt[slot] && s->HasPeerConn(slot)) g_admitAt[slot] = now;
+        if (g_readyAt[slot] || !s->IsSlotWorldReady(slot)) continue;
+        g_readyAt[slot] = now;
+        if (slot == 2 && !g_octa.Get()) {
+            UE_LOGI("[OCTA-DRILL] join snapshot: no host Octa");
+            Fail("INCONCLUSIVE -- the observer was world-ready before the Octa stood");
+        }
+    }
+}
+
+void HostTiming(void* me) {
+    Guard();
+    if (!g_spawnAt && g_readyAt[1] && g_admitAt[1] && g_admitAt[2]) {
+        const uint64_t loadMs = g_readyAt[1] - g_admitAt[1];
+        const uint64_t waitMs = loadMs > kJoinLeadMs ? loadMs - kJoinLeadMs : 0;
+        g_spawnAt = g_admitAt[2] + waitMs;
+        UE_LOGI("[OCTA-DRILL] join timing L=%llu D=%llu", static_cast<unsigned long long>(loadMs),
+                static_cast<unsigned long long>(waitMs));
+    }
+    if (!g_spawnAt || coop::net::NowMs() < g_spawnAt) {
+        if (Expired(kJoinWaitMs)) Fail("the observer was never admitted (360 s)");
+        return;
+    }
+    FVector hp{};
+    if (!E::TryGetActorLocation(me, hp)) return;
+    SpawnOctaBeside(me, hp, OthersOf(me, true, 0));
+}
+
+// The join arm's measurement validity: the observer's snapshot must have found the Octa mid-attack, or the Aggro path it
+// proves was not exercised. Judged once, on the first snapshot after the Octa stood. A snapshot the drill holds no
+// Octa for, or one between attacks, ends the arm INCONCLUSIVE: never silence.
+void JudgeJoinSnapshot() {
     if (g_snapJudged) return;
     const GS::Counters c = GS::GetCounters();
     const bool mid = c.joinMid > g_base.joinMid;
     const bool between = c.joinBetween > g_base.joinBetween;
-    if (!mid && !between) {
-        if (g_peerGone && s->AnyWorldReadyPeer() && !g_octa.Get()) {
-            g_snapJudged = true;
-            UE_LOGI("[OCTA-DRILL] join snapshot: no host Octa");
-            Fail("INCONCLUSIVE -- the joiner is back and the host holds no Octa");
-        }
-        return;
-    }
+    if (!mid && !between) return;
     g_snapJudged = true;
     if (!g_octa.Get()) {
         UE_LOGI("[OCTA-DRILL] join snapshot: no host Octa");
@@ -396,9 +431,18 @@ void JudgeJoinSnapshot(coop::net::Session* s) {
 
 }  // namespace
 
+void ResetJoinHost() {
+    for (uint64_t& t : g_admitAt) t = 0;
+    for (uint64_t& t : g_readyAt) t = 0;
+    g_spawnAt = 0;
+}
+
 void HostTick(coop::net::Session* s) {
     if (!s->running()) return;
-    if (ArmOf() == Arm::Join) JudgeJoinSnapshot(s);
+    if (ArmOf() == Arm::Join) {
+        NoteJoinEdges(s);
+        JudgeJoinSnapshot();
+    }
     if (g_hstep == HStep::Done) return;
     void* me = coop::players::Registry::Get().Local();
     if (!me || !Due()) return;
@@ -407,6 +451,7 @@ void HostTick(coop::net::Session* s) {
         return;
     }
     if (g_hstep == HStep::Place) HostPlace(me);
+    else if (g_hstep == HStep::Timing) HostTiming(me);
     else if (g_hstep == HStep::Spawning) HostAwaitOcta();
     else if (ArmOf() == Arm::Births) HostWatchBirths();
     else HostWatchMeasure();

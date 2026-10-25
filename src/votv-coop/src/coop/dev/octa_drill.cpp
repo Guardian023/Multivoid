@@ -61,7 +61,7 @@ Arm ArmOf() {
 // The arms that place a walker and let the Octa fire: measure (no relay judged), attack and join (the relay judged).
 bool Fires() { return ArmOf() == Arm::Measure || RelayJudged(); }
 bool RelayJudged() { return ArmOf() == Arm::Attack || ArmOf() == Arm::Join; }
-bool IsJoiner() { return ArmOf() == Arm::Join && coop::players::Registry::Get().LocalPeerId() == 1; }
+bool IsJoiner() { return ArmOf() == Arm::Join && coop::players::Registry::Get().LocalPeerId() == 2; }
 const char* FiringArmName() { return ArmOf() == Arm::Join ? "join" : ArmOf() == Arm::Attack ? "attack" : "measure"; }
 
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
@@ -101,8 +101,6 @@ WStep    g_wstep = WStep::Stand;  // octa_measure_target=host: the host's legs a
 uint32_t g_volleysSeen = 0;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
 bool     g_snapJudged = false;    // join, host: the joiner's snapshot has been judged
 uint32_t g_idleAtRelease = 0;     // join, host: the idle count when the joiner released it
-bool     g_peerGone = false;      // join, host: the client left with the Octa standing, and the arm stayed for its return
-bool     g_hostRole = false;      // this peer is the host (set each tick; the session's end has no session to ask)
 // CLIENT (measure)
 uint32_t g_appliedBase = 0;      // the explosion lane's applied count when the Octa mirror appeared
 uint32_t g_appliedSeen = 0;
@@ -113,9 +111,6 @@ uint32_t g_laserSeen = 0;         // attack: this client's own lasers counted so
 uint64_t g_laserPendingMs = 0;    // attack: the stamp of a laser still waiting for the blast that follows it
 uint64_t g_joinHoldAt = 0;
 bool     g_joinerSeen = false;
-bool     g_lifeKnown = false;
-bool     g_isJoiner = false;
-uint32_t g_joinBase = 0;
 size_t   g_outRing = 0;           // the walk-out ring in use (kOutRingsCm)
 uint64_t g_lastAppliedMs = 0;     // when the last explosion was seen applied
 bool     g_calledEvent = false;   // CLIENT (births): the night roll's event has been called
@@ -272,65 +267,8 @@ PlaceStep PlaceWalkTick(void* me, const FVector& about, const char* who) {
     return PlaceStep::Walking;
 }
 
-// The join arm's holder stays in the Octa's reach until the joiner reports, so the Octa keeps firing for the joiner's
-// snapshot: a blast throws it out of the sphere, and an Octa that loses its target idles and wanders. Past kReEnterFromCm
-// (inside the sphere, so the way back crosses its edge and the game's own begin-overlap fires) its director walks it back
-// AT ONCE, with no wait for a steady body: the input a ragdoll cannot use is absorbed until it recovers, and the holder is
-// usually back before the Octa's close section ends and its close-finish re-acquires it. A standpoint on a ring of
-// kReEnterRingsCm about the Octa's live place; an Octa past kReEnterFarCm has wandered, and its rings widen.
-namespace {
-constexpr float    kReEnterFromCm = 900.f;
-constexpr float    kReEnterFarCm  = 3000.f;
-constexpr float    kReEnterRingsCm[] = {300.f, 800.f, 1500.f};
-constexpr size_t   kReEnterRingCount = sizeof(kReEnterRingsCm) / sizeof(kReEnterRingsCm[0]);
-constexpr int      kReEnterWalkS  = 60;
-uint32_t g_reEnters = 0;
-size_t   g_reRing = 0;       // the ring in use, and the standpoint of it tried next (the one after a route-less walk)
-size_t   g_reStand = 0;
-bool     g_reNoRingSaid = false;
-}  // namespace
-
-void WalkerReEnter(void* me) {
-    if (g_walk) {
-        const int state = g_walk->state.load();
-        if (state == 0) return;
-        g_walk.reset();
-        if (state == 2) {   // no route: the ring's next standpoint is tried on this same tick
-            UE_LOGW("[OCTA-DRILL] walker re-entry walk ended with no route (ring %.0f cm, standpoint %u); trying the next",
-                    kReEnterRingsCm[g_reRing % kReEnterRingCount], static_cast<unsigned>(g_reStand));
-            ++g_reStand;
-        } else {
-            g_reRing = g_reStand = 0;
-        }
-    }
-    void* octa = g_octa.Get();
-    FVector op{}, mp{};
-    if (!octa || !E::TryGetActorLocation(octa, op) || !E::TryGetActorLocation(me, mp)) return;
-    const float d = FlatDist(op, mp);
-    if (d <= kReEnterFromCm) {
-        g_reRing = g_reStand = 0;
-        return;
-    }
-    const size_t rings = d > kReEnterFarCm ? kReEnterRingCount : 1;
-    for (; g_reRing < rings; ++g_reRing, g_reStand = 0) {
-        const std::vector<FVector> ring = D::ReachableStandpoints(me, op, kReEnterRingsCm[g_reRing], kStandpoints, kStandReachCm);
-        if (g_reStand >= ring.size()) continue;
-        g_walk = D::StartBackgroundWalk(ring[g_reStand], kStandReachCm, kReEnterWalkS);
-        g_reNoRingSaid = false;
-        UE_LOGI("[OCTA-DRILL] walker re-enters n=%u from %.0f cm (ring %.0f cm, standpoint %u%s)", ++g_reEnters, d,
-                kReEnterRingsCm[g_reRing], static_cast<unsigned>(g_reStand), d > kReEnterFarCm ? ", the Octa wandered" : "");
-        return;
-    }
-    g_reRing = g_reStand = 0;   // every ring tried: asked again from the first on the next tick
-    if (!g_reNoRingSaid) {
-        g_reNoRingSaid = true;
-        UE_LOGW("[OCTA-DRILL] walker re-entry: no standpoint on %u ring(s) about the Octa has a route (%.0f cm out); asking again",
-                static_cast<unsigned>(rings), d);
-    }
-}
-
-// The joiner says this line in the lobby chat when it has applied its three verdicts; the host, which holds in the
-// sphere so the Octa keeps re-firing, leaves on it.
+// The joiner says this line in the lobby chat when it has applied its verdict; the host, which stands in the sphere,
+// leaves on it.
 bool JoinerDone() {
     if (!g_joinerSeen && coop::dev::drill_chat::PollDue())
         g_joinerSeen = coop::dev::drill_chat::ChatHasLive(kJoinerDoneLine);
@@ -340,10 +278,6 @@ bool JoinerDone() {
 void ResetWalkers() {
     g_placeRing.clear();
     g_placeIdx = 0;
-    g_reEnters = 0;
-    g_reRing = 0;
-    g_reStand = 0;
-    g_reNoRingSaid = false;
 }
 
 namespace {
@@ -355,38 +289,11 @@ uint32_t AppliedSum() {
     return c.applied[0] + c.applied[1] + c.applied[2];
 }
 
-FVector g_hostSeenAt{};        // the join arm: the host's puppet's place at the last poll
-bool    g_hostSeen = false;
-bool    g_findTicked = false;   // the join arm's client 1 has had its first look for the Octa's mirror
-
-// True when the host's puppet has moved since the last poll: the host is walking to its place, the phase that leads to
-// the Octa's spawn.
-bool HostWalking() {
-    coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(coop::players::kPeerIdHost);
-    void* body = rp ? rp->GetActor() : nullptr;
-    FVector p{};
-    if (!body || !R::IsLive(body) || !E::TryGetActorLocation(body, p)) return false;
-    const bool moved = g_hostSeen && FlatDist(p, g_hostSeenAt) >= kStillCm;
-    g_hostSeenAt = p;
-    g_hostSeen = true;
-    return moved;
-}
-
 void ClientFindMirror() {
     void* octa = FirstInstance(kOctaClass);
     const uint32_t eid = NpcEidOf(octa);
-    if (IsJoiner() && !g_findTicked) {
-        // The second life joins an Octa already standing: its mirror is there at the first look. The first life's host
-        // has not even walked to its place by then. (The host's verdict count restarts with its session, so the first
-        // Aggro's base cannot tell the lives apart.)
-        g_findTicked = true;
-        g_isJoiner = eid != 0;
-    }
     if (!eid) {
-        // The join arm's host spawns the Octa only once it has walked to its place: while its puppet moves here, that
-        // walk is progress and the bound counts from its last step.
-        if (IsJoiner() && HostWalking()) g_stepMs = coop::net::NowMs();
-        else if (Expired(kBirthsBoundMs)) Fail("the host's Octa never materialised as a mirror on this client");
+        if (Expired(kBirthsBoundMs)) Fail("the host's Octa never materialised as a mirror on this client");
         return;
     }
     if (ArmOf() == Arm::Births) {
@@ -448,17 +355,15 @@ const char* RelayDirty() {
     return nullptr;
 }
 
-// The join arm's client 1, two lives. It stands guarded and never walks, away from the Octa. Its first look for the
-// Octa's mirror says which life it is: the first life sees none yet (the host has not walked to its place), the second
-// (the rig relaunches the client when the first prints its rejoin marker) finds the Octa standing, with the join snapshot's Aggro.
-//   life 1: applies two verdicts, prints the rejoin marker, and waits to be relaunched.
-//   life 2, the joiner: the join's Aggro must have been replayed, and each host verdict after its base applied with the
-//   overwrite written; on the third it prints join DONE and says so in the lobby chat for the host.
+// The join arm's joiner, the observer (client 2): it is world-ready after the Octa stood and was fighting the host, so
+// its world-ready snapshot carries the Octa and the host's one join Aggro. It stands guarded and never walks. Green: the
+// Aggro is received and replayed (its target resolved: nothing skipped), then a host verdict is applied with the answer
+// written into the overlap read; it prints join DONE and says so in the lobby chat for the host.
 void JoinerStand() {
     Guard();
     NoteSpread();
     const coop::geom_octa_relay::Counters r = coop::geom_octa_relay::GetCounters();
-    // The host's verdicts arrive and no Aggro did: the join's re-send never came (the red octa_red=no_join).
+    // The host's verdicts arrive and no Aggro did: the join's send never came (the red octa_red=no_join).
     if (r.aggroReceived == g_relay0.aggroReceived && r.verdictReceived > g_relay0.verdictReceived) {
         Fail("no aggro at join (the host's verdicts reached this client and no Aggro did)");
         return;
@@ -467,41 +372,20 @@ void JoinerStand() {
         Fail(dirty);
         return;
     }
-    if (!g_lifeKnown) {
-        if (r.aggroReceived == g_relay0.aggroReceived) {
-            if (Expired(kFireBoundMs)) Fail("no host fire (this client received no Aggro for 90 s)");
-            return;
-        }
-        g_lifeKnown = true;
-        g_joinBase = r.lastAggroBase;
-        g_stepMs = coop::net::NowMs();
-        UE_LOGI("[OCTA-DRILL] join: this is the %s (its first Aggro carried base=%u)", g_isJoiner ? "joiner, life 2" : "first life",
-                g_joinBase);
-    }
     const uint32_t applied = r.verdictApplied - g_relay0.verdictApplied;
     if (applied > g_verdictsSeen) {
         g_verdictsSeen = applied;
         g_stepMs = coop::net::NowMs();
-        UE_LOGI("[OCTA-DRILL] join: verdict %u applied (%s)", applied, g_isJoiner ? "joiner" : "life 1");
+        UE_LOGI("[OCTA-DRILL] join: verdict %u applied", applied);
     }
-    if (!g_isJoiner) {
-        if (applied >= kLife1Verdicts) {   // the rig's rejoin marker: it kills this process and relaunches the client
-            UE_LOGI("[OCTA-DRILL] JOIN LIFE 1 DONE applied=%u t=%llu", applied, Now());
-            Go(CStep::Done);
-        } else if (Expired(kFireBoundMs)) {
-            Fail("no host fire (this client applied no verdict for 90 s)");
-        }
-        return;
-    }
-    if (applied >= kBlastsWanted) {
+    if (applied >= kJoinVerdicts) {
         if (r.aggroReplayed == g_relay0.aggroReplayed) {
-            Fail("no aggro replayed at join (verdicts were applied, the join's Aggro was not)");
+            Fail("no aggro replayed at join (a verdict was applied, the join's Aggro was not)");
             return;
         }
         UE_LOGI("[OCTA-DRILL] join DONE role=joiner replayed=%u applied=%u wrote=%u base=%u superseded=%u t=%llu",
-                r.aggroReplayed - g_relay0.aggroReplayed, applied, r.overwriteWrites - g_relay0.overwriteWrites, g_joinBase,
-                r.verdictSuperseded - g_relay0.verdictSuperseded,
-                Now());
+                r.aggroReplayed - g_relay0.aggroReplayed, applied, r.overwriteWrites - g_relay0.overwriteWrites,
+                r.lastAggroBase, r.verdictSuperseded - g_relay0.verdictSuperseded, Now());
         coop::dev::drill_chat::Say(kJoinerDoneLine);
         Unguard();
         Go(CStep::Done);
@@ -602,14 +486,13 @@ void ClientTick() {
         }
         if (ArmOf() == Arm::Births && !g_calledEvent && !ClientBirthsCall()) return;
         if (ArmOf() == Arm::Join && !IsJoiner()) {
-            UE_LOGI("[OCTA-DRILL] client: the join arm has one client; this one stands guarded");
+            UE_LOGI("[OCTA-DRILL] client: the join arm's witness; it stands guarded where it spawned");
             Go(CStep::Done);
             return;
         }
         if (IsJoiner()) {
-            // Client 1 stands where it spawned, away from the Octa (the host placed the Octa out of its reach). Its
-            // relay's baseline stays ZERO: the process starts with zero counters, and a second life's join Aggro is
-            // replayed inside the world-ready snapshot, before this tick, so a baseline taken here would hide it.
+            // The observer: world-ready after the Octa stood, so its mirror is there at the first look. Its relay's
+            // baseline stays ZERO: the join Aggro is replayed inside the world-ready snapshot, before this tick.
             Go(CStep::Find);
             return;
         }
@@ -646,8 +529,7 @@ void ClientTick() {
 void Tick(coop::net::Session* s) {
     using namespace detail;
     if (ArmOf() == Arm::Off || !s) return;
-    g_hostRole = s->role() == coop::net::Role::Host;
-    if (g_hostRole) {
+    if (s->role() == coop::net::Role::Host) {
         HostTick(s);
         return;
     }
@@ -658,16 +540,6 @@ void Tick(coop::net::Session* s) {
 void OnDisconnect() {
     using namespace detail;
     if (ArmOf() == Arm::Off) return;
-    // The join arm's host with the Octa standing keeps its arm for the joiner's second life. With one client, that
-    // client's leaving is the host's session end (every peer gone), which reaches here: the Octa, the walk and the guard
-    // stay, and the lane's counters (restarted with the session) are the new baseline. Precedent: cord_drill keeps its
-    // host cast for a rejoin. Any other end of a session starts the arm over.
-    if (g_hostRole && ArmOf() == Arm::Join && g_hstep == HStep::Watch) {
-        g_base = GS::Counters{};
-        g_volleysSeen = 0;
-        g_peerGone = true;
-        return;
-    }
     if (g_walk && g_walk->state.load() == 0) D::CancelBackgroundWalk(*g_walk);
     g_walk.reset();
     Unguard();
@@ -694,13 +566,8 @@ void OnDisconnect() {
     g_joinerSeen = false;
     g_snapJudged = false;
     g_idleAtRelease = 0;
-    g_peerGone = false;
-    g_hostSeen = false;
     ResetWalkers();
-    g_lifeKnown = false;
-    g_isJoiner = false;
-    g_findTicked = false;
-    g_joinBase = 0;
+    ResetJoinHost();
     g_lastAppliedMs = 0;
     g_calledEvent = false;
 }

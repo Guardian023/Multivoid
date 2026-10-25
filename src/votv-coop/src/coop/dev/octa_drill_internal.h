@@ -51,9 +51,11 @@ constexpr uint64_t kVolleyGapMs      = 400;
 constexpr uint64_t kAggroBoundMs     = 30000;   // HOST: no aggro this long after the spawn is a dead Octa
 constexpr uint64_t kFireBoundMs      = 90000;   // CLIENT: this long with no new blast applied is a stalled wait
 constexpr uint64_t kBirthsBoundMs    = 60000;   // births: the enrol, and either arm's mirror, within this
-// The join arm: the first life applies this many verdicts, then prints the rejoin marker; the second life (told by finding
-// the Octa standing at its first look) applies kBlastsWanted.
-constexpr uint32_t kLife1Verdicts    = 2;
+// The join arm: the joiner applies this many host verdicts after its join Aggro, then says so.
+constexpr uint32_t kJoinVerdicts     = 1;
+// The join arm's Octa is spawned this long before the joiner's world-ready, so its Aggro lands inside the Octa's pre-fire
+// window (13.8 s) and ahead of any knockback; the joiner's load time is that of the witness, measured at its own join.
+constexpr uint64_t kJoinLeadMs       = 8000;
 
 // ---- the arm and its rows (octa_drill.cpp) ----
 
@@ -63,7 +65,7 @@ Arm ArmOf();
 bool Fires();
 // The arms the client's relay is judged on: attack, and join (where the relaunched client joins mid-attack).
 bool RelayJudged();
-// The join arm's client 1: the joiner. Its first life stands away; its second joins mid-attack.
+// The join arm's observer (client 2): the joiner. Client 1 is a witness that stands away.
 bool IsJoiner();
 const char* FiringArmName();
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
@@ -75,7 +77,7 @@ bool HostWalks();
 
 // ---- the run's state ----
 
-enum class HStep : uint8_t { Wait, Place, Spawning, Watch, Done };
+enum class HStep : uint8_t { Wait, Place, Timing, Spawning, Watch, Done };
 enum class WStep : uint8_t { Stand, Out, Finished };   // the host's own legs after the spawn (octa_measure_target=host)
 enum class CStep : uint8_t { Ready, Place, Find, Stand, Out, Done };
 extern HStep g_hstep;
@@ -99,7 +101,6 @@ extern WStep    g_wstep;             // octa_measure_target=host: the host's leg
 extern uint32_t g_volleysSeen;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
 extern bool     g_snapJudged;        // join, host: the joiner's snapshot has been judged (mid-attack, or between attacks)
 extern uint32_t g_idleAtRelease;     // join, host: the idle count when the joiner released it
-extern bool     g_peerGone;          // join, host: the client left with the Octa standing, and the arm stayed for its return
 // CLIENT (measure)
 extern uint32_t g_appliedBase;       // the explosion lane's applied count when the Octa mirror appeared
 extern uint32_t g_appliedSeen;
@@ -108,11 +109,8 @@ extern coop::geom_octa_relay::Counters g_relay0;   // attack: the relay's counte
 extern uint32_t g_verdictsSeen;      // attack: the verdicts it has applied since
 extern uint32_t g_laserSeen;         // attack: this client's own lasers counted so far
 extern uint64_t g_laserPendingMs;    // attack: the stamp of a laser still waiting for the blast that follows it
-extern uint64_t g_joinHoldAt;       // join, the host: when it first had its three verdicts and began to wait for the joiner
-extern bool     g_joinerSeen;        // join: the joiner (client 1, second life) has said it is done
-extern bool     g_lifeKnown;         // join, client 1: its first Aggro has come, and with it which life this is
-extern bool     g_isJoiner;          // join, client 1: that Aggro carried a base of kJoinMinBase or more: the second life
-extern uint32_t g_joinBase;          // join, client 1: the base of that first Aggro
+extern uint64_t g_joinHoldAt;       // join, the host: when it began to wait for the joiner's chat line
+extern bool     g_joinerSeen;        // join: the joiner (the observer) has said it is done
 extern size_t   g_outRing;           // the walk-out ring in use (kOutRingsCm)
 extern uint64_t g_lastAppliedMs;     // when the last explosion was seen applied
 extern bool     g_calledEvent;       // CLIENT (births): the night roll's event has been called
@@ -138,8 +136,6 @@ enum class PlaceStep : uint8_t { Walking, Reached, Failed };
 constexpr float    kPlaceMoveCm   = 100.f;
 constexpr uint64_t kPlaceStuckMs  = 10000;
 PlaceStep PlaceWalkTick(void* me, const FVector& about, const char* who);
-// The join arm's holder re-enters the Octa's sphere after each knockback (steady, or 3 s out), walking with the director.
-void WalkerReEnter(void* me);
 // The join arm's chat line the joiner says when it has applied its verdicts, and its poll: the holder leaves on it.
 constexpr const char* kJoinerDoneLine = "OCTAJOIN joiner done";
 // How long the holder waits for the joiner (a relaunched process that boots, joins and replays): a cap on a wait that has
@@ -148,6 +144,8 @@ constexpr uint64_t kJoinWaitMs = 360000;
 bool JoinerDone();
 // The walkers' per-run state back to its start (the session's end).
 void ResetWalkers();
+// The join arm's host timing (octa_drill_host.cpp): the peers' admit and world-ready edges, back to their start.
+void ResetJoinHost();
 // The walker's way out of the sphere, ring by ring; false, said, once the last ring has failed.
 bool BeginWalkOut(void* me, void* octa, const char* who);
 
