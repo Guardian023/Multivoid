@@ -51,10 +51,9 @@ constexpr uint64_t kVolleyGapMs      = 400;
 constexpr uint64_t kAggroBoundMs     = 30000;   // HOST: no aggro this long after the spawn is a dead Octa
 constexpr uint64_t kFireBoundMs      = 90000;   // CLIENT: this long with no new blast applied is a stalled wait
 constexpr uint64_t kBirthsBoundMs    = 60000;   // births: the enrol, and either arm's mirror, within this
-// The join arm: a client whose first Aggro carries a verdict base of at least this is the joiner (the second life): the
-// first life got its Aggro at the attack's start, base 0, and left after two verdicts, so any later Aggro has more.
-constexpr uint32_t kJoinMinBase      = 2;
-constexpr uint32_t kLife1Verdicts    = 2;   // the first life applies this many verdicts, then prints the rejoin marker
+// The join arm: the first life applies this many verdicts, then prints the rejoin marker; the second life (told by finding
+// the Octa standing at its first look) applies kBlastsWanted.
+constexpr uint32_t kLife1Verdicts    = 2;
 
 // ---- the arm and its rows (octa_drill.cpp) ----
 
@@ -100,6 +99,7 @@ extern WStep    g_wstep;             // octa_measure_target=host: the host's leg
 extern uint32_t g_volleysSeen;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
 extern bool     g_snapJudged;        // join, host: the joiner's snapshot has been judged (mid-attack, or between attacks)
 extern uint32_t g_idleAtRelease;     // join, host: the idle count when the joiner released it
+extern bool     g_peerGone;          // join, host: the client left with the Octa standing, and the arm stayed for its return
 // CLIENT (measure)
 extern uint32_t g_appliedBase;       // the explosion lane's applied count when the Octa mirror appeared
 extern uint32_t g_appliedSeen;

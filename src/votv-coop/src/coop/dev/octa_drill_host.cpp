@@ -367,15 +367,28 @@ void HostWatchMeasure() {
 
 // The join arm's measurement validity: the joiner's snapshot must have found the Octa mid-attack, or the Aggro path it
 // proves was not exercised. Judged once, on the first snapshot after the Octa stood, and kept up after the host's own
-// leg has ended, since the joiner's second life joins later.
-void JudgeJoinSnapshot() {
-    if (g_snapJudged || !g_octa.Get()) return;
+// leg has ended, since the joiner's second life joins later. A snapshot the drill holds no Octa for, or one between
+// attacks, ends the arm INCONCLUSIVE, and so does a peer back in the world while the drill holds none: never silence.
+void JudgeJoinSnapshot(coop::net::Session* s) {
+    if (g_snapJudged) return;
     const GS::Counters c = GS::GetCounters();
-    if (c.joinMid > g_base.joinMid) {
-        g_snapJudged = true;
+    const bool mid = c.joinMid > g_base.joinMid;
+    const bool between = c.joinBetween > g_base.joinBetween;
+    if (!mid && !between) {
+        if (g_peerGone && s->AnyWorldReadyPeer() && !g_octa.Get()) {
+            g_snapJudged = true;
+            UE_LOGI("[OCTA-DRILL] join snapshot: no host Octa");
+            Fail("INCONCLUSIVE -- the joiner is back and the host holds no Octa");
+        }
+        return;
+    }
+    g_snapJudged = true;
+    if (!g_octa.Get()) {
+        UE_LOGI("[OCTA-DRILL] join snapshot: no host Octa");
+        Fail("INCONCLUSIVE -- the joiner's snapshot ran and the host holds no Octa");
+    } else if (mid) {
         UE_LOGI("[OCTA-DRILL] join snapshot: mid-attack");
-    } else if (c.joinBetween > g_base.joinBetween) {
-        g_snapJudged = true;
+    } else {
         UE_LOGI("[OCTA-DRILL] join snapshot: between attacks");
         Fail("INCONCLUSIVE -- the joiner's snapshot found the Octa between attacks");
     }
@@ -385,7 +398,7 @@ void JudgeJoinSnapshot() {
 
 void HostTick(coop::net::Session* s) {
     if (!s->running()) return;
-    if (ArmOf() == Arm::Join) JudgeJoinSnapshot();
+    if (ArmOf() == Arm::Join) JudgeJoinSnapshot(s);
     if (g_hstep == HStep::Done) return;
     void* me = coop::players::Registry::Get().Local();
     if (!me || !Due()) return;
