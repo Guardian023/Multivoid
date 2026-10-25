@@ -179,30 +179,36 @@ void OnGraphPost(const sg::Call& call) {
 void Install(coop::net::Session* session) {
     g_session.store(session, std::memory_order_release);
     if (g_watched) return;
-    g_watched = true;
+    // Each watch registers once; one that is refused is said once and asked again on the next call, which the install
+    // fanout makes every pump tick, until all five hold.
     struct Watch {
         const ue_wrap::facts::Function* row;
         int                             tag;
         sg::PreFn                       pre;
         sg::PostFn                      post;
+        bool                            registered = false;
+        bool                            refusedSaid = false;
     };
-    const Watch watches[] = {
+    static Watch watches[] = {
         {&kRowAggro, kTagAggro, &OnAggroPre, &OnAggroPost},
         {&kRowFireFinish, kTagFire, nullptr, &OnFireFinishPost},
         {&kRowCloseFinish, kTagClose, nullptr, &OnCloseFinishPost},
         {&kRowLaserBeginPlay, kTagLaser, nullptr, &OnLaserPost},
         {&kRowOctaGraph, kTagGraph, nullptr, &OnGraphPost},
     };
-    int registered = 0;
-    for (const Watch& w : watches) {
-        if (sg::WatchName(*w.row, w.tag, w.pre, w.post)) {
-            ++registered;
-        } else {
-            UE_LOGE("geom_octa_sync: the watch on %ls::%ls did not register -- its [OCTA] line is not printed",
-                    w.row->Class(), w.row->Name());
+    bool all = true;
+    for (Watch& w : watches) {
+        if (!w.registered) w.registered = sg::WatchName(*w.row, w.tag, w.pre, w.post);
+        if (!w.registered && !w.refusedSaid) {
+            w.refusedSaid = true;
+            UE_LOGE("geom_octa_sync: the watch on %ls::%ls did not register -- retried; its [OCTA] line is not "
+                    "printed until it does", w.row->Class(), w.row->Name());
         }
+        all = all && w.registered;
     }
-    UE_LOGI("geom_octa_sync: %d/%zu watches registered by class and name, each live once the class loads", registered,
+    if (!all) return;
+    g_watched = true;
+    UE_LOGI("geom_octa_sync: %zu watches registered by class and name, each live once the class loads",
             sizeof(watches) / sizeof(watches[0]));
 }
 
