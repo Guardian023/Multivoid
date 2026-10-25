@@ -45,7 +45,7 @@ bool SkipsHostPose(uint32_t eid);
 // Session end: the table, the backoffs and the counters. Game thread.
 void OnDisconnect();
 
-namespace dev {   // called only from src/coop/dev/ (the prop syncer drill); compiled always, inert unless called
+namespace dev {   // read only by src/coop/dev/ (the prop syncer drill); the last-grant record is kept only while the drill row is on
 enum class EntryState : uint8_t { None, Pending, Syncing };
 struct EntryView {
     EntryState state = EntryState::None;
@@ -60,7 +60,7 @@ uint8_t LastGrantedGen(uint32_t eid);
 
 enum class Count : uint8_t {
     ClaimsSent, FeederRefused, HeldOff, SendFailed, Granted, GrantedNoEntry, Refused, Revoked, HostEnds,
-    AnswersDropped, RowsSent, RestEnds, HandEnds, Died, EchoSkipped, kCount
+    AnswersDropped, RowsSent, RestEnds, HandEnds, Died, EchoSkipped, PendingExpired, kCount
 };
 uint32_t CountOf(Count c);
 // Refusals the host answered, by `refusal` (a PropSyncRefusal value; one beyond Paced reads 0).

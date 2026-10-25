@@ -7,6 +7,7 @@
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/player/local_streams.h"  // CurrentHoldGen, the hold a stick ends
+#include "coop/props/prop_drive_host.h"  // OverrideClientSyncer: a replay that writes the copy ends a client's row on it
 #include "coop/props/prop_element_tracker.h"
 #include "coop/props/prop_key_index.h"  // a key on the wire to a live actor
 #include "coop/props/remote_prop.h"
@@ -511,6 +512,9 @@ void OnStickState(const coop::net::PropStickStatePayload& payload, uint8_t sende
         }
         return;
     }
+    // Both halves write the copy's pose or physics, so a client that syncs the prop loses it first, as to a host verb
+    // (its next row would drag the copy back off the wall). A no-op off the host and for a prop with no client row.
+    coop::prop_drive_host::OverrideClientSyncer(prop, unstick ? "unstick replay" : "stick replay");
     if (unstick) {
         ApplyUnstick(prop, payload, keyW, senderPeerSlot);
         return;

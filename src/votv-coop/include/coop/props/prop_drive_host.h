@@ -11,7 +11,8 @@
 // only syncer since props are host-authoritative. A row can also name a client as its author
 // (prop_syncer_host grants it); the host then publishes the client's admitted pose as it would its own.
 //
-// HOST-ONLY, game thread. Verb-fed and never scanned: the set holds only what a caller claimed.
+// Game thread; the table is the host's, Pump runs on both roles. Verb-fed and never scanned: the set holds only
+// what a caller claimed or a client was granted.
 
 #pragma once
 
@@ -49,6 +50,11 @@ void Release(void* actor);
 // stays claimed, and one already coasting starts its rest clock again; the refusals are Claim's.
 // `reason` names the push for the log. Game thread.
 void Coast(void* actor, const char* reason);
+
+// A host-side write to `actor` (its pose or its physics, from a peer's message) takes the prop from the client that
+// syncs it, as a host verb does: the client's row ends, the host's copy coasts from the last admitted pose. A no-op
+// for a prop with no client row, so a caller may ask before every such write. Game thread.
+void OverrideClientSyncer(void* actor, const char* reason);
 
 // A peer's world just came up: every driven prop's current pose is re-sent on the next tick, so
 // the joiner parks the resting ones too, which the delta gate would otherwise never send it.

@@ -95,6 +95,9 @@ size_t PublishAdmitted(coop::net::Session& s, Driven& d) {
     pp.pitch = ue_wrap::NormalizeAxis(d.admitRot.Pitch);
     pp.yaw   = ue_wrap::NormalizeAxis(d.admitRot.Yaw);
     pp.roll  = ue_wrap::NormalizeAxis(d.admitRot.Roll);
+    // A broadcast, the syncer included: MTA relays the accepted sync to every joined player but its source
+    // (CUnoccupiedVehicleSync.cpp:472). The pose batch is one shared datagram per tick, so the source is not left out
+    // here; its client skips the echo (prop_syncer::SkipsHostPose). The End is sent to the others alone.
     s.PublishPropDrivePose(pp);
     d.freshAdmit = false;
     d.resend     = false;
@@ -209,7 +212,8 @@ void Claim(void* actor, const char* reason) {
     if (!actor) return;
     const char* why = reason ? reason : "";
     if (Driven* d = Find(actor)) {
-        // A host verb on a prop a client syncs: the verb wins and the row becomes the host's.
+        // A host verb on a prop a client syncs: the verb wins and the row becomes the host's (MTA's persistent
+        // OverrideSyncer, CUnoccupiedVehicleSync.cpp:59-82, .h:37-38).
         if (d->syncer != 0) coop::prop_syncer_host::EndClientRow(*d, coop::prop_syncer_host::Ending::HostVerb);
         if (!d->claimed) {
             d->claimed     = true;   // a re-claim while coasting: the stream simply continues
@@ -225,7 +229,8 @@ void Coast(void* actor, const char* reason) {
     UE_ASSERT_GAME_THREAD("prop_drive_host::Coast");
     if (!actor) return;
     if (Driven* d = Find(actor)) {
-        // A push on a prop a client syncs: the row becomes the host's, coasting from the client's last pose.
+        // A push on a prop a client syncs: the row becomes the host's, coasting from the client's last pose (the
+        // same override as Claim's).
         if (d->syncer != 0) {
             coop::prop_syncer_host::EndClientRow(*d, coop::prop_syncer_host::Ending::HostVerb);
             d->claimed = false;
@@ -237,6 +242,12 @@ void Coast(void* actor, const char* reason) {
         return;
     }
     Open(actor, /*claimed=*/false, reason ? reason : "");
+}
+
+void OverrideClientSyncer(void* actor, const char* reason) {
+    UE_ASSERT_GAME_THREAD("prop_drive_host::OverrideClientSyncer");
+    const Driven* d = actor ? Find(actor) : nullptr;
+    if (d && d->syncer != 0) Coast(actor, reason);
 }
 
 size_t CoastingCount() {

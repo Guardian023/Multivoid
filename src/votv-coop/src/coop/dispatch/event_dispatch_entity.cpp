@@ -121,16 +121,8 @@ bool HandleEntityEvent(net::Session& session,
             UE_LOGW("event_feed: PropRelease velocity or pose non-finite or out of bounds -- dropping");
             break;
         }
-        // The bounds: real throws peak at a few thousand cm/s and a fast tumble at a few thousand
-        // deg/s; 1e6 is generous headroom, below anything that would teleport a body in one tick.
-        constexpr float kMaxLinVel = 1.0e6f;
-        constexpr float kMaxAngVel = 1.0e6f;
-        if (std::fabs(p.linVelX) > kMaxLinVel ||
-            std::fabs(p.linVelY) > kMaxLinVel ||
-            std::fabs(p.linVelZ) > kMaxLinVel ||
-            std::fabs(p.angVelX) > kMaxAngVel ||
-            std::fabs(p.angVelY) > kMaxAngVel ||
-            std::fabs(p.angVelZ) > kMaxAngVel) {
+        // The bounds (net::kMaxPropLinVel / kMaxPropAngVel): the End a syncing client sends the host meets the same.
+        if (!net::PropVelocityInBounds(p.linVelX, p.linVelY, p.linVelZ, p.angVelX, p.angVelY, p.angVelZ)) {
             UE_LOGW("event_feed: PropRelease velocity out of bounds (lin=(%.1f,%.1f,%.1f) ang=(%.1f,%.1f,%.1f)) -- dropping",
                     p.linVelX, p.linVelY, p.linVelZ,
                     p.angVelX, p.angVelY, p.angVelZ);

@@ -17,6 +17,7 @@
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"
 #include "coop/props/pile_look.h"
+#include "coop/props/prop_drive_host.h"    // OverrideClientSyncer: a release that writes the copy ends a client's row on it
 #include "coop/props/prop_drive_stream.h"  // IsParked: the host's channel owns a parked copy
 #include "coop/props/prop_park.h"  // Park / Unpark: a held prop, and a Character welded on it
 #include "coop/props/prop_echo_suppress.h"
@@ -500,6 +501,9 @@ void OnRelease(int senderSlot, const coop::net::PropReleasePayload& payload, voi
         }
         return;
     }
+    // The release writes the copy's pose and physics below: a client that syncs the prop loses it first, as to a host
+    // verb. A no-op off the host and for a prop with no client row.
+    if (propActor) coop::prop_drive_host::OverrideClientSyncer(propActor, "client release");
     // A wall-attachable already stuck here was stuck by its stick, which arrived first on the same lane,
     // and the component's own re-trace placed it; read before the converge below, which freezes a
     // copy whose stick did not land here and must not be taken for one.

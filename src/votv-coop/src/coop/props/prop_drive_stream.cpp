@@ -2,6 +2,7 @@
 
 #include "coop/props/prop_drive_stream.h"
 
+#include "coop/dev/prop_syncer_drill.h"        // IsEnabled: the drill's view is kept only while it is on
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/element/registry.h"             // IsCorrectionStale: the eid's bound actor
@@ -123,12 +124,14 @@ bool YieldedAtOrAfter(uint32_t eid, uint8_t gen) {
 }
 
 // What the prop syncer drill's judge reads (prop_drive_stream.h, dev::ViewOf): per eid, the rows of the last
-// generation, where the copy stood before its park, and whether that generation's End applied.
+// generation, where the copy stood before its park, and whether that generation's End applied. Null (and nothing
+// kept) unless the drill row is on.
 std::unordered_map<uint32_t, dev::DriveView> g_devView;
-dev::DriveView& DevViewOf(uint32_t eid, uint8_t gen) {
+dev::DriveView* DevViewOf(uint32_t eid, uint8_t gen) {
+    if (!coop::dev::prop_syncer_drill::IsEnabled()) return nullptr;
     dev::DriveView& v = g_devView[eid];
     if (v.gen != gen) v = dev::DriveView{gen};
-    return v;
+    return &v;
 }
 
 // The last stream ends applied here, a ring of kRecentEnds (prop_drive_stream.h).
@@ -141,7 +144,7 @@ size_t g_endCount = 0;   // ends recorded since the session began; the newest is
 // assigning a velocity wakes a body at rest.
 void ApplyEnd(void* actor, const coop::net::PropDriveEndPayload& p, bool parkedHere) {
     E::SetActorLocation(actor, ue_wrap::FVector{p.x, p.y, p.z});
-    DevViewOf(p.eid, p.gen).endApplied = true;
+    if (dev::DriveView* v = DevViewOf(p.eid, p.gen)) v->endApplied = true;
     EndOnActor& on = g_endOnActor[p.eid];
     on.gen = p.gen;
     on.actor.Set(actor);
@@ -181,7 +184,7 @@ void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char*
             // The steady state: the row already names the actor. No resolve, no string.
             if (void* live = it->second.d.LiveActor()) {
                 if (!coop::prop_drive_host::InAHand(live)) {   // a hand's stream wins
-                    ++DevViewOf(eid, e.ctx).rows;
+                    if (dev::DriveView* v = DevViewOf(eid, e.ctx)) ++v->rows;
                     AD::BeginLerpToPose(it->second.d, ue_wrap::FVector{e.x, e.y, e.z},
                                         ue_wrap::FRotator{e.pitch, e.yaw, e.roll}, nowMs);
                 }
@@ -213,9 +216,10 @@ void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char*
                 "generation yielded", who, eid, static_cast<unsigned>(e.ctx));
         return;
     }
-    dev::DriveView& seen = DevViewOf(eid, e.ctx);
-    seen.startRead = E::TryGetActorLocation(actor, seen.startLoc);
-    ++seen.rows;
+    if (dev::DriveView* seen = DevViewOf(eid, e.ctx)) {
+        seen->startRead = E::TryGetActorLocation(actor, seen->startLoc);
+        ++seen->rows;
+    }
     Drive& dr = g_drives[eid];
     if (dr.d.actor && dr.d.actor != actor) GiveBackPhysics(dr, dr.d.LiveActor());
     AD::ResetDriveState(dr.d);
@@ -288,7 +292,8 @@ void TickApplyAndDrive(coop::net::Session& s) {
     UE_ASSERT_GAME_THREAD("prop_drive_stream::TickApplyAndDrive");
     const uint64_t nowMs = AD::NowMs();
     g_batch.clear();
-    if (s.TakeRemotePropDriveBatch(g_batch)) {
+    // The host's own batch slot is never written (a client's rows go to the origin stores), so only a client drains it.
+    if (s.role() != coop::net::Role::Host && s.TakeRemotePropDriveBatch(g_batch)) {
         for (const coop::net::PropPoseSnapshot& e : g_batch) {
             // The one skip: a prop this peer authors (a claim pending or granted) is moved by this peer's own
             // physics, and the host's poses for it are its own rows relayed, or a coast it parks onto once a

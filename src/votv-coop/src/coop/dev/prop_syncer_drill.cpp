@@ -378,6 +378,8 @@ void ClientTick() {
 
 }  // namespace
 
+bool IsEnabled() { return ArmOf() != Arm::Off; }
+
 void Tick(coop::net::Session* s) {
     const Arm a = ArmOf();
     if (a == Arm::Off || !s) return;

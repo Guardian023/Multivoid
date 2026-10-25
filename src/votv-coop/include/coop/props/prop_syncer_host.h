@@ -42,7 +42,7 @@ void OnSlotLeft(uint8_t slot);
 // Session end: the buckets, hand-back records, counters and the cached session. Game thread.
 void OnDisconnect();
 
-namespace dev {   // called only from src/coop/dev/ (the prop syncer drill); compiled always, inert unless called
+namespace dev {   // read only by src/coop/dev/ (the prop syncer drill); the admitted counts are kept only while the drill row is on
 struct Admitted {
     uint8_t  gen = 0;     // the generation of the last row admitted for the eid
     uint32_t rows = 0;    // rows admitted in that generation, kept after the row ends

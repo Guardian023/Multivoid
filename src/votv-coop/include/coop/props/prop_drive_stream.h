@@ -1,4 +1,4 @@
-// coop/props/prop_drive_stream.h -- CLIENT-side apply of the host's driven-prop stream.
+// coop/props/prop_drive_stream.h -- the apply of a driven-prop stream: a client's, and the host's of a syncing client's.
 //
 // The host publishes the pose of every prop under an external drive -- a hook's constraint, a
 // body still sliding after the hook let go -- on MsgType::PropDrivePose, and closes each prop's
@@ -89,7 +89,7 @@ struct AppliedEnd {
 };
 size_t RecentEnds(AppliedEnd* out, size_t max);
 
-namespace dev {   // called only from src/coop/dev/ (the prop syncer drill); compiled always, inert unless called
+namespace dev {   // read only by src/coop/dev/ (the prop syncer drill); written only while the drill row is on
 struct DriveView {
     uint8_t          gen = 0;              // the generation of the last row applied (or End applied) for the eid
     uint32_t         rows = 0;             // rows parked on or driven to in that generation, before its End

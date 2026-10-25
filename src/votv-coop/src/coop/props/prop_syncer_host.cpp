@@ -8,6 +8,7 @@
 
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
+#include "coop/dev/prop_syncer_drill.h"        // IsEnabled: the drill's views are written only while it is on
 #include "coop/element/intent_authority.h"
 #include "coop/net/intent_bucket.h"
 #include "coop/net/protocol.h"
@@ -51,9 +52,14 @@ using coop::prop_drive_host::Driven;
 
 // The ATV's numbers (atv_authority.cpp): the claim pace is per sender, where MTA's is per vehicle, one push per
 // 1500 ms (CUnoccupiedVehicleSync.cpp:490); the stream bucket is the row's, its burst absorbing a syncer's send jitter.
+// MTA polices no rate on the syncer's stream (CUnoccupiedVehicleSync.cpp:263-474 has no bucket): the bucket is ours,
+// because rows here are pose-only at 40 Hz and each one reaches the host's physics and every other peer.
 constexpr IntentBudget kClaimBudget{2.f, 1.f};
 constexpr IntentBudget kStreamBudget{16.f, 40.f};
-constexpr float kReachUU = 400.f;                // twice mainPlayer.armLength; the helper adds the prop's bounds
+// Twice mainPlayer.armLength, the helper adding the prop's bounds. MTA's contact radius is 30 m by default
+// (CMainConfig.cpp:1528 vehicle_contact_sync_radius): a kick is within arm's reach, and the radius there is slack for
+// the lag between a player's contact and the server's last position of it.
+constexpr float kReachUU = 400.f;
 constexpr uint64_t kSyncerSilenceMs = 5000;      // no admitted row this long: the host takes the prop
 constexpr float kSyncerDistanceCm = 13000.f;     // MTA's default unoccupied syncer distance, 130 m
 constexpr float kSyncerMaxSpeedCmS = 5000.f;     // provisional: a faster step between admitted rows is logged only
@@ -66,11 +72,12 @@ coop::roster_ledger::PerSlotState<coop::net::IntentBucket> g_claimBuckets;
 struct HandBack { uint8_t slot = 0; uint64_t ms = 0; };
 std::unordered_map<uint32_t, HandBack> g_handBack;
 uint64_t g_nextPassMs = 0;
-std::vector<coop::net::PropPoseSnapshot> g_take;   // kept capacity: the drain allocates nothing in steady state
+// Per client slot, kept capacity: the drain allocates nothing in steady state.
+std::vector<coop::net::PropPoseSnapshot> g_take[coop::net::kMaxPeers];
 
 // Each outcome is counted and said at the first and at every 100th, so a client's flood costs the log nothing.
 uint32_t g_granted = 0, g_admitted = 0, g_notSyncer = 0, g_lateSyncer = 0, g_staleGen = 0, g_paced = 0, g_steps = 0;
-uint32_t g_endsAdmitted = 0, g_endsNotSyncer = 0, g_endsStale = 0;
+uint32_t g_endsAdmitted = 0, g_endsNotSyncer = 0, g_endsStale = 0, g_endsOutOfBounds = 0;
 uint32_t g_nonSyncerAdmitted = 0;
 std::unordered_map<uint32_t, dev::Admitted> g_admittedBy;   // eid -> rows admitted, for the drill's judge
 uint32_t g_refused[8] = {};
@@ -96,14 +103,15 @@ void Answer(coop::net::Session& s, uint8_t slot, uint32_t eid, uint16_t seq, uin
     s.SendReliableToSlot(slot, coop::net::ReliableKind::PropSyncAnswer, &a, sizeof(a));
 }
 
-// A refusal: counted, answered, and, when nothing streams the prop, its pose sent to the refused client by a
-// host coast (one pose, then the rested End), so the client parks onto where the prop is.
+// A refusal: counted, answered, and, for an out-of-reach claim on a prop nothing streams, its pose sent to the
+// refused client by a host coast (one pose, then the rested End), so the client parks onto where the prop is. One
+// coast per claim token, so the claim bucket bounds them. A Paced refusal costs the host nothing past the answer:
+// MTA's refused push does nothing at all (CUnoccupiedVehicleSync.cpp:490-507), and a flood must not buy rows.
 void Refuse(coop::net::Session& s, const coop::net::PropSyncClaimPayload& p, uint8_t slot, PropSyncRefusal why,
             void* actor = nullptr) {
     Tally(g_refused[static_cast<unsigned>(why) & 7u], kRefusalName[static_cast<unsigned>(why) & 7u], p.eid, slot);
     Answer(s, slot, p.eid, p.seq, 0, PropSyncResult::Refused, why);
-    if ((why == PropSyncRefusal::OutOfReach || why == PropSyncRefusal::Paced) &&
-        !coop::prop_drive_host::FindByEid(p.eid)) {
+    if (why == PropSyncRefusal::OutOfReach && !coop::prop_drive_host::FindByEid(p.eid)) {
         if (!actor) actor = coop::remote_prop::ResolveLiveActorByEid(p.eid);
         if (actor) coop::prop_drive_host::Coast(actor, "refused claim");
     }
@@ -132,7 +140,8 @@ bool IsLateSyncer(uint32_t eid, uint8_t slot, uint64_t nowMs) {
     return nowMs - it->second.ms <= window;
 }
 
-// The End of a row ended by the host: the last admitted pose, the released copy's flags, the velocity zero.
+// The End of a row ended by the host: the last admitted pose, the released copy's flags, the velocity zero. MTA's
+// receivers keep the last speed after a sync stops; here rows are pose-only, so the host has no velocity to carry.
 coop::net::PropDriveEndPayload EndOf(const Driven& d, void* actor) {
     coop::net::PropDriveEndPayload p{};
     p.eid       = d.eid;
@@ -157,6 +166,8 @@ void AdmitRow(const coop::net::PropPoseSnapshot& e, uint8_t slot, uint64_t nowMs
         else                                        Tally(g_notSyncer, "row refused: sender is no syncer", e.elementId, slot);
         return;
     }
+    // Strict equality, where MTA's CanUpdateSync also accepts a zero stamp from either side (CElement.cpp:1304): gen 0
+    // is "none" here, never issued, so a row that names no generation is stale by construction.
     if (e.ctx != row->gen) { Tally(g_staleGen, "row refused: stale generation", e.elementId, slot); return; }
     if (!row->streamBucket.Take(kStreamBudget, nowMs)) { Tally(g_paced, "row refused: paced", e.elementId, slot); return; }
     // A movement discontinuity is logged, never refused (the host may cheat and the relay holds). The first row
@@ -178,9 +189,11 @@ void AdmitRow(const coop::net::PropPoseSnapshot& e, uint8_t slot, uint64_t nowMs
     fed.key = row->key;
     coop::prop_drive_stream::FeedAdmitted(fed);
     if (row->syncer != slot) ++g_nonSyncerAdmitted;
-    dev::Admitted& seen = g_admittedBy[e.elementId];
-    if (seen.gen != row->gen) seen = dev::Admitted{row->gen, 0};
-    ++seen.rows;
+    if (coop::dev::prop_syncer_drill::IsEnabled()) {   // the drill's judge reads it; nothing else does
+        dev::Admitted& seen = g_admittedBy[e.elementId];
+        if (seen.gen != row->gen) seen = dev::Admitted{row->gen, 0};
+        ++seen.rows;
+    }
     Tally(g_admitted, "row admitted", e.elementId, slot);
 }
 
@@ -214,6 +227,8 @@ void OnClaim(coop::net::Session& s, const coop::net::PropSyncClaimPayload& p, ui
     // must fail at its claim. Resolved once.
     static const bool s_redRefuse =
         coop::config::ResolveEnum(coop::config_registry::rows::prop_syncer_red) == "refuse";
+    // The client sends no claim before its own world-ready (prop_syncer_client), so this is the host's backstop: the
+    // pre-world gate drops a PropSyncAnswer to a slot that is not world-ready, and the answer here may not arrive.
     if (!s.IsSlotWorldReady(slot)) return Refuse(s, p, slot, PropSyncRefusal::NotReady);
     if (s_redRefuse || !g_claimBuckets[slot].Take(kClaimBudget, coop::active_drive::NowMs()))
         return Refuse(s, p, slot, PropSyncRefusal::Paced);
@@ -225,8 +240,14 @@ void OnClaim(coop::net::Session& s, const coop::net::PropSyncClaimPayload& p, ui
     // refused the same way: the client never re-claims while it waits or syncs.
     if (const Driven* row = coop::prop_drive_host::FindByEid(p.eid))
         return Refuse(s, p, slot, row->syncer == 0 ? PropSyncRefusal::HostAuthored : PropSyncRefusal::OtherSyncer, actor);
-    if (EL::IntentTarget::ForClientIntent(s, slot, kReachUU).Authorize(actor).outcome != EL::IntentOutcome::Ok)
-        return Refuse(s, p, slot, PropSyncRefusal::OutOfReach, actor);
+    // MTA tests the dimension here too (CUnoccupiedVehicleSync.cpp:492); VOTV has one level, so the reach stands in for
+    // it. A body or a target the helper cannot read (a puppet that is dead, ragdolled or not yet posed) is Unknown, the
+    // nearest analogue of a wrong-dimension player, and only a measured distance beyond reach is OutOfReach.
+    switch (EL::IntentTarget::ForClientIntent(s, slot, kReachUU).Authorize(actor).outcome) {
+        case EL::IntentOutcome::Ok:         break;
+        case EL::IntentOutcome::OutOfReach: return Refuse(s, p, slot, PropSyncRefusal::OutOfReach, actor);
+        default:                            return Refuse(s, p, slot, PropSyncRefusal::Unknown, actor);
+    }
     Driven* row = coop::prop_drive_host::OpenClientRow(actor, slot, "client claim");
     if (!row) return Refuse(s, p, slot, PropSyncRefusal::Unknown, actor);   // a hand or a class took it since the tests
     row->claimSeq = p.seq;
@@ -247,11 +268,17 @@ void OnClientEnd(coop::net::Session& s, const coop::net::PropDriveEndPayload& p,
         return;
     }
     if (p.gen != row->gen) { Tally(g_endsStale, "End refused: stale generation", p.eid, slot); return; }
-    // The client's rest End is always admitted when syncer and generation match, admitted pose or not: it carries
-    // the client's truth. The host's copy takes it, every other client gets it as received, and the row goes with
-    // no Revoked, since the client ended it.
+    // The End reaches the host's body, so it meets the bounds a client's PropRelease and a client's rows meet; a
+    // refused End leaves the row, which the silence pass takes back.
+    if (!coop::net::PropDriveEndInBounds(p)) {
+        Tally(g_endsOutOfBounds, "End refused: pose or velocity out of bounds", p.eid, slot);
+        return;
+    }
+    // The client's rest End is always admitted when syncer, generation and bounds match, admitted pose or not: it
+    // carries the client's truth. The host's copy takes it, every other client gets it as received (the syncer
+    // itself is skipped, MTA's pSkip: it ended the drive), and the row goes with no Revoked, since the client ended it.
     coop::prop_drive_stream::ReleaseHost(p);
-    s.SendReliable(coop::net::ReliableKind::PropDriveEnd, &p, sizeof(p));
+    s.SendReliable(coop::net::ReliableKind::PropDriveEnd, &p, sizeof(p), slot);
     RecordHandBack(p.eid, slot, nowMs);
     coop::prop_drive_host::EraseRow(*row);
     Tally(g_endsAdmitted, "End admitted (rest)", p.eid, slot);
@@ -261,11 +288,11 @@ void Admit(coop::net::Session& s) {
     UE_ASSERT_GAME_THREAD("prop_syncer_host::Admit");
     g_session = &s;
     const uint64_t nowMs = coop::active_drive::NowMs();
-    for (int slot = 1; slot < coop::net::kMaxPeers; ++slot) {
-        g_take.clear();
-        if (!s.TakeRemotePropDriveBatchFrom(slot, g_take)) continue;
-        for (const coop::net::PropPoseSnapshot& e : g_take) AdmitRow(e, static_cast<uint8_t>(slot), nowMs);
-    }
+    for (auto& v : g_take) v.clear();
+    const uint32_t got = s.TakeRemotePropDriveBatches(g_take);   // every origin's merge, under one lock
+    for (int slot = 1; slot < coop::net::kMaxPeers; ++slot)
+        if (got & (1u << slot))
+            for (const coop::net::PropPoseSnapshot& e : g_take[slot]) AdmitRow(e, static_cast<uint8_t>(slot), nowMs);
     if (nowMs >= g_nextPassMs) {
         g_nextPassMs = nowMs + kPassMs;
         Pass(nowMs);
@@ -325,10 +352,10 @@ void OnDisconnect() {
     g_session = nullptr;
     for (int slot = 0; slot < g_claimBuckets.size(); ++slot) g_claimBuckets[slot].Reset();
     g_handBack.clear();
-    g_take.clear();
+    for (auto& v : g_take) v.clear();
     g_nextPassMs = 0;
     g_granted = g_admitted = g_notSyncer = g_lateSyncer = g_staleGen = g_paced = g_steps = 0;
-    g_endsAdmitted = g_endsNotSyncer = g_endsStale = 0;
+    g_endsAdmitted = g_endsNotSyncer = g_endsStale = g_endsOutOfBounds = 0;
     g_nonSyncerAdmitted = 0;
     g_admittedBy.clear();
     std::fill(std::begin(g_refused), std::end(g_refused), 0u);

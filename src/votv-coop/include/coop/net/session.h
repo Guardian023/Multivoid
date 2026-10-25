@@ -186,9 +186,8 @@ public:
     bool TakeRemoteTrashCarryBatch(std::vector<TrashClumpPoseSnapshot>& out);
     bool TakeRemotePropDriveBatch(std::vector<PropPoseSnapshot>& out);
 
-    // Host: swap out the driven-prop rows client `peerSlot` sent since the last take, newest per eid; `out`
-    // comes in empty and keeps its capacity. Unjudged: the caller admits or refuses each row.
-    bool TakeRemotePropDriveBatchFrom(int peerSlot, std::vector<PropPoseSnapshot>& out);
+    // Host: each client slot's driven-prop rows since the last take, into out[slot]; the bits of the slots with rows.
+    uint32_t TakeRemotePropDriveBatches(std::vector<PropPoseSnapshot> (&out)[kMaxPeers]);
 
     // Game thread: queue a reliable message to every connected client (host) or to the host
     // (client). False on an oversize payload or no peer. `skipSlot` skips one slot (-1: none): MTA pSkip.
@@ -485,10 +484,11 @@ private:
         return (host_.*stream).Take(out);
     }
     template <class S, class T>
-    bool TakeOrigin(int slot, S OriginStreams::*stream, T& out) {
-        if (!connected() || slot < 0 || slot >= kMaxPeers) return false;
-        std::lock_guard<std::mutex> lk(remoteMutex_);
-        return (origin_[slot].*stream).Take(out);
+    uint32_t TakeOrigins(S OriginStreams::*stream, T (&out)[kMaxPeers]) {   // slots 1.., one lock; the slots with data
+        uint32_t got = 0; std::lock_guard<std::mutex> lk(remoteMutex_);
+        for (int slot = 1; connected() && slot < kMaxPeers; ++slot)
+            if ((origin_[slot].*stream).Take(out[slot])) got |= 1u << slot;
+        return got;
     }
 
     // Host relay of an unreliable datagram from `originSlot` to every other client: the header's

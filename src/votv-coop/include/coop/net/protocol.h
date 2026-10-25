@@ -4052,6 +4052,27 @@ inline bool PropPoseInBounds(const PropPoseSnapshot& p) {
     return std::fabs(p.pitch) <= 180.f && std::fabs(p.yaw) <= 180.f && std::fabs(p.roll) <= 180.f;
 }
 
+// The bounds of a client's prop velocity, for values already known finite: real throws peak at a few thousand cm/s
+// and a fast tumble at a few thousand deg/s; 1e6 is generous headroom, below anything that would teleport a body in
+// one tick. One rule for a client's PropRelease and for the End a syncing client sends the host. true == in bounds.
+inline constexpr float kMaxPropLinVel = 1.0e6f;
+inline constexpr float kMaxPropAngVel = 1.0e6f;
+inline bool PropVelocityInBounds(float linX, float linY, float linZ, float angX, float angY, float angZ) {
+    return std::fabs(linX) <= kMaxPropLinVel && std::fabs(linY) <= kMaxPropLinVel &&
+           std::fabs(linZ) <= kMaxPropLinVel && std::fabs(angX) <= kMaxPropAngVel &&
+           std::fabs(angY) <= kMaxPropAngVel && std::fabs(angZ) <= kMaxPropAngVel;
+}
+
+// A syncing client's PropDriveEnd for the host's body: the pose within the world bounds of a held pose, the
+// velocities within the release's. Floats already known finite. true == in bounds.
+inline bool PropDriveEndInBounds(const PropDriveEndPayload& p) {
+    PropPoseSnapshot pose{};
+    pose.x = p.x; pose.y = p.y; pose.z = p.z;
+    pose.pitch = p.pitch; pose.yaw = p.yaw; pose.roll = p.roll;
+    return PropPoseInBounds(pose) &&
+           PropVelocityInBounds(p.linVelX, p.linVelY, p.linVelZ, p.angVelX, p.angVelY, p.angVelZ);
+}
+
 // Reject a clock sample no clock can hold, BEFORE it is stored: a NaN or absurd value written into the
 // cycle reaches the sun and moon rotation (a black sky, a rotator assert). The accumulators are cycle
 // units, 4500 a day by default, and `day` goes below zero while the game's rewind runs the clock back;

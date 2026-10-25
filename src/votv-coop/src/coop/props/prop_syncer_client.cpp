@@ -5,6 +5,7 @@
 
 #include "coop/props/prop_syncer.h"
 
+#include "coop/dev/prop_syncer_drill.h"     // IsEnabled: the last-grant record is kept only while the drill is on
 #include "coop/element/registry.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
@@ -13,6 +14,7 @@
 #include "coop/props/prop_drive_rules.h"    // the epsilons, the rest rule, the send pace
 #include "coop/props/prop_drive_stream.h"   // CloseGen
 #include "coop/props/remote_prop.h"         // ResolveLiveActorByEid
+#include "coop/session/net_pump.h"          // HasAnnouncedWorldReady
 #include "prop_drive_rows.h"                // co-located private header (src tree, not include/)
 #include "ue_wrap/actors/prop.h"
 #include "ue_wrap/core/cached_obj_ref.h"
@@ -37,8 +39,15 @@ using dev::Count;
 // MTA's MIN_PUSH_ANTISPAM_RATE (CUnoccupiedVehicleSync.h:15), here per client and eid: after a refusal or a
 // revoke the same prop is not claimed again sooner.
 constexpr uint64_t kReclaimBackoffMs = 1500;
-// A syncing client that is standing still re-sends its pose this often, well inside the host's kSyncerSilenceMs.
+// A syncing client that is standing still re-sends its pose this often, well inside the host's kSyncerSilenceMs, and
+// reads the prop at most every kRestProbeMs between beats. MTA sends a syncer's rows every 400 ms by default with the
+// move and turn speed in each, on change only and with no beat (CMainConfig.cpp:1513, and the client's
+// CUnoccupiedVehicleSync.cpp:19,66): rows here are pose-only at kClientDriveSendMs, a lerp-only receiver needing the
+// rate that MTA's velocity extrapolation buys, and the beat answers the host's silence rule, which MTA lacks.
 constexpr uint64_t kSyncerBeatMs = 1000;
+// A claim the host has not answered in this long is lost (an answer can only be lost to a session change): the entry
+// goes Idle with the backoff, so nothing skips the host's poses for a prop for good. D7: kPendingMaxMs = 3000.
+constexpr uint64_t kPendingMaxMs = 3000;
 // An interaction in progress keeps the sync across a still moment: the rest End waits this long after the
 // feeder's last Claim.
 constexpr uint64_t kInteractionHoldMs = 250;
@@ -58,6 +67,8 @@ struct Entry {
     uint32_t              rowsSent = 0;
     uint64_t              lastSendMs = 0;
     uint64_t              lastMoveMs = 0;          // the copy last moved past the epsilons (or the grant)
+    uint64_t              claimSentMs = 0;         // Pending: when the claim went out
+    uint64_t              nextProbeMs = 0;         // Syncing: the copy is not read before this
     uint64_t              lastInteractMs = 0;      // the feeder's last Claim
 };
 
@@ -100,6 +111,12 @@ void SetBackoff(uint32_t eid, uint64_t nowMs, bool inHand) {
 // host's End of that generation applies when it arrives. Only this client's own End closes its generation.
 void ClientClaim(void* actor, coop::net::PropSyncReason reason) {
     if (!g_session) { Tally(Count::FeederRefused, "claim refused: no session yet", 0); return; }
+    // The host answers a slot that is not world-ready on a path its pre-world gate drops, so a claim sent earlier
+    // would stay Pending with no answer coming.
+    if (!coop::net_pump::HasAnnouncedWorldReady()) {
+        Tally(Count::FeederRefused, "claim refused: this client's world is not ready", 0);
+        return;
+    }
     const coop::element::ElementId id = coop::element::Registry::Get().EidForActor(actor);
     // The host answers a claim only for a host-allocated id and drops any other as malformed, so an unanswered
     // claim would leave the entry Pending (skipping the host's poses) for good.
@@ -136,6 +153,7 @@ void ClientClaim(void* actor, coop::net::PropSyncReason reason) {
     e.seq = p.seq;
     e.key = p.key;
     e.lastInteractMs = now;
+    e.claimSentMs = now;
     const uint32_t n = ++CountRef(Count::ClaimsSent);
     if (n == 1 || (n % 100) == 0)
         UE_LOGI("[PROP-SYNC] CLIENT claim sent eid=%u seq=%u reason=%u (%s) (#%u)", eid, static_cast<unsigned>(p.seq),
@@ -170,13 +188,17 @@ void OnGranted(const coop::net::PropSyncAnswerPayload& p) {
         EndUnheldGrant(p);
         return;
     }
+    // The grant carries no state and the copy keeps simulating, where MTA's StartSync resets the syncer to the
+    // server's place and speed (the client's CUnoccupiedVehicleSync.cpp:102-134): a pusher's own copy is the contact
+    // truth, and a snap to the host's pre-kick pose would undo the kick.
     Entry& e = it->second;
     e.state = State::Syncing;
     e.gen = p.gen;
     e.everSent = false;
     e.rowsSent = 0;
     e.lastMoveMs = coop::active_drive::NowMs();
-    g_lastGen[p.eid] = p.gen;
+    e.nextProbeMs = 0;
+    if (coop::dev::prop_syncer_drill::IsEnabled()) g_lastGen[p.eid] = p.gen;
     ++CountRef(Count::Granted);
     UE_LOGI("[PROP-SYNC] CLIENT granted eid=%u gen=%u seq=%u (#%u)", p.eid, static_cast<unsigned>(p.gen),
             static_cast<unsigned>(p.seq), CountRef(Count::Granted));
@@ -212,6 +234,12 @@ void OnRevoked(const coop::net::PropSyncAnswerPayload& p) {
 // One Syncing entry's turn: a row when the copy moved (or the beat is due), the rest End when it rested and the
 // interaction is over. True when the entry ended.
 bool StepSyncing(coop::net::Session& s, uint32_t eid, Entry& e, void* actor, uint64_t now) {
+    // The engine is read (two dispatches) only when a row or the rest End may be due, in the host rows' order: the
+    // probe cadence and the send pace first, then the queue's turn. A moving copy is read at the pace, a still one at
+    // kRestProbeMs, so a feeder calling every tick costs nothing between turns.
+    if (now < e.nextProbeMs) return false;
+    if (e.everSent && now - e.lastSendMs < rules::kClientDriveSendMs) return false;
+    if (s.PropDrivePoseTurn(eid) == coop::net::PoseTurn::Wait) return false;   // read again on a later tick
     ue_wrap::FVector loc{};
     ue_wrap::FRotator rot{};
     if (!E::TryGetActorLocation(actor, loc) || !E::TryGetActorRotation(actor, rot)) return false;
@@ -230,8 +258,10 @@ bool StepSyncing(coop::net::Session& s, uint32_t eid, Entry& e, void* actor, uin
         return true;
     }
     const bool due = moved || now - e.lastSendMs >= kSyncerBeatMs;
-    if (!due || (e.everSent && now - e.lastSendMs < rules::kClientDriveSendMs)) return false;
-    if (s.PropDrivePoseTurn(eid) == coop::net::PoseTurn::Wait) return false;   // read again on a later tick
+    if (!due) {
+        e.nextProbeMs = now + (now - e.lastMoveMs >= rules::kRestMs ? rules::kRestProbeMs : rules::kClientDriveSendMs);
+        return false;
+    }
     coop::net::PropPoseSnapshot pp{};
     pp.key       = e.key;
     pp.elementId = eid;
@@ -245,6 +275,7 @@ bool StepSyncing(coop::net::Session& s, uint32_t eid, Entry& e, void* actor, uin
     e.sentLoc    = loc;
     e.sentRot    = rot;
     e.lastSendMs = now;
+    e.nextProbeMs = 0;   // the send pace governs the next read
     ++e.rowsSent;
     Tally(Count::RowsSent, "row sent", eid);
     return false;
@@ -276,6 +307,13 @@ void Tick(coop::net::Session& s, bool isHost) {
         }
         if (coop::prop_drive_host::InAHand(actor)) {   // the held stream owns it; the host closes the row
             Tally(Count::HandEnds, "entry dropped: a hand took the prop here", it->first);
+            SetBackoff(it->first, now, /*inHand=*/true);   // the feeder's next Claim waits for the hand to let go
+            it = g_table.erase(it);
+            continue;
+        }
+        if (e.state == State::Pending && now - e.claimSentMs >= kPendingMaxMs) {
+            Tally(Count::PendingExpired, "claim dropped: the host never answered it", it->first);
+            SetBackoff(it->first, now, false);
             it = g_table.erase(it);
             continue;
         }

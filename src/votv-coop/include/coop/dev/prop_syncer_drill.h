@@ -17,6 +17,10 @@ namespace coop::net { class Session; }
 
 namespace coop::dev::prop_syncer_drill {
 
+// True when the drill row is on (latched). The production modules the drill judges write their views (the stream's,
+// the host's admission counts, the client's last grant) only while it is.
+bool IsEnabled();
+
 // Advances this peer's phases; a latched read when off. Game thread.
 void Tick(coop::net::Session* s);
 

@@ -33,8 +33,8 @@ bool Session::TakeRemotePropDriveBatch(std::vector<PropPoseSnapshot>& out) {
     return TakeHost(&HostStreams::propDrive, out);
 }
 
-bool Session::TakeRemotePropDriveBatchFrom(int peerSlot, std::vector<PropPoseSnapshot>& out) {
-    return TakeOrigin(peerSlot, &OriginStreams::propDrive, out);
+uint32_t Session::TakeRemotePropDriveBatches(std::vector<PropPoseSnapshot> (&out)[kMaxPeers]) {
+    return TakeOrigins(&OriginStreams::propDrive, out);
 }
 
 int Session::SerializeLocalPropDriveBatch(uint8_t* buf) {
