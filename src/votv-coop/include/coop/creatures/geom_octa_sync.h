@@ -40,7 +40,9 @@ struct Counters {
     uint32_t laser;         // laser lines
     uint32_t mirrorMove;    // mirror ran move lines
     uint64_t lastLaserMs;   // coop::net::NowMs() at the last laser line (0 before the first)
-    uint32_t overlapMin;   // [dev] minSphere begin-overlaps the host's Octa took (only while octa_drill=measure|attack)
+    uint32_t sendFailed;    // GeomOctaEvents the reliable channel refused (a lost decision)
+    uint32_t keepFailed;    // Aggros that could not be kept for an unsent spawn (no serial, or the table full)
+    uint32_t overlapMin;  // [dev] minSphere begin-overlaps the host's Octa took (only while octa_drill=measure|attack)
     uint32_t overlapProp;   // [dev] the same for propAggroSphere
     bool     windowReached;    // the open window's n-th host verdict has been counted
     uint32_t idleAtWindow;      // the idle count at the moment it was counted

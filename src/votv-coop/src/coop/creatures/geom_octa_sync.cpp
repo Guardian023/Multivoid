@@ -178,6 +178,9 @@ void TargetText(const WireTarget& t, char (&out)[40]) {
 // and the client's mirror must exist. The Octa's first aggro runs inside its own spawn's finish, on both spawn routes,
 // before the NPC lane's send (the dev route sends at the interceptor's PRE, the gamemode's at the drain), so an Aggro
 // that finds no sent spawn is kept, one per Octa, and goes out from OnNpcSpawnSent.
+// Divergence from MTA, whose server never holds a message for an element: an element exists from its creation
+// (reference/mtasa-blue/Server/mods/deathmatch/logic/CElement.cpp:39), so what is said of it can be sent at once. Here the
+// Octa's first decision is made inside the spawn, before the NPC lane has made it an element a peer knows of.
 constexpr size_t kMaxSent = 16;
 uint32_t g_sentEids[kMaxSent];
 size_t   g_sentCount = 0;
@@ -230,14 +233,28 @@ KeptAggro* FindKept(void* octa) {
 void Keep(void* octa, const WireTarget& target, uint32_t base) {
     const int32_t index = R::InternalIndexOf(octa);
     const int32_t serial = index >= 0 ? R::AllocateSlotSerial(index) : 0;
-    if (serial == 0) return;
+    // A failure is counted always and said once per reason.
+    static bool noSerialSaid = false, fullSaid = false;
+    if (serial == 0) {
+        ++g_counters.keepFailed;
+        if (!noSerialSaid) {
+            noSerialSaid = true;
+            UE_LOGW("geom_octa_sync: an Octa's slot gave no serial -- its Aggro is dropped (counted; said once)");
+        }
+        return;
+    }
     KeptAggro* slot = FindKept(octa);
     for (KeptAggro& k : g_kept) {
         if (slot) break;
         if (k.index < 0 || !KeptLive(k)) slot = &k;
     }
     if (!slot) {
-        UE_LOGW("geom_octa_sync: more than %zu Octas hold a kept Aggro -- this one is dropped", kMaxKept);
+        ++g_counters.keepFailed;
+        if (!fullSaid) {
+            fullSaid = true;
+            UE_LOGW("geom_octa_sync: more than %zu Octas hold a kept Aggro -- this one is dropped (counted; said once)",
+                    kMaxKept);
+        }
         return;
     }
     *slot = KeptAggro{index, serial, target, base};
@@ -263,8 +280,16 @@ sg::Verdict OnAggroPre(const sg::Call& call) {
 // A GeomOctaEvent to every world-ready peer; false when there is none to send to or the send failed.
 bool SendEvent(const N::GeomOctaEventPayload& p) {
     N::Session* s = g_session.load(std::memory_order_acquire);
-    if (!s || s->role() != N::Role::Host || !s->connected() || !s->AnyWorldReadyPeer()) return false;
-    return s->SendReliable(N::ReliableKind::GeomOctaEvent, &p, sizeof(p));
+    if (!s || s->role() != N::Role::Host || !s->connected() || !s->AnyWorldReadyPeer()) return false;   // nobody to tell
+    if (s->SendReliable(N::ReliableKind::GeomOctaEvent, &p, sizeof(p))) return true;
+    // A refused send is a lost decision: counted always, said once. The client times that look out.
+    static bool said = false;
+    ++g_counters.sendFailed;
+    if (!said) {
+        said = true;
+        UE_LOGW("geom_octa_sync: a GeomOctaEvent could not be sent (reliable channel busy?) -- counted; said once");
+    }
+    return false;
 }
 
 void SendAggro(uint32_t eid, const WireTarget& target, uint32_t base) {
