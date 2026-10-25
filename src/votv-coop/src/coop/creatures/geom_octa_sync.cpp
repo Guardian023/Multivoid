@@ -202,13 +202,30 @@ void OnLaserPost(const sg::Call& call) {
     UE_LOGI("[OCTA] laser eid=%s t=%llu", eid, Now());
 }
 
+// The entry each watched graph call began with, by the call's depth. The graph's EntryPoint sits in the actor's
+// persistent frame, which every nested entry writes: BeginPlay's entry calls `move()`, whose nested entry (refused on a
+// mirror) still leaves 5538 there, so BeginPlay's own POST would read 5538. The PRE of each call keeps its own entry
+// under its depth, and the POST reads it back; a depth past the table is not recorded and its POST is skipped.
+constexpr int kMaxDepth = 32;
+thread_local int32_t t_entryAtDepth[kMaxDepth];
+
+int32_t EntryOf(const sg::Call& call) {
+    const int32_t off = g_graphEntry.Of(call.function);
+    int32_t entry = -1;
+    if (off >= 0 && call.locals) std::memcpy(&entry, call.locals + off, sizeof(entry));
+    return entry;
+}
+
+sg::Verdict OnGraphPre(const sg::Call& call) {
+    if (call.depth >= 1 && call.depth <= kMaxDepth) t_entryAtDepth[call.depth - 1] = EntryOf(call);
+    return sg::Verdict::Run;
+}
+
 // After an Octa's event graph ran an entry: a post fires only for a body that ran, so this sees the wander on a
 // marked mirror exactly when npc_mirror_brain did not park it.
 void OnGraphPost(const sg::Call& call) {
-    const int32_t off = g_graphEntry.Of(call.function);
-    if (off < 0 || !call.locals) return;
-    int32_t entry = -1;
-    std::memcpy(&entry, call.locals + off, sizeof(entry));
+    if (call.depth < 1 || call.depth > kMaxDepth) return;
+    const int32_t entry = t_entryAtDepth[call.depth - 1];
     if (entry != kMoveEntry || !coop::npc_mirror_brain::IsMarkedMirror(call.object)) return;
     char eid[16];
     EidText(NpcEid(call.object), eid);
@@ -236,7 +253,7 @@ void Install(coop::net::Session* session) {
         {&kRowFireFinish, kTagFire, nullptr, &OnFireFinishPost},
         {&kRowCloseFinish, kTagClose, nullptr, &OnCloseFinishPost},
         {&kRowLaserBeginPlay, kTagLaser, nullptr, &OnLaserPost},
-        {&kRowOctaGraph, kTagGraph, nullptr, &OnGraphPost},
+        {&kRowOctaGraph, kTagGraph, &OnGraphPre, &OnGraphPost},
     };
     bool all = true;
     for (Watch& w : watches) {
