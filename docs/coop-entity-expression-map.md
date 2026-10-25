@@ -356,6 +356,12 @@ registry recycled that id. `[V]`
   whose host copy explodes natively and so
   reaches the capture. A projectile of the client's with no shot sent is not requested and is counted.
   `[V]`
+- **A cord a player plugs.** A cord's link (its prop's `socket`, the cord's `socket`, the socket's `cord`) is
+  the host's: a client's own press and release run the game's verbs, and their outcome goes to the host as a
+  `CordLinkState` claim (`coop/interactables/cord_sync`); the host checks the sender, reach and its own drag, applies
+  the game's occupied-socket rule and answers with the link it now has; every change is broadcast, and a joiner is
+  seeded with every corded prop's link, plugged or not, which also repairs a cord its save plugged. A level socket is
+  named by its key, a generator's outlet by its owner prop's key and its component.
 - **A salt rocket a client lights.** The rocket's own fuse and thrust run only on the host: a client's gate refuses its `attemptIgnite` and its `ignite`, and a light its own player's lighter or torch made goes to the host as `PropIgniteIntent` (`coop/world/salt_rocket_ignite`); the host checks the sender's reach and the tool its hand held, performs the verb on its copy, and its `fire()` puts the rocket under the drive claim (`coop/world/salt_rocket_flight`) until its blast, which the capture above carries. `[V]`
 - **Destroy.** Nothing crosses. Each copy ends by the actor's own lifespan, 10 s by the class default.
   `[RD]`
@@ -417,6 +423,7 @@ Every place two seams can express one actor, and what deduplicates it:
 | a client's light on a salt rocket and the host's | one fuse: a client's copy never runs `fire()` (its gate refuses the light and asks); the host lights its copy and drives its flight `[V]` (`fire_ignite_drill`) |
 | a client's local sit or grab of an ATV and the host's table | one seat and one syncer: the client acts at once, asks, and yields to the answer or stamp that names another; the host drops a block from any slot that is not the ATV's syncer `[?]` |
 | the host's idle stream and a client syncer's stream of one ATV | the host streams an ATV only while its table names the host; until the hand-back a client syncer's blocks are the ones applied and re-sent `[?]` |
+| a client's plug of a cord and the host's | one link: the client's own verb runs and its outcome is a claim; the host compares, applies the game's rule and answers every claim, and a client copy's stretch break is refused `[V]` (`cord_drill`) |
 
 ## Needs a probe
 
