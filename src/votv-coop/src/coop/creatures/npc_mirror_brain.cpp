@@ -201,12 +201,40 @@ bool Allowed(const EntryTable& t, int32_t entry) {
     return false;
 }
 
+// ---- The one-shot pass (ScopedEntryPass) ----
+
+constexpr size_t kPassEntries = 8;
+struct Pass {
+    bool           open = false;
+    void*          actor = nullptr;
+    int32_t        entries[kPassEntries] = {};
+    bool           used[kPassEntries] = {};
+    size_t         count = 0;
+    const uint8_t* frame = nullptr;
+};
+thread_local Pass t_pass;
+
+// Does the open pass let this entry of `actor`'s graph run? Each named entry runs once, and the frame it ran with is kept.
+bool PassTakes(void* actor, int32_t entry, const uint8_t* locals) {
+    Pass& p = t_pass;
+    if (!p.open || p.actor != actor) return false;
+    for (size_t i = 0; i < p.count; ++i) {
+        if (p.entries[i] == entry && !p.used[i]) {
+            p.used[i] = true;
+            p.frame = locals;
+            return true;
+        }
+    }
+    return false;
+}
+
 // Before a parked class's graph runs: a marked mirror's entry runs when its graph's table names it, and is refused
 // otherwise. No session test: a mirror world can outlive its session, and the mark alone says what the body is.
 sg::Verdict OnGraphPre(const sg::Call& call) {
     if (!IsMarkedMirror(call.object)) return sg::Verdict::Run;
     Watch* w = WatchOf(call.tag);
     if (!w) return sg::Verdict::Run;
+    if (t_pass.open && PassTakes(call.object, EntryOf(*w, call), call.locals)) return sg::Verdict::Run;
     if (!w->tableResolved) {
         // A table not found before the class names resolve is not latched: the next call asks again.
         const EntryTable* found = TableFor(R::OuterOf(call.function));
@@ -261,6 +289,26 @@ void CheckWatchesLive(void* cls) {
 }
 
 }  // namespace
+
+ScopedEntryPass::ScopedEntryPass(void* actor, std::initializer_list<int32_t> entries) {
+    UE_ASSERT_GAME_THREAD("npc_mirror_brain::ScopedEntryPass");
+    if (t_pass.open || entries.size() > kPassEntries) {
+        UE_LOGE("npc_mirror_brain: a ScopedEntryPass was %s -- inert, its entries stay refused",
+                t_pass.open ? "opened inside another" : "given too many entries");
+        return;
+    }
+    t_pass = Pass{};
+    t_pass.open = true;
+    t_pass.actor = actor;
+    for (int32_t e : entries) t_pass.entries[t_pass.count++] = e;
+    owns_ = true;
+}
+
+ScopedEntryPass::~ScopedEntryPass() {
+    if (owns_) t_pass = Pass{};
+}
+
+const uint8_t* ScopedEntryPass::Frame() { return t_pass.open ? t_pass.frame : nullptr; }
 
 void MarkMirror(void* actor) {
     UE_ASSERT_GAME_THREAD("npc_mirror_brain::MarkMirror");

@@ -18,6 +18,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <initializer_list>
 
 namespace coop::npc_mirror_brain {
 
@@ -74,6 +75,26 @@ void Install();
 
 // Teardown: say what the watches refused, drop every mark.
 void OnDisconnect();
+
+// A one-shot pass for a lane's own replay into a marked mirror: for the life of the object, each of `entries` of
+// `actor`'s event graph that the table refuses runs ONCE, the first time it is entered on this thread, and is then
+// consumed. The lane arms it around one synchronous reflected call and it ends with that call, so nothing outlives it;
+// an entry the replay did not reach is simply never run. Thread-local; at most one is open, and a second is inert (said).
+// An entry run by a pass records the frame (the graph call's locals) it ran with, for a post hook that must tell this
+// replay's own reads from a natural call's. Precedent: piramid_sync's thread-local allow slot. Game thread.
+class ScopedEntryPass {
+public:
+    ScopedEntryPass(void* actor, std::initializer_list<int32_t> entries);
+    ~ScopedEntryPass();
+    ScopedEntryPass(const ScopedEntryPass&) = delete;
+    ScopedEntryPass& operator=(const ScopedEntryPass&) = delete;
+
+    // The frame of the entry the open pass last let run, or null before one has (and with no pass open).
+    static const uint8_t* Frame();
+
+private:
+    bool owns_ = false;
+};
 
 // ---- The tables (npc_mirror_brain_table.cpp) ----
 // The entries of one event graph that run on a marked mirror, as EntryPoint values.
