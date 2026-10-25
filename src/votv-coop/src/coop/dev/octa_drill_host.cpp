@@ -52,9 +52,10 @@ void CollectOctas(OctaSet& out) {
         &out);
 }
 
-// The Octa a spawn made: the live one that was not among `before`, else the one nearest `at` within 200 cm; null when
+// The Octa a spawn made: the live one that was not among `before`; with `fallback`, only once the wait for one is over,
+// else the one nearest `at` within 200 cm; null when
 // there is neither.
-void* NewOctaSince(const OctaSet& before, const FVector& at) {
+void* NewOctaSince(const OctaSet& before, const FVector& at, bool fallback) {
     OctaSet now;
     CollectOctas(now);
     void* nearest = nullptr;
@@ -65,7 +66,7 @@ void* NewOctaSince(const OctaSet& before, const FVector& at) {
             if (before.octas[j] == now.octas[i]) known = true;
         if (!known) return now.octas[i];
         FVector p{};
-        if (E::TryGetActorLocation(now.octas[i], p) && FlatDist(p, at) <= nearestD) {
+        if (fallback && E::TryGetActorLocation(now.octas[i], p) && FlatDist(p, at) <= nearestD) {
             nearest = now.octas[i];
             nearestD = FlatDist(p, at);
         }
@@ -171,7 +172,7 @@ void SpawnOctaBeside(void* me, const FVector& walker, const Others& others) {
         g_pending.at = *best;
         g_pending.walkerD = FlatDist(*best, walker);
         g_pending.otherD = bestD;
-        octa = NewOctaSince(g_pending.before, *best);
+        octa = NewOctaSince(g_pending.before, *best, /*fallback=*/false);
         if (!octa) {
             g_pending.since = coop::net::NowMs();
             g_hstep = HStep::Spawning;
@@ -207,12 +208,15 @@ void OctaSpawned(void* octa, const FVector& at, float walkerD, float otherD) {
 
 // The gamemode route, one tick on: the new Octa, or the wait's end.
 void HostAwaitOcta() {
-    void* octa = NewOctaSince(g_pending.before, g_pending.at);
+    // The nearest-Octa fallback is tried once, when the wait is over, never on a retry tick: an Octa that is not new but
+    // stands at the placement would otherwise be taken for the spawn's.
+    const bool over = coop::net::NowMs() - g_pending.since > kSpawnWaitMs;
+    void* octa = NewOctaSince(g_pending.before, g_pending.at, over);
     if (octa) {
         OctaSpawned(octa, g_pending.at, g_pending.walkerD, g_pending.otherD);
         return;
     }
-    if (coop::net::NowMs() - g_pending.since > kSpawnWaitMs) Fail("the Octa did not spawn");
+    if (over) Fail("the Octa did not spawn");
 }
 
 // measure: the walker takes its place. The client's: its director walks it (the client's own half) and the host spawns
