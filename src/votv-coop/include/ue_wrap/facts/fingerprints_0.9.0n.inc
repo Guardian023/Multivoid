@@ -174,6 +174,8 @@ inline constexpr RefFn kRefFns[] = {
     {L"generator_c", L"updupgrades", L"generator_c.updupgrades", 0x6a2d5d90ab51fa2dull, 0xb0cf4625c8a84aa6ull},
     {L"generatorfuckuper_c", L"timer_transformers", L"generatorfuckuper_c.timer_transformers", 0x6a2d5d90ab51fa2dull, 0x3879c0deef259be6ull},
     {L"geomocta_c", L"aggro", L"geomocta_c.aggro", 0x0298612a3d9bda97ull, 0x47d427a92fc0c648ull},
+    {L"geomocta_c", L"bndevt__geomocta_minsphere_k2node_componentboundevent_0_componentbeginoverlapsignature__delegatesignature", L"geomocta_c.bndevt__geomocta_minsphere_k2node_componentboundevent_0_componentbeginoverlapsignature__delegatesignature", 0x068571522f5f0453ull, 0xe7d67ba94e97b265ull},
+    {L"geomocta_c", L"bndevt__geomocta_propaggrosphere_k2node_componentboundevent_1_componentbeginoverlapsignature__delegatesignature", L"geomocta_c.bndevt__geomocta_propaggrosphere_k2node_componentboundevent_1_componentbeginoverlapsignature__delegatesignature", 0x068571522f5f0453ull, 0x8f8d3a34eb547d9dull},
     {L"geomocta_c", L"executeubergraph_geomocta", L"geomocta_c.executeubergraph_geomocta", 0xd3c93c9d2749b427ull, 0xb9925865417ab2cdull},
     {L"geomocta_c", L"onnotifybegin_1dfc28904024a8fb71c3aca9dbd440f9", L"geomocta_c.onnotifybegin_1dfc28904024a8fb71c3aca9dbd440f9", 0xbd4b34393d7d5e19ull, 0xcf0143fb4fe7f189ull},
     {L"geomocta_c", L"onnotifybegin_9b2108b443f09ba08a3c20adbeccc562", L"geomocta_c.onnotifybegin_9b2108b443f09ba08a3c20adbeccc562", 0xbd4b34393d7d5e19ull, 0xb3c2874a07f9409cull},

@@ -10,6 +10,14 @@ namespace ue_wrap::geom_octa {
 // object is live; null for no target, a dead target, or an actor that is no Octa. Game thread.
 void* TargetActor(void* octa);
 
+// The Octa's `isAnim` (true from its aggro until its close finishes); false when the member does not resolve. Game
+// thread.
+bool IsAnim(void* octa);
+
+// The Octa's `minSphere` component (the sphere whose begin-overlap picks its target), when live; null otherwise. Game
+// thread.
+void* MinSphere(void* octa);
+
 // The laser's owner (AActor::Owner, which the Octa's fire() sets to itself when it spawns the laser), when live; null
 // otherwise. Game thread.
 void* LaserOwner(void* laser);

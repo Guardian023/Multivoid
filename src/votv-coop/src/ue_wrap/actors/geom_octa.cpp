@@ -14,6 +14,7 @@ namespace R = reflection;
 
 R::InstanceOffset g_target{L"targetActor"};
 R::InstanceOffset g_owner{L"Owner"};
+R::InstanceOffset g_minSphere{L"minSphere"};
 
 // The live object in the pointer slot `off` bytes into `base`, or null.
 void* LivePointerAt(void* base, int32_t off) {
@@ -25,6 +26,15 @@ void* LivePointerAt(void* base, int32_t off) {
 }  // namespace
 
 void* TargetActor(void* octa) { return octa ? LivePointerAt(octa, g_target.Of(octa)) : nullptr; }
+
+bool IsAnim(void* octa) {
+    int32_t off = -1;
+    uint8_t mask = 0;
+    if (!octa || !R::FindBoolProperty(R::ClassOf(octa), L"isAnim", off, mask)) return false;
+    return (*(static_cast<const uint8_t*>(octa) + off) & mask) != 0;
+}
+
+void* MinSphere(void* octa) { return octa ? LivePointerAt(octa, g_minSphere.Of(octa)) : nullptr; }
 
 void* LaserOwner(void* laser) { return laser ? LivePointerAt(laser, g_owner.Of(laser)) : nullptr; }
 

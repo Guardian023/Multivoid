@@ -2,6 +2,8 @@
 
 #include "coop/creatures/geom_octa_sync.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/creatures/npc_mirror_brain.h"
 #include "coop/element/element.h"
 #include "coop/element/registry.h"
@@ -38,12 +40,22 @@ UE_FACT_FN(kRowCloseFinish, "geom_octa_sync", L"geomOcta_C", L"OnNotifyBegin_9B2
            Declared);
 UE_FACT_FN(kRowLaserBeginPlay, "geom_octa_sync", L"geomOctaLazer_C", L"ReceiveBeginPlay", Declared);
 UE_FACT_FN(kRowOctaGraph, "geom_octa_sync", L"geomOcta_C", L"ExecuteUbergraph_geomOcta", Declared);
+// The two begin-overlap handlers whose target choice a mirror's brain refuses; watched on the host only while the Octa
+// drill's measure arm is on, to see whether any overlap fires at all.
+UE_FACT_FN(kRowMinSphereOverlap, "geom_octa_sync", L"geomOcta_C",
+           L"BndEvt__geomOcta_minSphere_K2Node_ComponentBoundEvent_0_ComponentBeginOverlapSignature__DelegateSignature",
+           Declared);
+UE_FACT_FN(kRowPropSphereOverlap, "geom_octa_sync", L"geomOcta_C",
+           L"BndEvt__geomOcta_propAggroSphere_K2Node_ComponentBoundEvent_1_ComponentBeginOverlapSignature__DelegateSignature",
+           Declared);
 
 constexpr int kTagAggro = 0x4F435430;   // 'OCT0'
 constexpr int kTagFire  = 0x4F435431;   // 'OCT1'
 constexpr int kTagClose = 0x4F435432;   // 'OCT2'
 constexpr int kTagLaser = 0x4F435433;   // 'OCT3'
 constexpr int kTagGraph = 0x4F435434;   // 'OCT4'
+constexpr int kTagMinSphere  = 0x4F435435;   // 'OCT5'
+constexpr int kTagPropSphere = 0x4F435436;   // 'OCT6'
 
 // The entry of the Octa's event graph that is the wander (`move`), a cooked byte offset: a mirror that runs it was not
 // parked. The stub `move` function runs whether or not the graph's entry does, so the graph is what is watched.
@@ -202,6 +214,43 @@ void OnLaserPost(const sg::Call& call) {
     UE_LOGI("[OCTA] laser eid=%s t=%llu", eid, Now());
 }
 
+// ---- [dev] the overlap probe ----
+//
+// While the Octa drill's measure arm is on, the host's Octa reports each begin-overlap handler that fires: once per
+// handler and class of the other actor, with the handler's running total in the counters. It only observes.
+
+bool ProbeOn() {
+    static const bool on = coop::config::ResolveEnum(::coop::config_registry::rows::octa_drill) == "measure";
+    return on;
+}
+
+struct SeenOverlap {
+    int   which;   // 0 minSphere, 1 propAggroSphere
+    void* cls;     // compared, never read through
+};
+constexpr size_t kMaxSeen = 16;
+SeenOverlap g_seen[kMaxSeen];
+size_t      g_seenCount = 0;
+R::ParamOffset g_overlapOther{L"OtherActor"};
+
+sg::Verdict NoteOverlap(const sg::Call& call, int which) {
+    if (!IsHost() || coop::npc_mirror_brain::IsMarkedMirror(call.object)) return sg::Verdict::Run;
+    const uint32_t total = which == 0 ? ++g_counters.overlapMin : ++g_counters.overlapProp;
+    const int32_t off = g_overlapOther.Of(call.function);
+    void* other = nullptr;
+    if (off >= 0 && call.locals) std::memcpy(&other, call.locals + off, sizeof(other));
+    if (other && !R::IsLive(other)) other = nullptr;
+    void* cls = other ? R::ClassOf(other) : nullptr;
+    for (size_t i = 0; i < g_seenCount; ++i)
+        if (g_seen[i].which == which && g_seen[i].cls == cls) return sg::Verdict::Run;
+    if (g_seenCount < kMaxSeen) g_seen[g_seenCount++] = SeenOverlap{which, cls};
+    UE_LOGI("[OCTA-PROBE] host overlap fn=%s other=%ls total=%u", which == 0 ? "minSphere" : "propAggroSphere",
+            other ? R::ClassNameOf(other).c_str() : L"none", static_cast<unsigned>(total));
+    return sg::Verdict::Run;
+}
+sg::Verdict OnMinSphereOverlapPre(const sg::Call& call) { return NoteOverlap(call, 0); }
+sg::Verdict OnPropSphereOverlapPre(const sg::Call& call) { return NoteOverlap(call, 1); }
+
 // The entry each watched graph call began with, by the call's depth. The graph's EntryPoint sits in the actor's
 // persistent frame, which every nested entry writes: BeginPlay's entry calls `move()`, whose nested entry (refused on a
 // mirror) still leaves 5538 there, so BeginPlay's own POST would read 5538. The PRE of each call keeps its own entry
@@ -245,6 +294,7 @@ void Install(coop::net::Session* session) {
         int                             tag;
         sg::PreFn                       pre;
         sg::PostFn                      post;
+        bool                            probeOnly = false;   // registered only while the drill's measure arm is on
         bool                            registered = false;
         bool                            refusedSaid = false;
     };
@@ -254,9 +304,12 @@ void Install(coop::net::Session* session) {
         {&kRowCloseFinish, kTagClose, nullptr, &OnCloseFinishPost},
         {&kRowLaserBeginPlay, kTagLaser, nullptr, &OnLaserPost},
         {&kRowOctaGraph, kTagGraph, &OnGraphPre, &OnGraphPost},
+        {&kRowMinSphereOverlap, kTagMinSphere, &OnMinSphereOverlapPre, nullptr, true},
+        {&kRowPropSphereOverlap, kTagPropSphere, &OnPropSphereOverlapPre, nullptr, true},
     };
     bool all = true;
     for (Watch& w : watches) {
+        if (w.probeOnly && !ProbeOn()) continue;
         if (!w.registered) w.registered = sg::WatchName(*w.row, w.tag, w.pre, w.post);
         if (!w.registered && !w.refusedSaid) {
             w.refusedSaid = true;
@@ -267,8 +320,8 @@ void Install(coop::net::Session* session) {
     }
     if (!all) return;
     g_watched = true;
-    UE_LOGI("geom_octa_sync: %zu watches registered by class and name, each live once the class loads",
-            sizeof(watches) / sizeof(watches[0]));
+    UE_LOGI("geom_octa_sync: the watches are registered by class and name, each live once the class loads%s",
+            ProbeOn() ? " (with the overlap probe)" : "");
 }
 
 Counters GetCounters() { return g_counters; }
@@ -293,6 +346,7 @@ void OnDisconnect() {
     g_windowWanted = g_windowCounted = 0;
     g_windowIndex = -1;
     g_windowSerial = 0;
+    g_seenCount = 0;
     g_lastTarget[0] = '\0';
     g_aggroEntry = AggroEntry{};
 }

@@ -33,7 +33,9 @@ struct Counters {
     uint32_t idle;          // idle lines
     uint32_t laser;         // laser lines
     uint32_t mirrorMove;    // mirror ran move lines
-    bool     windowReached;     // the open window's n-th host verdict has been counted
+    uint32_t overlapMin;    // [dev] minSphere begin-overlaps the host's Octa took (only while octa_drill=measure)
+    uint32_t overlapProp;   // [dev] the same for propAggroSphere
+    bool     windowReached;    // the open window's n-th host verdict has been counted
     uint32_t idleAtWindow;      // the idle count at the moment it was counted
 };
 Counters GetCounters();
