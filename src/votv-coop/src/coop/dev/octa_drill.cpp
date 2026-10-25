@@ -262,13 +262,15 @@ void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
         Fail("no reachable point 600 cm from the walker lies 1300 cm or more from the other player");
         return;
     }
+    // The baseline is read before the spawn: the sphere reports the walker standing inside it as it registers, inside
+    // the spawn's finish, so the first aggro lands before SpawnAt returns.
+    g_base = GS::GetCounters();
     void* octa = coop::dev::spawn_npc::SpawnAt(kOctaClass, *best);
     if (!octa) {
         Fail("the Octa did not spawn");
         return;
     }
     g_octa.Set(octa);
-    g_base = GS::GetCounters();
     GS::OpenVerdictWindow(kBlastsWanted, octa);
     g_capturedBase = g_capturedSeen = coop::explosion_sync::GetCounters().captured;
     g_wstep = WStep::Stand;
