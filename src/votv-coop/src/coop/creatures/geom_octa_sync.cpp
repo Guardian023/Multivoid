@@ -30,6 +30,7 @@ namespace R  = ue_wrap::reflection;
 namespace sg = ue_wrap::script_gate;
 namespace EL = coop::element;
 namespace GO = ue_wrap::geom_octa;
+namespace N  = coop::net;
 
 // The rows: the bodies this lane watches, each declared on the class that owns it. The two notify functions are the
 // class's export names for the "fire" and "close" montage sections' finish notify, one GUID each.
@@ -107,6 +108,14 @@ uint32_t CountVerdict(void* octa) {
     return 1;
 }
 
+// `octa`'s verdict count so far, without counting; 0 for an Octa with none.
+uint32_t PeekVerdicts(void* octa) {
+    const int32_t index = R::InternalIndexOf(octa);
+    for (const VerdictCount& v : g_verdicts)
+        if (index >= 0 && v.index == index && R::SlotSerial(index) == v.serial) return v.n;
+    return 0;
+}
+
 // `aggro`'s entry as the PRE saw it: whether the Octa had a target, kept for the POST of the same call. The body's
 // guard tests the old target, not the argument, so the POST alone cannot tell a passed guard from a refused one.
 struct AggroEntry {
@@ -138,19 +147,98 @@ void EidText(EL::ElementId eid, char (&out)[16]) {
     else std::snprintf(out, sizeof(out), "%u", static_cast<unsigned>(eid));
 }
 
-void TargetText(void* target, char (&out)[40]) {
-    if (!target) {
-        std::snprintf(out, sizeof(out), "none");
-        return;
-    }
+// A target as the wire carries it: a player by slot (the host's own is 0, a puppet its slot), else an element the
+// registry names, else none. An ATV is no element, so an Octa that targets one sends None: the client's look of that
+// attack idles, and its outcome (the blast) still arrives.
+struct WireTarget {
+    uint8_t  kind = N::kGeomOctaTargetNone;
+    uint32_t v = 0;
+};
+
+WireTarget WireTargetOf(void* target) {
+    if (!target) return WireTarget{};
     const uint8_t peer = coop::players::Registry::Get().PeerIdOfActor(target);
-    if (peer != coop::players::kPeerIdUnknown) {
-        std::snprintf(out, sizeof(out), "slot:%u", static_cast<unsigned>(peer));
+    if (peer != coop::players::kPeerIdUnknown) return WireTarget{N::kGeomOctaTargetSlot, peer};
+    const EL::ElementId eid = EL::Registry::Get().EidForActor(target);
+    if (eid != EL::kInvalidId) return WireTarget{N::kGeomOctaTargetElement, static_cast<uint32_t>(eid)};
+    return WireTarget{};
+}
+
+void TargetText(const WireTarget& t, char (&out)[40]) {
+    if (t.kind == N::kGeomOctaTargetSlot) std::snprintf(out, sizeof(out), "slot:%u", static_cast<unsigned>(t.v));
+    else if (t.kind == N::kGeomOctaTargetElement) std::snprintf(out, sizeof(out), "element:%u", static_cast<unsigned>(t.v));
+    else std::snprintf(out, sizeof(out), "none");
+}
+
+// ---- what the host knows of each Octa's EntitySpawn, and the one Aggro it keeps ----
+//
+// The host never sends a GeomOctaEvent before that Octa's EntitySpawn has been sent: the event rides the spawn's lane
+// and the client's mirror must exist. The Octa's first aggro runs inside its own spawn's finish, on both spawn routes,
+// before the NPC lane's send (the dev route sends at the interceptor's PRE, the gamemode's at the drain), so an Aggro
+// that finds no sent spawn is kept, one per Octa, and goes out from OnNpcSpawnSent.
+constexpr size_t kMaxSent = 16;
+uint32_t g_sentEids[kMaxSent];
+size_t   g_sentCount = 0;
+
+bool SpawnSent(uint32_t eid) {
+    for (size_t i = 0; i < g_sentCount; ++i)
+        if (g_sentEids[i] == eid) return true;
+    return false;
+}
+
+void ForgetSent(uint32_t eid) {
+    for (size_t i = 0; i < g_sentCount; ++i) {
+        if (g_sentEids[i] == eid) {
+            g_sentEids[i] = g_sentEids[--g_sentCount];
+            return;
+        }
+    }
+}
+
+void NoteSent(uint32_t eid) {
+    if (SpawnSent(eid)) return;
+    // An eid whose element is gone is the end of that Octa; its entry goes first.
+    for (size_t i = 0; i < g_sentCount;) {
+        if (!EL::Registry::Get().Get(static_cast<EL::ElementId>(g_sentEids[i]))) g_sentEids[i] = g_sentEids[--g_sentCount];
+        else ++i;
+    }
+    if (g_sentCount < kMaxSent) g_sentEids[g_sentCount++] = eid;
+    else UE_LOGW("geom_octa_sync: more than %zu Octas with a sent spawn -- the newest is not tracked", kMaxSent);
+}
+
+struct KeptAggro {
+    int32_t    index = -1;   // the Octa, by object slot and the slot's serial
+    int32_t    serial = 0;
+    WireTarget target;
+    uint32_t   base = 0;
+};
+constexpr size_t kMaxKept = 8;
+KeptAggro g_kept[kMaxKept];
+
+bool KeptLive(const KeptAggro& k) { return k.index >= 0 && R::SlotSerial(k.index) == k.serial; }
+
+KeptAggro* FindKept(void* octa) {
+    const int32_t index = R::InternalIndexOf(octa);
+    for (KeptAggro& k : g_kept)
+        if (k.index == index && KeptLive(k)) return &k;
+    return nullptr;
+}
+
+// A newer aggro of the same Octa replaces its kept one; an entry whose Octa has ended is the first to be reused.
+void Keep(void* octa, const WireTarget& target, uint32_t base) {
+    const int32_t index = R::InternalIndexOf(octa);
+    const int32_t serial = index >= 0 ? R::AllocateSlotSerial(index) : 0;
+    if (serial == 0) return;
+    KeptAggro* slot = FindKept(octa);
+    for (KeptAggro& k : g_kept) {
+        if (slot) break;
+        if (k.index < 0 || !KeptLive(k)) slot = &k;
+    }
+    if (!slot) {
+        UE_LOGW("geom_octa_sync: more than %zu Octas hold a kept Aggro -- this one is dropped", kMaxKept);
         return;
     }
-    const EL::ElementId eid = EL::Registry::Get().EidForActor(target);
-    if (eid != EL::kInvalidId) std::snprintf(out, sizeof(out), "element:%u", static_cast<unsigned>(eid));
-    else std::snprintf(out, sizeof(out), "other");
+    *slot = KeptAggro{index, serial, target, base};
 }
 
 unsigned long long Now() { return static_cast<unsigned long long>(coop::net::NowMs()); }
@@ -170,26 +258,75 @@ sg::Verdict OnAggroPre(const sg::Call& call) {
     return sg::Verdict::Run;
 }
 
+// A GeomOctaEvent to every world-ready peer; false when there is none to send to or the send failed.
+bool SendEvent(const N::GeomOctaEventPayload& p) {
+    N::Session* s = g_session.load(std::memory_order_acquire);
+    if (!s || s->role() != N::Role::Host || !s->connected() || !s->AnyWorldReadyPeer()) return false;
+    return s->SendReliable(N::ReliableKind::GeomOctaEvent, &p, sizeof(p));
+}
+
+void SendAggro(uint32_t eid, const WireTarget& target, uint32_t base) {
+    N::GeomOctaEventPayload p{};
+    p.op = N::kGeomOctaOpAggro;
+    p.octaEid = eid;
+    p.verdictNo = base;
+    p.targetKind = target.kind;
+    p.target = target.v;
+    char text[40];
+    TargetText(target, text);
+    if (SendEvent(p))
+        UE_LOGI("[OCTA] aggro sent eid=%u target=%s base=%u t=%llu", static_cast<unsigned>(eid), text,
+                static_cast<unsigned>(base), Now());
+}
+
+void SendVerdict(uint32_t eid, uint32_t n, int refire) {
+    N::GeomOctaEventPayload p{};
+    p.op = N::kGeomOctaOpVerdict;
+    p.octaEid = eid;
+    p.verdictNo = n;
+    p.refire = static_cast<uint8_t>(refire);
+    if (SendEvent(p))
+        UE_LOGI("[OCTA] verdict sent eid=%u n=%u refire=%d t=%llu", static_cast<unsigned>(eid),
+                static_cast<unsigned>(n), refire, Now());
+}
+
 void OnAggroPost(const sg::Call& call) {
     if (!IsHost() || g_aggroEntry.octa != call.object) return;
     const bool hadTarget = g_aggroEntry.hadTarget;
     g_aggroEntry = AggroEntry{};
     if (hadTarget) return;   // the guard refused: nothing was decided
-    char eid[16], target[40];
-    EidText(NpcEid(call.object), eid);
-    TargetText(AggroArgument(call), target);
-    std::snprintf(g_lastTarget, sizeof(g_lastTarget), "%s", target);
+    const WireTarget target = WireTargetOf(AggroArgument(call));
+    char text[40];
+    TargetText(target, text);
+    std::snprintf(g_lastTarget, sizeof(g_lastTarget), "%s", text);
     ++g_counters.hostAggro;
-    UE_LOGI("[OCTA] host aggro eid=%s target=%s t=%llu", eid, target, Now());
+    const uint32_t base = PeekVerdicts(call.object);
+    const EL::ElementId eid = NpcEid(call.object);
+    if (eid == EL::kInvalidId) {
+        Keep(call.object, target, base);   // not enrolled yet: OnNpcSpawnSent sends it with the spawn
+    } else if (SpawnSent(static_cast<uint32_t>(eid))) {
+        SendAggro(static_cast<uint32_t>(eid), target, base);
+    }
+    // An enrolled Octa whose spawn was not sent had no world-ready peer when it spawned: nothing to send to, and a
+    // peer that becomes ready later is served by the join, not by this event.
+}
+
+// The notify's name is `finish`: the fire section's other notifies are not a verdict.
+R::ParamOffset g_notifyName{L"NotifyName"};
+
+bool IsFinishNotify(const sg::Call& call) {
+    const int32_t off = g_notifyName.Of(call.function);
+    if (off < 0 || !call.locals) return false;
+    R::FName name{};
+    std::memcpy(&name, call.locals + off, sizeof(name));
+    return R::NameEquals(name, L"finish");
 }
 
 void OnFireFinishPost(const sg::Call& call) {
-    if (!IsHost()) return;
+    if (!IsHost() || !IsFinishNotify(call)) return;
     const EL::ElementId id = NpcEid(call.object);
     const uint32_t n = CountVerdict(call.object);
     const int refire = GO::TargetActor(call.object) ? 1 : 0;
-    char eid[16];
-    EidText(id, eid);
     ++g_counters.hostVerdict;
     const int32_t slot = R::InternalIndexOf(call.object);
     const bool windowOcta = slot >= 0 && slot == g_windowIndex && R::SlotSerial(slot) == g_windowSerial;
@@ -197,7 +334,9 @@ void OnFireFinishPost(const sg::Call& call) {
         g_counters.windowReached = true;
         g_counters.idleAtWindow = g_counters.idle;
     }
-    UE_LOGI("[OCTA] host verdict eid=%s n=%u refire=%d t=%llu", eid, static_cast<unsigned>(n), refire, Now());
+    // Counted always, since the count is the host's truth; sent only for an Octa whose spawn was sent (a verdict comes
+    // seconds after the first aggro, so a spawn not yet sent by then is a rarity, and the client times that look out).
+    if (id != EL::kInvalidId && SpawnSent(static_cast<uint32_t>(id))) SendVerdict(static_cast<uint32_t>(id), n, refire);
 }
 
 void OnCloseFinishPost(const sg::Call& call) {
@@ -326,6 +465,24 @@ void Install(coop::net::Session* session) {
 
 Counters GetCounters() { return g_counters; }
 
+void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, bool sent) {
+    if (!className || std::strcmp(className, "geomOcta_C") != 0 || !IsHost()) return;
+    KeptAggro* kept = actor ? FindKept(actor) : nullptr;
+    if (!sent) {
+        // No peer was world-ready, so the spawn went nowhere and neither does its Aggro: a peer that becomes ready later
+        // is served by the join's re-send.
+        ForgetSent(eid);
+        if (kept) *kept = KeptAggro{};
+        return;
+    }
+    NoteSent(eid);
+    if (!kept) return;
+    const KeptAggro k = *kept;
+    *kept = KeptAggro{};
+    // The attack may have ended while the spawn waited; then there is nothing to replay.
+    if (GO::TargetActor(actor) != nullptr) SendAggro(eid, k.target, k.base);
+}
+
 void OpenVerdictWindow(uint32_t n, void* octa) {
     const int32_t index = octa ? R::InternalIndexOf(octa) : -1;
     const int32_t serial = index >= 0 ? R::AllocateSlotSerial(index) : 0;
@@ -342,6 +499,8 @@ const char* LastAggroTarget() { return g_lastTarget; }
 void OnDisconnect() {
     for (VerdictCount& v : g_verdicts) v = VerdictCount{};
     g_verdictNext = 0;
+    for (KeptAggro& k : g_kept) k = KeptAggro{};
+    g_sentCount = 0;
     g_counters = Counters{};
     g_windowWanted = g_windowCounted = 0;
     g_windowIndex = -1;

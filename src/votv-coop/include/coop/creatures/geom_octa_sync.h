@@ -13,8 +13,10 @@ namespace coop::net { class Session; }
 namespace coop::geom_octa_sync {
 
 // The lines. Each but the last ends in `t=<ms>`, coop::net::NowMs(): the log stamp has a one-second grain.
-//   host aggro        the host's `aggro` body passed its guard (no target on entry), with the argument it was given
-//   host verdict      the host's "fire" montage finish: n, the Octa's count for its life, and refire (a target stands)
+//   aggro sent        the host's `aggro` body passed its guard (no target on entry), sent with the target it was given
+//                     and the Octa's verdict count as the base
+//   verdict sent      the host's "fire" montage finish, sent: n, the Octa's count for its life, and refire (a target
+//                     stands). Counted for every Octa, sent only for one whose EntitySpawn was sent
 //   idle              the "close" montage finish, on every peer
 //   laser             a laser's BeginPlay, on every peer
 //   mirror ran move   a client mirror's wander body ran: it was not parked
@@ -44,6 +46,14 @@ Counters GetCounters();
 // of them is counted, the idle count at that moment is kept in the counters, so a poll that sees the n-th verdict late
 // still tells an idle that came in between. One window at a time; opening another replaces it. Game thread.
 void OpenVerdictWindow(uint32_t n, void* octa);
+
+// HOST, after each NPC EntitySpawn send attempt (npc_sync's interceptor and npc_world_enum's enrol): `className` is the
+// spawned class, `actor` the spawned actor or null where it does not exist yet (the interceptor sends before the spawn),
+// `sent` whether any peer was sent it. Only the Octa matters. The host sends a GeomOctaEvent only for an Octa whose spawn
+// it has sent, since the event rides the spawn's lane and the client's mirror is built by it. A kept Aggro (the first
+// aggro runs inside the spawn's finish, before this) goes out here if its attack still stands, and is dropped when
+// nothing was sent. Game thread.
+void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, bool sent);
 
 // The target text (`slot:1`, `none`, ...) of the last host aggro line, or an empty string before the first.
 const char* LastAggroTarget();

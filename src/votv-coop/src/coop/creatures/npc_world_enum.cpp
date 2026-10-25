@@ -17,6 +17,7 @@
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/creatures/kerfur_entity.h"  // reserve the stable kerfur id when a kerfur NPC is registered
+#include "coop/creatures/geom_octa_sync.h"  // OnNpcSpawnSent: the Octa's events follow its spawn's send
 #include "coop/creatures/npc_sync.h"
 #include "coop/world/world_actor_sync.h"  // HostEnrollExSpawn -- the WA branch of the EX-catch drain
 #include "ue_wrap/engine/engine.h"   // TryGetActorLocation / TryGetActorRotation
@@ -108,6 +109,7 @@ coop::element::ElementId EnrollUntrackedNpcActor(void* obj, const std::wstring& 
     // fan-out's own gate first, where MTA filters inside its fan-out (CPlayerManager.cpp:162-170).
     // MTA registers an element at its creation (reference/mtasa-blue/Server/mods/deathmatch/logic/CElement.cpp:39);
     // a creature that loaded with the level, or that no watched spawn source made, is enrolled here.
+    bool spawnSent = false;
     if (s->connected() && s->AnyWorldReadyPeer(skipSlot)) {
         coop::net::EntitySpawnPayload p{};
         const std::string& tn = el->GetTypeName();
@@ -125,11 +127,15 @@ coop::element::ElementId EnrollUntrackedNpcActor(void* obj, const std::wstring& 
         // that eid, since the eid-keyed sweep finds nothing.
         const coop::element::ElementId offEid = coop::kerfur_entity::GetOriginOffEidForEid(eid);
         p.retireOffEid = (offEid == coop::element::kInvalidId) ? 0u : static_cast<uint32_t>(offEid);
-        if (!s->SendEntitySpawn(p, skipSlot)) {
+        spawnSent = s->SendEntitySpawn(p, skipSlot);
+        if (!spawnSent) {
             UE_LOGW("npc-sync[%s]: SendEntitySpawn failed for newly-registered eid=%u",
                     logTag, p.elementId);
         }
     }
+    // The Geom Octa's lane sends none of its events before the spawn's send. When no peer was world-ready nothing was
+    // sent, and the join's snapshot carries the spawn instead.
+    coop::geom_octa_sync::OnNpcSpawnSent(static_cast<uint32_t>(eid), obj, el->GetTypeName().c_str(), spawnSent);
     return eid;
 }
 
