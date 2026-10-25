@@ -365,8 +365,9 @@ void JoinerStand() {
             Fail("no aggro replayed at join (verdicts were applied, the join's Aggro was not)");
             return;
         }
-        UE_LOGI("[OCTA-DRILL] join DONE role=joiner replayed=%u applied=%u wrote=%u base=%u t=%llu",
+        UE_LOGI("[OCTA-DRILL] join DONE role=joiner replayed=%u applied=%u wrote=%u base=%u superseded=%u t=%llu",
                 r.aggroReplayed - g_relay0.aggroReplayed, applied, r.overwriteWrites - g_relay0.overwriteWrites, g_joinBase,
+                r.verdictSuperseded - g_relay0.verdictSuperseded,
                 Now());
         coop::dev::drill_chat::Say(kJoinerDoneLine);
         Unguard();

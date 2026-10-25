@@ -3,11 +3,11 @@
 //
 // The Octa's mirror keeps its Blueprint running but for the bodies that decide (coop/creatures/npc_mirror_brain). The
 // host's Aggro and FireVerdict arrive as GeomOctaEvent. An Aggro is replayed as the engine's own begin-overlap of
-// minSphere with the target's counterpart here, once the mirror is idle; a FireVerdict is paired with the mirror's
-// own refused fire-finish notify (the k-th since the Aggro pairs with verdict base + k, by modular difference) and the
-// notify is replayed with the host's answer written into the one overlap read it makes. Every replay runs in Tick, under
-// a one-shot pass for the entries it names, and nothing outlives its reflected call.
-// The `[OCTA]` lines: aggro held|replayed|skipped, verdict applied|dropped|pending|timeout, event dropped. A verdict
+// minSphere with the target's counterpart here, once the mirror is idle. At the mirror's own refused fire-finish notify
+// the NEWEST kept FireVerdict past those already shown is applied (latest wins; older ones retire as superseded), and
+// the notify is replayed with the host's answer written into the one overlap read it makes. Every replay runs in Tick,
+// under a one-shot pass for the entries it names, and nothing outlives its reflected call.
+// The `[OCTA]` lines: aggro held|replayed|skipped, verdict applied|dropped|superseded|pending|timeout, event dropped. A verdict
 // applied says `wrote=`, the answers the hook wrote into its replay's overlap read: one when the overwrite works.
 
 #pragma once
@@ -36,6 +36,7 @@ struct Counters {
     uint32_t verdictApplied;
     uint32_t verdictTimeout;
     uint32_t verdictDropped;
+    uint32_t verdictSuperseded; // kept verdicts retired because a newer one was applied (latest wins): not a fault
     uint32_t eventDropped;
     uint32_t overwriteWrites;   // host answers the post hook wrote into a replayed notify's overlap read
     uint32_t aggroReceived;     // Aggros that passed the boundary for a live Octa mirror (replayed or not)

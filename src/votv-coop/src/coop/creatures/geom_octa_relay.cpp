@@ -61,7 +61,7 @@ constexpr uint64_t kResolveMs = 2000;   // a real target that does not resolve (
 
 constexpr size_t kMaxOctas = 8;
 constexpr size_t kMaxKept = 4;      // verdicts kept per Octa
-constexpr size_t kMaxWaiting = 8;   // refused notifies awaiting a verdict, per Octa
+constexpr size_t kMaxWaiting = 16;  // refused notifies awaiting a verdict, per Octa
 
 // Why an event is refused at the boundary. One counter and one line per reason.
 enum class Reject : uint8_t {
@@ -110,13 +110,16 @@ struct OctaState {
     uint64_t unresolvedAt = 0;   // when its target first failed to resolve
     bool     heldSaid = false;
 
-    // The pairing since the last Aggro: the k-th refused notify pairs with verdict base + k (modular).
+    // The pairing since the last Aggro, latest wins: a refused fire-finish applies the NEWEST kept verdict numbered past
+    // `done` (relative to `base`, modular), and every older kept one is retired as superseded. A verdict's number
+    // d = n - base; `done` is the highest d replayed or timed out.
     bool     haveBase = false;
     uint32_t base = 0;
-    uint32_t counted = 0;        // refused notifies counted
-    uint32_t done = 0;           // of those, replayed (applied or timed out)
-    uint64_t waitAt[kMaxWaiting] = {};
+    uint32_t done = 0;
+    uint64_t waitAt[kMaxWaiting] = {};      // the refused notifies awaiting a verdict, oldest first (a ring)
     bool     pendingSaid[kMaxWaiting] = {};
+    size_t   waitHead = 0, waitCount = 0;
+    bool     supersededSaid = false;        // `verdict superseded` is said once per attack
     Kept     kept[kMaxKept] = {};
     size_t   keptCount = 0;
 };
@@ -274,10 +277,13 @@ sg::Verdict OnFinishPre(const sg::Call& call) {
     const EL::ElementId eid = EL::Registry::Get().EidForActor(call.object);
     OctaState* st = eid == EL::kInvalidId ? nullptr : Find(static_cast<uint32_t>(eid));
     if (!st || !st->haveBase) return sg::Verdict::Run;
-    const size_t i = st->counted % kMaxWaiting;
+    if (st->waitCount == kMaxWaiting) {   // sixteen unanswered notifies: unreachable at one a 1.8 s with a 4.2 s wait
+        LogDroppedVerdict(st->eid, 0, "too many refused notifies awaiting a verdict");
+        return sg::Verdict::Run;
+    }
+    const size_t i = (st->waitHead + st->waitCount++) % kMaxWaiting;
     st->waitAt[i] = N::NowMs();
     st->pendingSaid[i] = false;
-    ++st->counted;
     return sg::Verdict::Run;
 }
 
@@ -287,13 +293,25 @@ void SetBase(OctaState& st, uint32_t base) {
     st.haveBase = true;
     st.base = base;
     EnsureHook();   // the verdicts of this attack will need it, whether or not its own look is replayed
-    st.counted = st.done = 0;
+    st.done = 0;
+    st.waitHead = st.waitCount = 0;
     for (bool& s : st.pendingSaid) s = false;
+    st.supersededSaid = false;
     // Kept verdicts numbered at or below the new base belong to an attack already over.
     size_t w = 0;
     for (size_t i = 0; i < st.keptCount; ++i)
         if (static_cast<int32_t>(st.kept[i].n - base) > 0) st.kept[w++] = st.kept[i];
     st.keptCount = w;
+}
+
+// Kept verdicts retired because a newer one exists (latest wins), whether it was applied or only arrived: counted always,
+// said once per attack. It is not a fault, so RelayDirty does not read it.
+void NoteSuperseded(OctaState& st, uint32_t upto, uint32_t count) {
+    g_counters.verdictSuperseded += count;
+    if (st.supersededSaid) return;
+    st.supersededSaid = true;
+    UE_LOGI("[OCTA] verdict superseded eid=%u upto=%u (counted; said once per attack) t=%llu",
+            static_cast<unsigned>(st.eid), static_cast<unsigned>(upto), Now());
 }
 
 void LogAggro(const char* what, const OctaState& st, const char* why) {
@@ -363,18 +381,35 @@ Replay ReplayFinish(void* octa, uint8_t refire) {
 
 void ServeVerdicts(OctaState& st, void* octa, uint64_t now) {
     if (!st.haveBase) return;
-    while (st.done < st.counted) {
-        const uint32_t k = st.done + 1;
-        const uint32_t want = st.base + k;
+    while (st.waitCount > 0) {
+        // The newest kept verdict numbered past `done` (relative to the base, modular).
         size_t at = st.keptCount;
-        for (size_t i = 0; i < st.keptCount; ++i)
-            if (st.kept[i].n == want) at = i;
-        const size_t slot = (k - 1) % kMaxWaiting;
+        uint32_t newest = st.done;
+        for (size_t i = 0; i < st.keptCount; ++i) {
+            const uint32_t d = st.kept[i].n - st.base;
+            if (static_cast<int32_t>(d) > 0 && d > newest) {
+                newest = d;
+                at = i;
+            }
+        }
+        const uint32_t want = st.base + st.done + 1;   // what is waited for when none is kept
+        const size_t slot = st.waitHead;
         if (at < st.keptCount) {
             const Kept v = st.kept[at];
-            for (size_t i = at + 1; i < st.keptCount; ++i) st.kept[i - 1] = st.kept[i];
-            --st.keptCount;
-            ++st.done;
+            // Latest wins: the freshest decision is the one shown, and every older one retires as superseded, never as
+            // dropped. A joiner's chain reaches its first notify long after the host began to re-fire.
+            uint32_t retired = 0;
+            size_t w = 0;
+            for (size_t i = 0; i < st.keptCount; ++i) {
+                if (i == at) continue;
+                if (static_cast<int32_t>(st.kept[i].n - st.base) > 0 && st.kept[i].n - st.base < newest) ++retired;
+                else st.kept[w++] = st.kept[i];   // none: a verdict ahead of the applied one stays kept
+            }
+            st.keptCount = w;
+            if (retired) NoteSuperseded(st, v.n, retired);
+            st.done = newest;
+            st.waitHead = (st.waitHead + 1) % kMaxWaiting;
+            --st.waitCount;
             const Replay r = ReplayFinish(octa, v.refire);
             if (r.ran) {
                 ++g_counters.verdictApplied;
@@ -394,6 +429,8 @@ void ServeVerdicts(OctaState& st, void* octa, uint64_t now) {
         if (now - st.waitAt[slot] <= kVerdictWaitMs) return;
         // No verdict in time: the look ends with the Octa idle (refire 0), and the next Aggro starts clean.
         ++st.done;
+        st.waitHead = (st.waitHead + 1) % kMaxWaiting;
+        --st.waitCount;
         if (ReplayFinish(octa, 0).ran) {
             ++g_counters.verdictTimeout;
             UE_LOGI("[OCTA] verdict timeout eid=%u n=%u t=%llu", static_cast<unsigned>(st.eid),
@@ -469,7 +506,7 @@ void OnEvent(const N::GeomOctaEventPayload& p) {
         }
     }
     if (st->keptCount == kMaxKept) {
-        LogDroppedVerdict(p.octaEid, st->kept[0].n, "the oldest, for a fifth");
+        NoteSuperseded(*st, p.verdictNo, 1);   // the oldest kept goes: the newer verdict is the one that would win
         for (size_t i = 1; i < kMaxKept; ++i) st->kept[i - 1] = st->kept[i];
         --st->keptCount;
     }
