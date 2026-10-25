@@ -62,8 +62,6 @@ Arm ArmOf() {
 bool Fires() { return ArmOf() == Arm::Measure || RelayJudged(); }
 bool RelayJudged() { return ArmOf() == Arm::Attack || ArmOf() == Arm::Join; }
 bool IsJoiner() { return ArmOf() == Arm::Join && coop::players::Registry::Get().LocalPeerId() == 1; }
-// The join arm's observer is the walker, client 2 (slot 2): true once its puppet is registered on this peer.
-bool ObserverRegistered() { return coop::players::Registry::Get().Puppet(2) != nullptr; }
 const char* FiringArmName() { return ArmOf() == Arm::Join ? "join" : ArmOf() == Arm::Attack ? "attack" : "measure"; }
 
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
@@ -73,9 +71,11 @@ bool SpawnByGamemode() {
     return gm;
 }
 
-// Who walks into the Octa's sphere (the control row octa_measure_target): the client, or the host's own player.
+// Who walks into the Octa's sphere: the host's own player in the join arm (client 1 is the joiner and stands away), else
+// the control row octa_measure_target says, the client by default.
 bool HostWalks() {
     static const bool host =
+        ArmOf() == Arm::Join ||
         coop::config::ResolveEnum(::coop::config_registry::rows::octa_measure_target) == "host";
     return host;
 }
@@ -100,6 +100,7 @@ uint64_t g_puppetStillAt = 0;
 WStep    g_wstep = WStep::Stand;  // octa_measure_target=host: the host's legs after the spawn
 uint32_t g_volleysSeen = 0;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
 bool     g_snapJudged = false;    // join, host: the joiner's snapshot has been judged
+uint32_t g_idleAtRelease = 0;     // join, host: the idle count when the joiner released it
 // CLIENT (measure)
 uint32_t g_appliedBase = 0;      // the explosion lane's applied count when the Octa mirror appeared
 uint32_t g_appliedSeen = 0;
@@ -189,17 +190,6 @@ void* LivePuppetBody(uint8_t& slot) {
     return nullptr;
 }
 
-// The walker's puppet on the host: the join arm's walker is client 2 (client 1 is the joiner, relaunched mid-run), so its
-// puppet is the one waited for; every other arm's is the first live puppet.
-void* LiveWalkerBody(uint8_t& slot) {
-    if (ArmOf() != Arm::Join) return LivePuppetBody(slot);
-    coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(2);
-    void* body = rp ? rp->GetActor() : nullptr;
-    if (!body || !R::IsLive(body)) return nullptr;
-    slot = 2;
-    return body;
-}
-
 // The walker's way out of the sphere: a standpoint on a ring about the Octa's live place, the next ring when the last
 // has none or the walk to it ended with no route (an earlier host walk-out failed once on a place with no route 1800 cm
 // out). False, said, once the last ring has failed.
@@ -222,6 +212,147 @@ bool BeginWalkOut(void* me, void* octa, const char* who) {
 }
 
 namespace {
+std::vector<FVector> g_placeRing;   // the standpoints of the walker's place, shortest route first
+size_t   g_placeIdx = 0;            // the one walked to now
+FVector  g_placeLast{};             // where the walker stood when its progress was last seen, and since when
+uint64_t g_placeSince = 0;
+}  // namespace
+
+PlaceStep PlaceWalkTick(void* me, const FVector& about, const char* who) {
+    const uint64_t now = coop::net::NowMs();
+    if (!g_walk) {
+        if (g_placeRing.empty()) {
+            g_placeRing = D::ReachableStandpoints(me, about, kPlaceFromCm, kStandpoints, kStandReachCm);
+            g_placeIdx = 0;
+            if (g_placeRing.empty()) {
+                char what[128];
+                std::snprintf(what, sizeof(what), "no NavMesh route from the %s reaches a standpoint 2200 cm from the other player",
+                              who);
+                Fail(what);
+                return PlaceStep::Failed;
+            }
+        }
+        if (g_placeIdx >= g_placeRing.size()) {
+            Fail("the walker could not reach its place");
+            return PlaceStep::Failed;
+        }
+        g_walk = D::StartBackgroundWalk(g_placeRing[g_placeIdx], kStandReachCm, kFirstWalkDeadlineS);
+        E::TryGetActorLocation(me, g_placeLast);
+        g_placeSince = now;
+        UE_LOGI("[OCTA-DRILL] %s: walking to its place, 2200 cm from the other player (standpoint %u of %u)", who,
+                static_cast<unsigned>(g_placeIdx + 1), static_cast<unsigned>(g_placeRing.size()));
+        return PlaceStep::Walking;
+    }
+    const int state = g_walk->state.load();
+    if (state == 1) {
+        g_walk.reset();
+        g_placeRing.clear();
+        return PlaceStep::Reached;
+    }
+    if (state == 2) {   // the walk ended with no route: the next standpoint
+        g_walk.reset();
+        UE_LOGW("[OCTA-DRILL] %s: the walk to standpoint %u ended with no route; trying the next", who,
+                static_cast<unsigned>(g_placeIdx + 1));
+        ++g_placeIdx;
+        return PlaceStep::Walking;
+    }
+    FVector p{};
+    if (E::TryGetActorLocation(me, p) && FlatDist(p, g_placeLast) >= kPlaceMoveCm) {
+        g_placeLast = p;
+        g_placeSince = now;
+    } else if (now - g_placeSince >= kPlaceStuckMs) {   // the director never gives up: the walker does
+        D::CancelBackgroundWalk(*g_walk);
+        g_walk.reset();
+        UE_LOGW("[OCTA-DRILL] %s: stuck 10 s on the way to standpoint %u; trying the next", who,
+                static_cast<unsigned>(g_placeIdx + 1));
+        ++g_placeIdx;
+    }
+    return PlaceStep::Walking;
+}
+
+// The join arm's walker stays in the Octa's reach until the joiner reports, so the Octa keeps firing for the joiner's
+// snapshot: a blast throws it out of the sphere, and the Octa then idles for want of a target. Past kReEnterFromCm (inside
+// the sphere, so the way back crosses its edge and the game's own begin-overlap fires) its director walks it back to
+// within kReEnterRingCm of the Octa's live place, once its position is steady (it is not tumbling) or kRecoverMs after
+// it first went out, whichever comes first (a ragdoll that has recovered may never read steady).
+namespace {
+constexpr float    kReEnterFromCm = 900.f;
+constexpr float    kReEnterRingCm = 300.f;   // a standpoint on this ring, reached within kStandReachCm: inside 400 cm
+constexpr int      kReEnterWalkS  = 60;
+constexpr uint64_t kSteadyMs      = 500;     // no clean ragdoll read: a position steady this long is a recovered body
+constexpr uint64_t kRecoverMs     = 3000;    // ... and a walker still out this long after it first went out walks back
+uint32_t g_reEnters = 0;
+FVector  g_reLast{};
+uint64_t g_reSteadyAt = 0;   // when its position last became steady (0: it has not)
+uint64_t g_reOutAt = 0;      // when it first went past kReEnterFromCm (0: it is within)
+size_t   g_reStand = 0;      // the ring's standpoint tried next: the one after a walk that ended with no route
+bool     g_reNoRingSaid = false;
+}  // namespace
+
+void WalkerReEnter(void* me) {
+    if (g_walk) {
+        const int state = g_walk->state.load();
+        if (state == 0) return;
+        g_walk.reset();
+        if (state == 2) {   // no route: the ring's next standpoint is tried on this same tick
+            UE_LOGW("[OCTA-DRILL] walker re-entry walk ended with no route (standpoint %u); trying the next",
+                    static_cast<unsigned>(g_reStand));
+            ++g_reStand;
+        } else {
+            g_reStand = 0;
+        }
+    }
+    void* octa = g_octa.Get();
+    FVector op{}, mp{};
+    if (!octa || !E::TryGetActorLocation(octa, op) || !E::TryGetActorLocation(me, mp)) return;
+    const float d = FlatDist(op, mp);
+    const uint64_t now = coop::net::NowMs();
+    if (d <= kReEnterFromCm) {
+        g_reOutAt = g_reSteadyAt = 0;
+        return;
+    }
+    if (!g_reOutAt) g_reOutAt = now;
+    if (!g_reSteadyAt || FlatDist(mp, g_reLast) >= kStillCm) {
+        g_reLast = mp;
+        g_reSteadyAt = now;
+    }
+    const bool steady = now - g_reSteadyAt >= kSteadyMs;
+    if (!steady && now - g_reOutAt < kRecoverMs) return;
+    const std::vector<FVector> ring = D::ReachableStandpoints(me, op, kReEnterRingCm, kStandpoints, kStandReachCm);
+    if (ring.empty()) {
+        if (!g_reNoRingSaid) {
+            g_reNoRingSaid = true;
+            UE_LOGW("[OCTA-DRILL] walker re-entry: no standpoint %.0f cm from the Octa has a route (%.0f cm out); asking again",
+                    kReEnterRingCm, d);
+        }
+        return;
+    }
+    g_reNoRingSaid = false;
+    const size_t pick = g_reStand % ring.size();
+    g_walk = D::StartBackgroundWalk(ring[pick], kStandReachCm, kReEnterWalkS);
+    g_reSteadyAt = 0;
+    UE_LOGI("[OCTA-DRILL] walker re-enters n=%u from %.0f cm (%s, standpoint %u)", ++g_reEnters, d,
+            steady ? "steady" : "3 s out", static_cast<unsigned>(pick));
+}
+
+// The joiner says this line in the lobby chat when it has applied its three verdicts; the host, which holds in the
+// sphere so the Octa keeps re-firing, leaves on it.
+bool JoinerDone() {
+    if (!g_joinerSeen && coop::dev::drill_chat::PollDue())
+        g_joinerSeen = coop::dev::drill_chat::ChatHasLive(kJoinerDoneLine);
+    return g_joinerSeen;
+}
+
+void ResetWalkers() {
+    g_placeRing.clear();
+    g_placeIdx = 0;
+    g_reEnters = 0;
+    g_reSteadyAt = g_reOutAt = 0;
+    g_reStand = 0;
+    g_reNoRingSaid = false;
+}
+
+namespace {
 
 // ---- CLIENT ----
 
@@ -230,13 +361,29 @@ uint32_t AppliedSum() {
     return c.applied[0] + c.applied[1] + c.applied[2];
 }
 
+FVector g_hostSeenAt{};        // the join arm: the host's puppet's place at the last poll
+bool    g_hostSeen = false;
+
+// True when the host's puppet has moved since the last poll: the host is walking to its place, the phase that leads to
+// the Octa's spawn.
+bool HostWalking() {
+    coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(coop::players::kPeerIdHost);
+    void* body = rp ? rp->GetActor() : nullptr;
+    FVector p{};
+    if (!body || !R::IsLive(body) || !E::TryGetActorLocation(body, p)) return false;
+    const bool moved = g_hostSeen && FlatDist(p, g_hostSeenAt) >= kStillCm;
+    g_hostSeenAt = p;
+    g_hostSeen = true;
+    return moved;
+}
+
 void ClientFindMirror() {
     void* octa = FirstInstance(kOctaClass);
     const uint32_t eid = NpcEidOf(octa);
     if (!eid) {
-        // The join arm's host spawns only after the observer has booted, joined and walked into place: the bound counts
-        // from the observer's puppet first registering here, the phase that leads to the mirror.
-        if (IsJoiner() && !ObserverRegistered()) g_stepMs = coop::net::NowMs();
+        // The join arm's host spawns the Octa only once it has walked to its place: while its puppet moves here, that
+        // walk is progress and the bound counts from its last step.
+        if (IsJoiner() && HostWalking()) g_stepMs = coop::net::NowMs();
         else if (Expired(kBirthsBoundMs)) Fail("the host's Octa never materialised as a mirror on this client");
         return;
     }
@@ -263,23 +410,7 @@ void ClientPlace(void* me) {
         if (Expired(kBirthsBoundMs)) Fail("the host's puppet never resolved on this client");
         return;
     }
-    if (!g_walk) {
-        const std::vector<FVector> ring = D::ReachableStandpoints(me, hp, kPlaceFromCm, kStandpoints, kStandReachCm);
-        if (ring.empty()) {
-            Fail("no NavMesh route from the client reaches a standpoint 2200 cm from the host");
-            return;
-        }
-        g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kFirstWalkDeadlineS);
-        UE_LOGI("[OCTA-DRILL] client: walking to its place, 2200 cm from the host");
-        return;
-    }
-    const int state = g_walk->state.load();
-    if (state == 0) return;
-    if (state == 2) {
-        Fail("no walk reached the client's place: its route ended with none");
-        return;
-    }
-    g_walk.reset();
+    if (PlaceWalkTick(me, hp, "client") != PlaceStep::Reached) return;
     UE_LOGI("[OCTA-DRILL] client in place t=%llu", Now());
     Go(CStep::Find);
 }
@@ -314,12 +445,6 @@ const char* RelayDirty() {
         return "the overwrite did not write once per verdict applied";
     return nullptr;
 }
-
-// The join arm's chat line: the joiner says it when it has applied its three verdicts, and the walker leaves on it.
-constexpr const char* kJoinerDoneLine = "OCTAJOIN joiner done";
-// How long the walker holds after its own three verdicts for the joiner to report: the joiner is a relaunched process
-// that has to boot, join and replay, so this is a cap on a wait that has stopped progressing, never a pace.
-constexpr uint64_t kJoinWaitMs = 360000;
 
 // The join arm's client 1, two lives. It stands guarded and never walks, away from the Octa. Its FIRST Aggro says which
 // life it is: the first life got the attack's own Aggro (base 0), the second (the rig relaunches the client when the
@@ -384,76 +509,6 @@ void JoinerStand() {
     if (Expired(kFireBoundMs)) Fail("no host fire (this client applied no verdict for 90 s)");
 }
 
-// The walker of the join arm holds in the sphere, so the Octa keeps re-firing, until the joiner has said it is done.
-bool JoinerDone() {
-    if (!g_joinerSeen && coop::dev::drill_chat::PollDue())
-        g_joinerSeen = coop::dev::drill_chat::ChatHasLive(kJoinerDoneLine);
-    return g_joinerSeen;
-}
-
-// The join arm's walker stays in the Octa's reach until the joiner reports, so the Octa keeps firing for the joiner's
-// snapshot: a blast throws it out of the sphere, and the Octa then idles for want of a target. Past kReEnterFromCm (inside
-// the sphere, so the way back crosses its edge and the game's own begin-overlap fires) its director walks it back to
-// within kReEnterRingCm of the Octa's live place, once its position is steady (it is not tumbling) or kRecoverMs after
-// it first went out, whichever comes first (a ragdoll that has recovered may never read steady).
-constexpr float    kReEnterFromCm = 900.f;
-constexpr float    kReEnterRingCm = 300.f;   // a standpoint on this ring, reached within kStandReachCm: inside 400 cm
-constexpr int      kReEnterWalkS  = 60;
-constexpr uint64_t kSteadyMs      = 500;     // no clean ragdoll read: a position steady this long is a recovered body
-constexpr uint64_t kRecoverMs     = 3000;    // ... and a walker still out this long after it first went out walks back
-uint32_t g_reEnters = 0;
-FVector  g_reLast{};
-uint64_t g_reSteadyAt = 0;   // when its position last became steady (0: it has not)
-uint64_t g_reOutAt = 0;      // when it first went past kReEnterFromCm (0: it is within)
-size_t   g_reStand = 0;      // the ring's standpoint tried next: the one after a walk that ended with no route
-bool     g_reNoRingSaid = false;
-
-void WalkerReEnter(void* me) {
-    if (g_walk) {
-        const int state = g_walk->state.load();
-        if (state == 0) return;
-        g_walk.reset();
-        if (state == 2) {   // no route: the ring's next standpoint is tried on this same tick
-            UE_LOGW("[OCTA-DRILL] walker re-entry walk ended with no route (standpoint %u); trying the next",
-                    static_cast<unsigned>(g_reStand));
-            ++g_reStand;
-        } else {
-            g_reStand = 0;
-        }
-    }
-    void* octa = g_octa.Get();
-    FVector op{}, mp{};
-    if (!octa || !E::TryGetActorLocation(octa, op) || !E::TryGetActorLocation(me, mp)) return;
-    const float d = FlatDist(op, mp);
-    const uint64_t now = coop::net::NowMs();
-    if (d <= kReEnterFromCm) {
-        g_reOutAt = g_reSteadyAt = 0;
-        return;
-    }
-    if (!g_reOutAt) g_reOutAt = now;
-    if (!g_reSteadyAt || FlatDist(mp, g_reLast) >= kStillCm) {
-        g_reLast = mp;
-        g_reSteadyAt = now;
-    }
-    const bool steady = now - g_reSteadyAt >= kSteadyMs;
-    if (!steady && now - g_reOutAt < kRecoverMs) return;
-    const std::vector<FVector> ring = D::ReachableStandpoints(me, op, kReEnterRingCm, kStandpoints, kStandReachCm);
-    if (ring.empty()) {
-        if (!g_reNoRingSaid) {
-            g_reNoRingSaid = true;
-            UE_LOGW("[OCTA-DRILL] walker re-entry: no standpoint %.0f cm from the Octa has a route (%.0f cm out); asking again",
-                    kReEnterRingCm, d);
-        }
-        return;
-    }
-    g_reNoRingSaid = false;
-    const size_t pick = g_reStand % ring.size();
-    g_walk = D::StartBackgroundWalk(ring[pick], kStandReachCm, kReEnterWalkS);
-    g_reSteadyAt = 0;
-    UE_LOGI("[OCTA-DRILL] walker re-enters n=%u from %.0f cm (%s, standpoint %u)", ++g_reEnters, d,
-            steady ? "steady" : "3 s out", static_cast<unsigned>(pick));
-}
-
 // Stands until the Octa has fired three volleys. measure counts them as volleys of the explosions this client's
 // explosion lane applies (one laser makes several, so an explosion more than kVolleyGapMs after the previous one starts
 // a new volley); attack counts the verdicts the relay has applied, which it can now see. The bound counts from the last
@@ -464,7 +519,6 @@ void ClientStand(void* me) {
         return;
     }
     Guard();
-    if (ArmOf() == Arm::Join && !g_joinerSeen) WalkerReEnter(me);
     const uint32_t now = AppliedSum();
     if (now > g_appliedSeen) {
         const uint64_t at = coop::net::NowMs();
@@ -493,13 +547,6 @@ void ClientStand(void* me) {
     }
     const uint32_t reached = RelayJudged() ? g_verdictsSeen : g_volleys;
     if (reached >= kBlastsWanted) {
-        // The join arm's walker stays until the joiner reports, so the Octa keeps re-firing under it.
-        if (ArmOf() == Arm::Join && !JoinerDone()) {
-            if (!g_joinHoldAt) g_joinHoldAt = coop::net::NowMs();
-            g_stepMs = coop::net::NowMs();   // holding is progress: the verdicts still come
-            if (coop::net::NowMs() - g_joinHoldAt > kJoinWaitMs) Fail("the joiner never said it was done (360 s)");
-            return;
-        }
         if (BeginWalkOut(me, g_octa.Get(), "client")) Go(CStep::Out);
         return;
     }
@@ -522,14 +569,9 @@ void ClientOut(void* me) {
         }
         const coop::geom_octa_relay::Counters r = coop::geom_octa_relay::GetCounters();
         UE_LOGI("[OCTA-DRILL] client out t=%llu", Now());
-        if (ArmOf() == Arm::Join)
-            UE_LOGI("[OCTA-DRILL] join DONE role=walker replayed=%u applied=%u wrote=%u t=%llu",
-                    r.aggroReplayed - g_relay0.aggroReplayed, r.verdictApplied - g_relay0.verdictApplied,
-                    r.overwriteWrites - g_relay0.overwriteWrites, Now());
-        else
-            UE_LOGI("[OCTA-DRILL] attack DONE role=client replayed=%u applied=%u wrote=%u t=%llu",
-                    r.aggroReplayed - g_relay0.aggroReplayed, r.verdictApplied - g_relay0.verdictApplied,
-                    r.overwriteWrites - g_relay0.overwriteWrites, Now());
+        UE_LOGI("[OCTA-DRILL] attack DONE role=client replayed=%u applied=%u wrote=%u t=%llu",
+                r.aggroReplayed - g_relay0.aggroReplayed, r.verdictApplied - g_relay0.verdictApplied,
+                r.overwriteWrites - g_relay0.overwriteWrites, Now());
     } else {
         UE_LOGI("[OCTA-DRILL] client out t=%llu", Now());
     }
@@ -549,8 +591,8 @@ void ClientTick() {
             Fail("damage_probe=1 is required: each blast must still log its [DMG] line");
             return;
         }
-        if (RelayJudged() && HostWalks()) {
-            Fail("the attack and join arms judge the client's relay: octa_measure_target=host belongs to measure");
+        if (ArmOf() == Arm::Attack && HostWalks()) {
+            Fail("the attack arm judges the client's relay: octa_measure_target=host belongs to measure");
             return;
         }
         if (!Guard()) {
@@ -558,8 +600,8 @@ void ClientTick() {
             return;
         }
         if (ArmOf() == Arm::Births && !g_calledEvent && !ClientBirthsCall()) return;
-        if (ArmOf() == Arm::Join && coop::players::Registry::Get().LocalPeerId() > 2) {
-            UE_LOGI("[OCTA-DRILL] client: the join arm has two clients; this one stands guarded");
+        if (ArmOf() == Arm::Join && !IsJoiner()) {
+            UE_LOGI("[OCTA-DRILL] client: the join arm has one client; this one stands guarded");
             Go(CStep::Done);
             return;
         }
@@ -639,10 +681,9 @@ void OnDisconnect() {
     g_joinHoldAt = 0;
     g_joinerSeen = false;
     g_snapJudged = false;
-    g_reEnters = 0;
-    g_reSteadyAt = g_reOutAt = 0;
-    g_reStand = 0;
-    g_reNoRingSaid = false;
+    g_idleAtRelease = 0;
+    g_hostSeen = false;
+    ResetWalkers();
     g_lifeKnown = false;
     g_isJoiner = false;
     g_joinBase = 0;

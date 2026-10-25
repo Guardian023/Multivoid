@@ -82,8 +82,8 @@ void HostWait(coop::net::Session* s, void* me) {
         Fail("damage_probe=1 is required: each blast must still log its [DMG] line");
         return;
     }
-    if (RelayJudged() && HostWalks()) {
-        Fail("the attack and join arms judge the client's relay: octa_measure_target=host belongs to measure");
+    if (ArmOf() == Arm::Attack && HostWalks()) {
+        Fail("the attack arm judges the client's relay: octa_measure_target=host belongs to measure");
         return;
     }
     if (!Guard()) {
@@ -224,34 +224,15 @@ void HostAwaitOcta() {
 // walks it 2200 cm from the client's puppet, and the Octa is spawned beside it.
 void HostPlace(void* me) {
     uint8_t slot = 0;
-    void* puppet = LiveWalkerBody(slot);
+    void* puppet = LivePuppetBody(slot);
     FVector hp{}, pp{};
     if (!E::TryGetActorLocation(me, hp)) return;
     if (!puppet || !E::TryGetActorLocation(puppet, pp)) {
-        // The join arm's walker is the observer, which boots after the joiner: the bound counts from its puppet first
-        // registering here, not from the joiner's world-ready.
-        if (ArmOf() == Arm::Join && !ObserverRegistered()) g_stepMs = coop::net::NowMs();
-        else if (Expired(kBirthsBoundMs)) Fail("the client's puppet never resolved on the host");
+        if (Expired(kBirthsBoundMs)) Fail("the client's puppet never resolved on the host");
         return;
     }
     if (HostWalks()) {
-        if (!g_walk) {
-            const std::vector<FVector> ring = D::ReachableStandpoints(me, pp, kPlaceFromCm, kStandpoints, kStandReachCm);
-            if (ring.empty()) {
-                Fail("no NavMesh route from the host reaches a standpoint 2200 cm from the client's puppet");
-                return;
-            }
-            g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kFirstWalkDeadlineS);
-            UE_LOGI("[OCTA-DRILL] host: walking to its place, 2200 cm from the client's puppet");
-            return;
-        }
-        const int state = g_walk->state.load();
-        if (state == 0) return;
-        if (state == 2) {
-            Fail("no walk reached the host's place: its route ended with none");
-            return;
-        }
-        g_walk.reset();
+        if (PlaceWalkTick(me, pp, "host") != PlaceStep::Reached) return;
         g_walkerSlot = 0;
         UE_LOGI("[OCTA-DRILL] host in place t=%llu", Now());
         if (!E::TryGetActorLocation(me, hp)) return;
@@ -282,7 +263,19 @@ void HostWalkTick(void* octa, void* me) {
             g_stepMs = coop::net::NowMs();
             UE_LOGI("[OCTA-DRILL] host: volley %u of %u fired", now, kBlastsWanted);
         }
+        // The join arm's host holds in the sphere, re-entering after each knockback, so the Octa keeps firing for the
+        // joiner's snapshot; the joiner's chat line releases it (counted from its three verdicts, since the joiner's
+        // life 2 comes later).
+        const bool join = ArmOf() == Arm::Join;
+        if (join && !g_joinerSeen) WalkerReEnter(me);
         if (g_volleysSeen >= kBlastsWanted) {
+            if (join && !JoinerDone()) {
+                if (!g_joinHoldAt) g_joinHoldAt = coop::net::NowMs();
+                g_stepMs = coop::net::NowMs();   // holding is progress: the verdicts still come
+                if (coop::net::NowMs() - g_joinHoldAt > kJoinWaitMs) Fail("the joiner never said it was done (360 s)");
+                return;
+            }
+            g_idleAtRelease = GS::GetCounters().idle;
             if (BeginWalkOut(me, octa, "host")) g_wstep = WStep::Out;
             return;
         }
@@ -318,7 +311,7 @@ void HostWatchMeasure() {
     FVector op{};
     FVector pp{};
     uint8_t puppetSlot = 0;
-    void* puppet = LiveWalkerBody(puppetSlot);
+    void* puppet = LivePuppetBody(puppetSlot);
     // The body that stands in the sphere: the client's puppet, or the host's own player for the control.
     void* walker = HostWalks() ? me : puppet;
     const bool haveBoth = E::TryGetActorLocation(octa, op) && walker && E::TryGetActorLocation(walker, pp);
@@ -351,8 +344,11 @@ void HostWatchMeasure() {
         return;
     }
     // An idle after the third verdict, with the puppet out of the sphere. The lane keeps the idle count at the moment
-    // it counted the third verdict, so an idle between that and this poll is not absorbed.
-    if (c.windowReached && c.idle > c.idleAtWindow && haveBoth && dist > kSphereCm) {
+    // it counted the third verdict, so an idle between that and this poll is not absorbed. The join arm's host leaves
+    // when the joiner has reported, so its idle is the first one after it walked out.
+    const bool idled = ArmOf() == Arm::Join ? g_wstep == WStep::Finished && c.idle > g_idleAtRelease
+                                            : c.windowReached && c.idle > c.idleAtWindow;
+    if (idled && haveBoth && dist > kSphereCm) {
         if (ArmOf() == Arm::Join)
             UE_LOGI("[OCTA-DRILL] join DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
                     c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,

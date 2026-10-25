@@ -62,18 +62,16 @@ enum class Arm : uint8_t { Off, Births, Measure, Attack, Join };
 Arm ArmOf();
 // The arms that place a walker and let the Octa fire: measure (no relay judged), attack and join (the relay judged).
 bool Fires();
-// The arms the client's relay is judged on: attack, and join (where client 2 joins mid-attack).
+// The arms the client's relay is judged on: attack, and join (where the relaunched client joins mid-attack).
 bool RelayJudged();
 // The join arm's client 1: the joiner. Its first life stands away; its second joins mid-attack.
 bool IsJoiner();
-// The join arm's walker (the observer, slot 2) has its puppet registered on this peer: the edge the join arm's waits
-// for the Octa count from, since the host spawns only once the observer has booted and walked into place.
-bool ObserverRegistered();
 const char* FiringArmName();
 // Where the measure and attack arms spawn the Octa (octa_spawn_route): the NPC spawn of the dev tool, or the gamemode's
 // own spawn verb with the spawn menu's Octa row, whose Octa the host's EX catch enrols at the drain.
 bool SpawnByGamemode();
-// Who walks into the Octa's sphere (the control row octa_measure_target): the client, or the host's own player.
+// Who walks into the Octa's sphere: the host's own player in the join arm, else what the control row
+// octa_measure_target says (the client, or the host's own player).
 bool HostWalks();
 
 // ---- the run's state ----
@@ -101,6 +99,7 @@ extern uint64_t g_puppetStillAt;
 extern WStep    g_wstep;             // octa_measure_target=host: the host's legs after the spawn
 extern uint32_t g_volleysSeen;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
 extern bool     g_snapJudged;        // join, host: the joiner's snapshot has been judged (mid-attack, or between attacks)
+extern uint32_t g_idleAtRelease;     // join, host: the idle count when the joiner released it
 // CLIENT (measure)
 extern uint32_t g_appliedBase;       // the explosion lane's applied count when the Octa mirror appeared
 extern uint32_t g_appliedSeen;
@@ -109,7 +108,7 @@ extern coop::geom_octa_relay::Counters g_relay0;   // attack: the relay's counte
 extern uint32_t g_verdictsSeen;      // attack: the verdicts it has applied since
 extern uint32_t g_laserSeen;         // attack: this client's own lasers counted so far
 extern uint64_t g_laserPendingMs;    // attack: the stamp of a laser still waiting for the blast that follows it
-extern uint64_t g_joinHoldAt;       // join, the walker: when it first had its three verdicts and began to wait for the joiner
+extern uint64_t g_joinHoldAt;       // join, the host: when it first had its three verdicts and began to wait for the joiner
 extern bool     g_joinerSeen;        // join: the joiner (client 1, second life) has said it is done
 extern bool     g_lifeKnown;         // join, client 1: its first Aggro has come, and with it which life this is
 extern bool     g_isJoiner;          // join, client 1: that Aggro carried a base of kJoinMinBase or more: the second life
@@ -132,9 +131,23 @@ void* FirstInstance(const wchar_t* className);
 uint32_t NpcEidOf(void* actor);
 float FlatDist(const FVector& a, const FVector& b);
 void* LivePuppetBody(uint8_t& slot);
-// The walker's puppet on the host: the join arm's is the client in slot 2 (client 1 is the joiner), every other
-// arm's the first live puppet.
-void* LiveWalkerBody(uint8_t& slot);
+// The walker's way to its place, 2200 cm from the other player (kPlaceFromCm): one standpoint at a time, the next one
+// when the walk ends with no route or the walker has not moved kPlaceMoveCm in kPlaceStuckMs, since the director itself
+// never gives up. Called each tick until Reached; Failed after the last standpoint, said as the WALKER's failure.
+enum class PlaceStep : uint8_t { Walking, Reached, Failed };
+constexpr float    kPlaceMoveCm   = 100.f;
+constexpr uint64_t kPlaceStuckMs  = 10000;
+PlaceStep PlaceWalkTick(void* me, const FVector& about, const char* who);
+// The join arm's holder re-enters the Octa's sphere after each knockback (steady, or 3 s out), walking with the director.
+void WalkerReEnter(void* me);
+// The join arm's chat line the joiner says when it has applied its verdicts, and its poll: the holder leaves on it.
+constexpr const char* kJoinerDoneLine = "OCTAJOIN joiner done";
+// How long the holder waits for the joiner (a relaunched process that boots, joins and replays): a cap on a wait that has
+// stopped progressing, never a pace.
+constexpr uint64_t kJoinWaitMs = 360000;
+bool JoinerDone();
+// The walkers' per-run state back to its start (the session's end).
+void ResetWalkers();
 // The walker's way out of the sphere, ring by ring; false, said, once the last ring has failed.
 bool BeginWalkOut(void* me, void* octa, const char* who);
 

@@ -12,12 +12,12 @@ CFG_ENUM(octa_drill, "octa_drill", "dev", "off", "off|births|measure|attack|join
     "several) have reached its explosion lane and walks out; the host prints measure DONE at the first idle after "
     "three verdicts. A measurement of the Octa's liveness with no relay. attack: the same placement, judged on the "
     "relay: the client stands until it has applied three of the host's verdicts, logs the time from each of its own "
-    "lasers to the first blast applied after it, and walks out; the host prints attack DONE. join (THREE peers, "
-    "run with the rig's --observer --rejoin): client 2 is attack's walker, held in the sphere so the Octa keeps "
-    "re-firing, with the Octa out of client 1's reach. Client 1's first life applies two verdicts and prints JOIN LIFE "
-    "1 DONE, the rejoin marker; the relaunched client is the joiner, which must replay the join snapshot's Aggro and "
-    "apply three verdicts, then says so in the lobby chat; client 2 walks out on that line, and the host prints join "
-    "DONE. The firing arms need damage_probe=1, and every player holds startInvinc for the arm's span.")
+    "lasers to the first blast applied after it, and walks out; the host prints attack DONE. join (TWO peers, "
+    "run with the rig's --rejoin): the host is the walker, as in the host control, held in the sphere so the Octa "
+    "keeps re-firing (it walks back in after each knockback), with the Octa out of client 1's reach. Client 1's first "
+    "life applies two verdicts and prints JOIN LIFE 1 DONE, the rejoin marker; the relaunched client is the joiner, "
+    "which must replay the join snapshot's Aggro on the host's puppet and apply three verdicts, then says so in the "
+    "lobby chat; the host walks out on that line and prints join DONE. The firing arms need damage_probe=1, and every player holds startInvinc for the arm's span.")
 CFG_ENUM(octa_red, "octa_red", "dev", "off", "off|no_source|no_parking|no_verdict|no_join", "VOTVCOOP_OCTA_RED",
     "Developer red arm: never set. no_source (HOST): the gamemode's row of the EX spawn catch is skipped, so the "
     "births arm must fail: the host enrols nothing and the client sees no mirror. no_parking (CLIENT): the Octa's "
