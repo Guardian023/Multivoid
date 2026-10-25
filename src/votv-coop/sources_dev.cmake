@@ -34,6 +34,8 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/drill_hand.cpp
     src/coop/dev/drill_hold.cpp
     src/coop/dev/octa_drill.cpp
+    src/coop/dev/octa_drill_births.cpp
+    src/coop/dev/octa_drill_host.cpp
     src/coop/dev/octa_probe.cpp
     src/coop/dev/announce_hold.cpp
     src/coop/dev/hostile_drill.cpp
