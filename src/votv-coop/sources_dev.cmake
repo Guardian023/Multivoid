@@ -143,6 +143,11 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/explosion_drill_source_verbs.cpp
     src/coop/dev/explosion_drill_source_measure.cpp
     src/coop/dev/fire_ignite_drill.cpp
+    src/coop/dev/cord_drill.cpp
+    src/coop/dev/cord_drill_cast.cpp
+    src/coop/dev/cord_drill_client.cpp
+    src/coop/dev/cord_drill_hand.cpp
+    src/coop/dev/cord_drill_host.cpp
     src/coop/dev/grid_drill.cpp
     src/coop/dev/grid_drill_checks.cpp
     src/coop/dev/grid_drill_upgrade.cpp

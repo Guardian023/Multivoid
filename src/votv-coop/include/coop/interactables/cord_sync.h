@@ -41,4 +41,13 @@ void QueueConnectBroadcastForSlot(int peerSlot);
 // The session's end: the lane's tables and counters, after a summary line.
 void OnDisconnect();
 
+// What the cord drill reads of a client's lane: whether the seed's op 2 has arrived, the claims sent (the latest
+// claim's seq, since the seq starts at 1 and counts each claim), and the stretch breaks refused. A read; zeroes on a host.
+struct DrillView {
+    bool seeded = false;
+    uint32_t claimsSent = 0;
+    uint32_t stretchRefused = 0;
+};
+DrillView ReadForDrill();
+
 }  // namespace coop::cord_sync

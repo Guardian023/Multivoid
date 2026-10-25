@@ -573,6 +573,11 @@ void OnReliable(const coop::net::CordLinkPayload& payload, uint8_t senderSlot) {
 
 void CountDropped() { ++detail::Stat().badWire; }
 
+DrillView ReadForDrill() {
+    const Counters& c = detail::Stat();
+    return DrillView{g_seeded, c.claimsSent, c.stretchRefused};
+}
+
 void QueueConnectBroadcastForSlot(int peerSlot) {
     auto* s = detail::Connected();
     if (!detail::IsHost(s) || peerSlot <= 0 || peerSlot >= static_cast<int>(coop::net::kMaxPeers)) return;

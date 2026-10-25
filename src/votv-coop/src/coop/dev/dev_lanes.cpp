@@ -47,6 +47,7 @@
 #include "coop/dev/laptop_tab_drill.h"  // [dev] everyone sees the tab the PC's user is on, judged on the viewing peer
 #include "coop/dev/explosion_drill.h"  // [dev] the explosion lane's drill: dissolve, apply, coast, malformed spawns
 #include "coop/dev/fire_ignite_drill.h"  // [dev] a client's light on a salt rocket is performed by the host and flown
+#include "coop/dev/cord_drill.h"  // [dev] cords plugged on both peers, judged by the host's word
 #include "coop/dev/grid_drill.h"  // [dev] the power grid: a client's presses and repair, the host's break and lockout
 #include "coop/dev/tower_drill.h"  // [dev] the coordinate towers: the host's break, a client's repair, a joiner's copy
 #include "coop/dev/drone_probe.h"
@@ -139,6 +140,7 @@ void Install(coop::net::Session& session) {
     coop::dev::creature_hit_drill::Install(&session);  // [dev] the creature hit drill (no-op unless creature_hit_drill is set)
     coop::dev::hostile_drill::Install(&session);  // [dev] the receive-boundary drill (no-op unless hostile_drill is set)
     coop::dev::fire_ignite_drill::Install(&session);  // [dev] the salt rocket ignite drill (no-op unless fire_ignite_drill is set)
+    coop::dev::cord_drill::Install(&session);  // [dev] the cord drill (no-op unless cord_drill is set)
     coop::dev::prop_act_drill::Install(&session);  // [dev] the act drill's phase says it is armed (no-op unless prop_act_drill is set)
     coop::dev::world_roll_drill::Install(&session);  // [dev] the world roll drill (no-op unless world_roll_drill is set)
     coop::dev::kerfur_menu_drill::Install(&session);  // [dev] the kerfur menu drill (no-op unless kerfur_menu_drill=1)
@@ -215,6 +217,7 @@ void EndSession() {
     coop::dev::laptop_tab_drill::OnDisconnect();  // [dev] a rejoin's peers run their legs again
     coop::dev::explosion_drill::OnDisconnect();  // [dev] a rejoin's peers run their halves and arms again
     coop::dev::fire_ignite_drill::OnDisconnect();  // [dev] a rejoin's peers run their steps again
+    coop::dev::cord_drill::OnDisconnect();  // [dev] the client's steps start over; the host keeps its cast for a rejoin after its six arms
     coop::dev::grid_drill::OnDisconnect();  // [dev] the panel and the legs belong to one world
     coop::dev::tower_drill::OnDisconnect();  // [dev] the tower and the legs belong to one world
     coop::dev::desk_verb_drill::OnDisconnect();  // [dev] the legs start over
@@ -322,6 +325,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::laptop_tab_drill::Tick(&session);  // [dev] the PC tab drill (a latched string compare when off)
     coop::dev::explosion_drill::Tick(&session);  // [dev] the explosion lane's drill: dissolve's world half, the other arms' ticks (a latched string compare when off)
     coop::dev::fire_ignite_drill::Tick();  // [dev] the salt rocket ignite drill (a latched enum read when off)
+    coop::dev::cord_drill::Tick();  // [dev] the cord drill (a latched read when off)
     coop::dev::grid_drill::Tick(&session);  // [dev] the power grid drill (a latched read when off)
     coop::dev::tower_drill::Tick(&session);  // [dev] the coordinate towers drill (a latched read when off)
     coop::dev::desk_verb_drill::Tick(&session);  // [dev] the desk's save family drill (a latched read when off)
