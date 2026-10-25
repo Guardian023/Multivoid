@@ -106,7 +106,7 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
             // The third NPC spawn send: a joiner's snapshot carries an Octa that spawned while no peer was ready, and
             // from here on the Octa's events have a mirror to find. Called on a success only: a slot that failed says
             // nothing of the spawn the other slots were sent.
-            coop::geom_octa_sync::OnNpcSpawnSent(p.elementId, actor, tn.data(), tn.size(), true);
+            coop::geom_octa_sync::OnNpcSpawnSent(p.elementId, actor, tn.data(), tn.size(), true, peerSlot);
         }
     }
     UE_LOGI("npc-sync: connect-snapshot -- sent %d existing NPC(s) to slot %d (%zu Npc Element(s), %d unbound-skipped, "

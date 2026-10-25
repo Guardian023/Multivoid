@@ -277,11 +277,14 @@ sg::Verdict OnAggroPre(const sg::Call& call) {
     return sg::Verdict::Run;
 }
 
-// A GeomOctaEvent to every world-ready peer; false when there is none to send to or the send failed.
-bool SendEvent(const N::GeomOctaEventPayload& p) {
+// A GeomOctaEvent to every world-ready peer, or to the one `slot` (>= 0); false when there is none to send to or the
+// send failed.
+bool SendEvent(const N::GeomOctaEventPayload& p, int slot = -1) {
     N::Session* s = g_session.load(std::memory_order_acquire);
     if (!s || s->role() != N::Role::Host || !s->connected() || !s->AnyWorldReadyPeer()) return false;   // nobody to tell
-    if (s->SendReliable(N::ReliableKind::GeomOctaEvent, &p, sizeof(p))) return true;
+    if (slot >= 0 ? s->SendReliableToSlot(slot, N::ReliableKind::GeomOctaEvent, &p, sizeof(p))
+                  : s->SendReliable(N::ReliableKind::GeomOctaEvent, &p, sizeof(p)))
+        return true;
     // A refused send is a lost decision: counted always, said once. The client times that look out.
     static bool said = false;
     ++g_counters.sendFailed;
@@ -292,7 +295,7 @@ bool SendEvent(const N::GeomOctaEventPayload& p) {
     return false;
 }
 
-void SendAggro(uint32_t eid, const WireTarget& target, uint32_t base) {
+void SendAggro(uint32_t eid, const WireTarget& target, uint32_t base, int slot = -1) {
     N::GeomOctaEventPayload p{};
     p.op = N::kGeomOctaOpAggro;
     p.octaEid = eid;
@@ -301,7 +304,7 @@ void SendAggro(uint32_t eid, const WireTarget& target, uint32_t base) {
     p.target = target.v;
     char text[40];
     TargetText(target, text);
-    if (SendEvent(p))
+    if (SendEvent(p, slot))
         UE_LOGI("[OCTA] aggro sent eid=%u target=%s base=%u t=%llu", static_cast<unsigned>(eid), text,
                 static_cast<unsigned>(base), Now());
 }
@@ -490,7 +493,7 @@ void Install(coop::net::Session* session) {
 
 Counters GetCounters() { return g_counters; }
 
-void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t classLen, bool sent) {
+void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t classLen, bool sent, int slot) {
     // Every NPC spawn send passes here: the class is told by its bytes, with no string made.
     constexpr char kOctaName[] = "geomOcta_C";
     if (!className || classLen != sizeof(kOctaName) - 1 || std::memcmp(className, kOctaName, classLen) != 0 || !IsHost())
@@ -507,8 +510,10 @@ void OnNpcSpawnSent(uint32_t eid, void* actor, const char* className, size_t cla
     if (!kept) return;
     const KeptAggro k = *kept;
     *kept = KeptAggro{};
-    // The attack may have ended while the spawn waited; then there is nothing to replay.
-    if (GO::TargetActor(actor) != nullptr) SendAggro(eid, k.target, k.base);
+    // The attack may have ended while the spawn waited; then there is nothing to replay. A snapshot's send carries the
+    // spawn to its slot alone, so the Aggro goes there alone: another joiner whose snapshot has not run would otherwise
+    // get the event ahead of its spawn and drop it.
+    if (GO::TargetActor(actor) != nullptr) SendAggro(eid, k.target, k.base, slot);
 }
 
 void OpenVerdictWindow(uint32_t n, void* octa) {

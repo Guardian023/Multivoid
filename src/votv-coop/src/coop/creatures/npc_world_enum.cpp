@@ -136,7 +136,7 @@ coop::element::ElementId EnrollUntrackedNpcActor(void* obj, const std::wstring& 
     // The Geom Octa's lane sends none of its events before the spawn's send. When no peer was world-ready nothing was
     // sent, and the join's snapshot carries the spawn instead.
     coop::geom_octa_sync::OnNpcSpawnSent(static_cast<uint32_t>(eid), obj, el->GetTypeName().data(),
-                                         el->GetTypeName().size(), spawnSent);
+                                         el->GetTypeName().size(), spawnSent, -1);
     return eid;
 }
 
