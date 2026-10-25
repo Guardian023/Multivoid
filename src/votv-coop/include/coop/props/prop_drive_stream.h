@@ -8,9 +8,10 @@
 // the same fixed-delay snapshot interpolation the held-prop and trash-carry receivers use
 // (coop/props/active_drive.h), keyed by eid. The end edge snaps the final pose, hands the prop its
 // physics and velocity back, and closes the generation so a pose still in flight cannot park it
-// again.
+// again. The host's copy of a prop a client syncs is driven by the same code: the pose the host admitted from
+// the syncer parks it (FeedAdmitted), and the End closes it (ReleaseHost).
 //
-// CLIENT-side, game thread only. Not folded into remote_prop, the per-slot held-prop receiver: a
+// Game thread only. Not folded into remote_prop, the per-slot held-prop receiver: a
 // prop here is in nobody's hand, and when a hand takes it that stream wins.
 
 #pragma once
@@ -23,13 +24,26 @@
 namespace coop::net {
 class Session;
 struct PropDriveEndPayload;
+struct PropPoseSnapshot;
 }  // namespace coop::net
 
 namespace coop::prop_drive_stream {
 
-// CLIENT game tick: drain what arrived, park and drive each prop, advance every live drive (a gap
-// freezes at the last pose). No-op on the host and with nothing to drain.
+// Per game tick, both roles: a client drains what arrived and parks and drives each prop; both roles
+// advance every live drive (a gap freezes at the last pose), the host's being the copies FeedAdmitted
+// parked. Nothing to drain on the host.
 void TickApplyAndDrive(coop::net::Session& s);
+
+// HOST, game thread: a pose of `e.elementId` the host admitted from the prop's syncing client (the key is
+// the host's own): parks the host's copy on the first of its generation, a drive target after. Admission
+// is prop_syncer_host's; this is the same apply the client runs on the host's batch.
+void FeedAdmitted(const coop::net::PropPoseSnapshot& e);
+
+// HOST, game thread: the end of a client-authored drive on the host's copy of `end.eid`: unparks it,
+// places it at the End's pose, restores its physics from the End's flags and gives it the velocity.
+// A copy a hand holds is yielded to the hand; a prop never parked takes the End as a receiver that never
+// saw the generation.
+void ReleaseHost(const coop::net::PropDriveEndPayload& end);
 
 // CLIENT, game thread: the host closed a prop's stream. Validated at the router.
 void OnEnd(const coop::net::PropDriveEndPayload& p);

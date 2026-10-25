@@ -2,8 +2,8 @@
 //
 // NOT a public header (it lives under src/, not include/). The table is prop_drive_host's g_driven, one row
 // per prop under a drive; the row says WHO authors the drive (`syncer`: 0 = the host, n = client slot n).
-// prop_syncer_host judges and ends a client's rows through the declarations below, which prop_drive_host.cpp
-// defines because it owns the table.
+// prop_syncer_host judges a client's rows through the declarations below, which prop_drive_host.cpp defines
+// because it owns the table; prop_syncer_host also ends them (EndClientRow), called back by the row's readers.
 //
 // Game-thread only (same contract as prop_drive_host).
 
@@ -15,6 +15,7 @@
 #include "ue_wrap/core/types.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace coop::prop_drive_host {
 
@@ -60,4 +61,23 @@ Driven* OpenClientRow(void* actor, uint8_t slot, const char* why);
 // Close `row`: it is skipped by every reader at once and swept after the tick's pass. Game thread.
 void EraseRow(Driven& row);
 
+// Every row, closed ones not yet swept included (skip `dead`). Rows are only marked closed outside Tick, so a
+// pass over them may call EraseRow; a new row (a Claim, a grant) invalidates the references. Game thread.
+std::vector<Driven>& Rows();
+
 }  // namespace coop::prop_drive_host
+
+namespace coop::prop_syncer_host {
+
+// Why a client's row ends on the host. Hand, HostVerb and Died are met by the row's own
+// readers in prop_drive_host; the rest are prop_syncer_host's own passes. A rest End comes from the client
+// itself (OnClientEnd) and is not one of these.
+enum class Ending : uint8_t { Hand, HostVerb, Died, Silence, Range, SlotLeft };
+
+// End client row `row` in the one order every ending uses: release the host's copy at the last admitted pose,
+// send the End built from it (none for a host verb, none with nothing admitted), tell the syncer `Revoked`
+// (none when its slot left), then erase the row, or for a host verb hand it to the host under a new
+// generation. Defined in prop_syncer_host.cpp; prop_drive_host.cpp calls it. Game thread.
+void EndClientRow(coop::prop_drive_host::Driven& row, Ending why);
+
+}  // namespace coop::prop_syncer_host

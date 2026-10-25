@@ -24,5 +24,8 @@ constexpr uint64_t kRestMs = 500;
 constexpr uint64_t kRestProbeMs = 250;
 // A velocity below this at the end goes out as zero: assigning a velocity wakes a body at rest.
 constexpr float kRestVelCmS = 1.0f;
+// A syncing client sends its prop's pose at most this often; the host sizes its late-syncer window by it. 25 ms
+// is 40 Hz, the ATV's kStreamBudget refill, so the host's burst of 16 absorbs the jitter of a send at this rate.
+constexpr uint64_t kClientDriveSendMs = 25;
 
 }  // namespace coop::prop_drive_rules

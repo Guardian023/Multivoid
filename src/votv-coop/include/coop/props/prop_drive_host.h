@@ -55,10 +55,13 @@ void Coast(void* actor, const char* reason);
 // Game thread.
 void OnPeerWorldReady();
 
-// Per gameplay tick: read every driven prop's pose (resting ones at 4 Hz), publish the ones that
-// moved, close the streams of the props that rested or that a hand took, drop the dead. Game
-// thread.
-void Tick(coop::net::Session& s);
+// Per gameplay tick, the driven prop's whole pump, in the one order it needs. HOST: admit the rows a
+// syncing client sent (prop_syncer_host), then read every driven prop's pose (resting ones at 4 Hz) and
+// publish the ones that moved, close the streams of the props that rested or that a hand took, drop the
+// dead; a client row publishes the pose just admitted instead of being read. BOTH roles then run the
+// apply tick (prop_drive_stream): a client drains the host's batch, the host advances the copies it fed.
+// Game thread.
+void Pump(coop::net::Session& s, bool isHost);
 
 // Session end. Game thread.
 void OnDisconnect();

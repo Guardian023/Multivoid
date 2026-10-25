@@ -8,8 +8,10 @@
 #include "coop/player/local_streams.h"        // LastHeldActor: this player's grab slot
 #include "coop/props/active_drive.h"          // NowMs
 #include "coop/props/prop_drive_rules.h"      // the epsilons and the rest rule both authors share
+#include "coop/props/prop_drive_stream.h"     // Pump: the apply tick that follows the publish
 #include "coop/props/prop_element_tracker.h"  // GetPropElementIdForActor
 #include "coop/props/prop_lifecycle.h"        // IsWireSuppressedPropClass: a class no peer holds
+#include "coop/props/prop_syncer_host.h"      // Pump: admit a client's rows; OnDisconnect
 #include "coop/props/prop_wire_parity.h"      // PhysFlagsOf: the flags the end edge carries
 #include "coop/props/remote_prop.h"           // IsActorUnderAnyDrive: a peer's held-prop stream
 #include "prop_drive_rows.h"                  // co-located private header (src tree, not include/)
@@ -94,6 +96,27 @@ void SendEnd(coop::net::Session& s, const Driven& d, void* actor, const ue_wrap:
             static_cast<unsigned>(p.physFlags));
 }
 
+// A client row's turn: the last pose admitted from its syncer goes out at the row's generation when it is new
+// (or a joiner needs it again), as a host-authored row's would; the host's copy is never read. 1 when the pose
+// joined the queue (the tick's rotation counts those), else 0.
+size_t PublishAdmitted(coop::net::Session& s, Driven& d) {
+    if (!d.admittedEver || !(d.freshAdmit || d.resend)) return 0;
+    const coop::net::PoseTurn turn = s.PropDrivePoseTurn(d.eid);
+    if (turn == coop::net::PoseTurn::Wait) return 0;   // the pose waiting in the queue is refreshed on a later tick
+    coop::net::PropPoseSnapshot pp{};
+    pp.key       = d.key;
+    pp.elementId = d.eid;
+    pp.ctx       = d.gen;
+    pp.x = d.admitLoc.X; pp.y = d.admitLoc.Y; pp.z = d.admitLoc.Z;
+    pp.pitch = ue_wrap::NormalizeAxis(d.admitRot.Pitch);
+    pp.yaw   = ue_wrap::NormalizeAxis(d.admitRot.Yaw);
+    pp.roll  = ue_wrap::NormalizeAxis(d.admitRot.Roll);
+    s.PublishPropDrivePose(pp);
+    d.freshAdmit = false;
+    d.resend     = false;
+    return turn == coop::net::PoseTurn::Join ? 1 : 0;
+}
+
 // A new row for `actor` when the channel can carry it: a keyed prop with a host element id, in no
 // hand, of a class peers hold. Null otherwise. `claimed` false opens it coasting. `syncer` 0 is a host
 // verb's row, n a client slot's grant.
@@ -158,6 +181,10 @@ void EraseRow(Driven& row) {
     row.dead = true;   // Tick's sweep erases it; every reader skips a dead row
 }
 
+std::vector<Driven>& Rows() {
+    return g_driven;
+}
+
 bool InAHand(void* actor) {
     UE_ASSERT_GAME_THREAD("prop_drive_host::InAHand");
     return actor == coop::local_streams::LastHeldActor() ||
@@ -170,6 +197,8 @@ void Claim(void* actor, const char* reason) {
     if (!actor) return;
     const char* why = reason ? reason : "";
     if (Driven* d = Find(actor)) {
+        // A host verb on a prop a client syncs: the verb wins and the row becomes the host's.
+        if (d->syncer != 0) coop::prop_syncer_host::EndClientRow(*d, coop::prop_syncer_host::Ending::HostVerb);
         if (!d->claimed) {
             d->claimed     = true;   // a re-claim while coasting: the stream simply continues
             d->nextProbeMs = 0;
@@ -184,6 +213,11 @@ void Coast(void* actor, const char* reason) {
     UE_ASSERT_GAME_THREAD("prop_drive_host::Coast");
     if (!actor) return;
     if (Driven* d = Find(actor)) {
+        // A push on a prop a client syncs: the row becomes the host's, coasting from the client's last pose.
+        if (d->syncer != 0) {
+            coop::prop_syncer_host::EndClientRow(*d, coop::prop_syncer_host::Ending::HostVerb);
+            d->claimed = false;
+        }
         // A claimed prop stays its verb's; either way the push starts its rest clock again and it is
         // read every tick.
         d->nextProbeMs = 0;
@@ -212,7 +246,7 @@ DriveContext ContextOf(void* actor, uint32_t eid) {
 void Release(void* actor) {
     UE_ASSERT_GAME_THREAD("prop_drive_host::Release");
     Driven* d = Find(actor);
-    if (!d || !d->claimed) return;
+    if (!d || !d->claimed || d->syncer != 0) return;   // a client's row is not this verb's to let go
     d->claimed     = false;
     d->lastMoveMs  = coop::active_drive::NowMs();   // the rest clock starts now
     d->nextProbeMs = 0;                              // and the probe goes back to per tick
@@ -236,7 +270,8 @@ void OnPeerWorldReady() {
     UE_LOGI("[PROP-DRIVE] HOST world-ready re-send armed for %zu driven prop(s)", g_driven.size());
 }
 
-void Tick(coop::net::Session& s) {
+// Per host tick: see Pump.
+static void Tick(coop::net::Session& s) {
     UE_ASSERT_GAME_THREAD("prop_drive_host::Tick");
     if (g_driven.empty()) return;
     const uint64_t now = coop::active_drive::NowMs();
@@ -247,14 +282,20 @@ void Tick(coop::net::Session& s) {
     size_t joined = 0;
     for (size_t k = 0; k < n; ++k) {
         Driven& d = g_driven[(g_turn + k) % n];
+        if (d.dead) continue;   // closed since the last sweep by a client row's ending
         void* actor = d.ref.Get();
         if (!actor) {
             // The destroy crossed on its own seam; a receiver drops a drive whose actor died.
             UE_LOGI("[PROP-DRIVE] HOST eid=%u died -- dropped", d.eid);
+            if (d.syncer != 0) coop::prop_syncer_host::EndClientRow(d, coop::prop_syncer_host::Ending::Died);
             d.dead = true;
             continue;
         }
         if (InAHand(actor)) {
+            if (d.syncer != 0) {   // a client's row: the ending releases the copy and tells the syncer
+                coop::prop_syncer_host::EndClientRow(d, coop::prop_syncer_host::Ending::Hand);
+                continue;
+            }
             // A hand took it: the held-prop lane streams it from here and its release hands the
             // velocity back. The end edge closes this stream's generation first, whatever the
             // prop's turn in the queue.
@@ -266,6 +307,10 @@ void Tick(coop::net::Session& s) {
             else if (d.everSent)
                 SendEnd(s, d, actor, d.sentLoc, d.sentRot, "taken by a hand");
             d.dead = true;
+            continue;
+        }
+        if (d.syncer != 0) {   // a client's row ends by its own rules (prop_syncer_host), never by the rest clock
+            joined += PublishAdmitted(s, d);
             continue;
         }
         if (now < d.nextProbeMs) continue;   // resting: read at the slow cadence
@@ -323,10 +368,21 @@ void Tick(coop::net::Session& s) {
                    g_driven.end());
 }
 
+void Pump(coop::net::Session& s, bool isHost) {
+    if (isHost) {
+        // The order is the point: a client's rows are judged first, so the row's turn in Tick publishes what
+        // this tick admitted, and the apply tick then advances the host's copies they just fed.
+        coop::prop_syncer_host::Admit(s);
+        Tick(s);
+    }
+    coop::prop_drive_stream::TickApplyAndDrive(s);
+}
+
 void OnDisconnect() {
     g_driven.clear();
     g_turn = 0;
     g_genByEid.clear();
+    coop::prop_syncer_host::OnDisconnect();   // its buckets, hand-back records and counters go with the rows
 }
 
 }  // namespace coop::prop_drive_host

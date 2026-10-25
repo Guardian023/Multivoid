@@ -153,6 +153,83 @@ void ApplyEnd(void* actor, const coop::net::PropDriveEndPayload& p, bool parkedH
     coop::prop_park::Unpark(actor, /*mesh=*/nullptr, /*rootSimulates=*/false);
 }
 
+// One pose of a driven prop: parks the copy on a new generation's first, a lerp target after. The client's
+// apply of the host's batch, and the host's of a pose it admitted from a prop's syncer (FeedAdmitted); `who`
+// names the role in the log.
+void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char* who) {
+    const uint32_t eid = e.elementId;
+    if (eid == 0) return;
+    // The generation gate: a pose of a closed generation, or older than the live drive's,
+    // is a datagram that outlived its stream.
+    auto ended = g_endedGen.find(eid);
+    if (ended != g_endedGen.end() && !GenAfter(e.ctx, ended->second)) return;
+    auto it = g_drives.find(eid);
+    if (it != g_drives.end()) {
+        if (GenAfter(it->second.gen, e.ctx)) return;
+        if (it->second.gen == e.ctx) {
+            // The steady state: the row already names the actor. No resolve, no string.
+            if (void* live = it->second.d.LiveActor()) {
+                if (!coop::prop_drive_host::InAHand(live))   // a hand's stream wins
+                    AD::BeginLerpToPose(it->second.d, ue_wrap::FVector{e.x, e.y, e.z},
+                                        ue_wrap::FRotator{e.pitch, e.yaw, e.roll}, nowMs);
+                return;
+            }
+        }
+    }
+    // A first pose, a new generation, or a row whose actor died: resolve, on a throttle.
+    auto miss = g_miss.find(eid);
+    if (miss != g_miss.end() && nowMs < miss->second.nextTryMs) return;
+    void* actor = Resolve(eid, e.key);
+    if (!actor) {
+        Miss& m = g_miss[eid];
+        m.nextTryMs = nowMs + kMissRetryMs;
+        if (++m.count == kMissSaidAt)
+            UE_LOGI("[PROP-DRIVE] %s eid=%u has not resolved in %u tries -- the host is "
+                    "streaming a prop this peer does not have (a join still landing, or a "
+                    "prop it never received)", who, eid, m.count);
+        return;
+    }
+    g_miss.erase(eid);
+    if (!PR::IsDescendantOfProp(actor)) return;
+    // A hand's stream on the same prop wins: the holder is its syncer for as long as it
+    // holds it, and the host closes this stream the moment it sees the hand.
+    if (coop::prop_drive_host::InAHand(actor)) {
+        // The first pose found the prop already in a hand: the generation is the hand's.
+        YieldToHand(eid, e.ctx, nullptr, actor);
+        UE_LOGI("[PROP-DRIVE] %s eid=%u gen=%u -- a hand holds it at the first pose; "
+                "generation yielded", who, eid, static_cast<unsigned>(e.ctx));
+        return;
+    }
+    Drive& dr = g_drives[eid];
+    if (dr.d.actor && dr.d.actor != actor) GiveBackPhysics(dr, dr.d.LiveActor());
+    AD::ResetDriveState(dr.d);
+    dr.d.actor    = actor;
+    dr.d.actorIdx = R::InternalIndexOf(actor);
+    dr.d.mesh     = PR::GetStaticMesh(actor);
+    dr.d.isTrashMirror = true;  // the fixed-delay follow of a carried clump: freeze on a gap
+    dr.d.lastEid  = eid;
+    dr.gen        = e.ctx;
+    dr.physicsParked = false;
+    dr.relatches  = 0;
+    if (dr.d.mesh && !PhysicsStaysOff(actor)) {
+        coop::prop_park::Park(actor, dr.d.mesh);
+        dr.physicsParked = true;
+    }
+    if (ended != g_endedGen.end()) g_endedGen.erase(ended);
+    g_yieldedGen.erase(eid);
+    // The parked newer generation supersedes the END pose a correction was judged against.
+    g_endOnActor.erase(eid);
+    // A pose of a closed generation never reaches here, so a pending end for this prop is
+    // of an OLDER generation than the one parking now: stale, and dropped before it can
+    // land on the new stream.
+    g_pendingEnd.erase(eid);
+    UE_LOGI("[PROP-DRIVE] %s park eid=%u gen=%u actor=%p (physics %s)",
+            who, eid, static_cast<unsigned>(e.ctx), actor,
+            dr.physicsParked ? "off" : "left as it was");
+    AD::BeginLerpToPose(dr.d, ue_wrap::FVector{e.x, e.y, e.z},
+                        ue_wrap::FRotator{e.pitch, e.yaw, e.roll}, nowMs);
+}
+
 }  // namespace
 
 size_t RecentEnds(AppliedEnd* out, size_t max) {
@@ -162,85 +239,41 @@ size_t RecentEnds(AppliedEnd* out, size_t max) {
     return n;
 }
 
+void FeedAdmitted(const coop::net::PropPoseSnapshot& e) {
+    UE_ASSERT_GAME_THREAD("prop_drive_stream::FeedAdmitted");
+    ApplyPose(e, AD::NowMs(), "HOST");
+}
+
+void ReleaseHost(const coop::net::PropDriveEndPayload& end) {
+    UE_ASSERT_GAME_THREAD("prop_drive_stream::ReleaseHost");
+    auto it = g_drives.find(end.eid);
+    if (it != g_drives.end()) {
+        Drive& dr = it->second;
+        if (void* actor = dr.d.LiveActor()) {
+            if (coop::prop_drive_host::InAHand(actor)) {
+                // The same yield as the client's: a hand owns the copy, and this player's own gets its physics back.
+                YieldToHand(end.eid, end.gen, &dr, actor);
+            } else {
+                ApplyEnd(actor, end, dr.physicsParked);
+                dr.physicsParked = false;
+            }
+        }
+        g_drives.erase(it);
+    } else if (void* actor = coop::remote_prop::ResolveLiveActorByEid(end.eid)) {
+        // Nothing was admitted, so the copy was never parked: it takes the End as a receiver that never saw the gen.
+        if (PR::IsDescendantOfProp(actor) && !coop::prop_drive_host::InAHand(actor))
+            ApplyEnd(actor, end, /*parkedHere=*/false);
+    }
+    UE_LOGI("[PROP-DRIVE] HOST release eid=%u gen=%u -> (%.1f,%.1f,%.1f) flags=0x%02x", end.eid,
+            static_cast<unsigned>(end.gen), end.x, end.y, end.z, static_cast<unsigned>(end.physFlags));
+}
+
 void TickApplyAndDrive(coop::net::Session& s) {
     UE_ASSERT_GAME_THREAD("prop_drive_stream::TickApplyAndDrive");
     const uint64_t nowMs = AD::NowMs();
     g_batch.clear();
-    if (s.TakeRemotePropDriveBatch(g_batch)) {
-        for (const coop::net::PropPoseSnapshot& e : g_batch) {
-            const uint32_t eid = e.elementId;
-            if (eid == 0) continue;
-            // The generation gate: a pose of a closed generation, or older than the live drive's,
-            // is a datagram that outlived its stream.
-            auto ended = g_endedGen.find(eid);
-            if (ended != g_endedGen.end() && !GenAfter(e.ctx, ended->second)) continue;
-            auto it = g_drives.find(eid);
-            if (it != g_drives.end()) {
-                if (GenAfter(it->second.gen, e.ctx)) continue;
-                if (it->second.gen == e.ctx) {
-                    // The steady state: the row already names the actor. No resolve, no string.
-                    if (void* live = it->second.d.LiveActor()) {
-                        if (!coop::prop_drive_host::InAHand(live))   // a hand's stream wins
-                            AD::BeginLerpToPose(it->second.d, ue_wrap::FVector{e.x, e.y, e.z},
-                                                ue_wrap::FRotator{e.pitch, e.yaw, e.roll}, nowMs);
-                        continue;
-                    }
-                }
-            }
-            // A first pose, a new generation, or a row whose actor died: resolve, on a throttle.
-            auto miss = g_miss.find(eid);
-            if (miss != g_miss.end() && nowMs < miss->second.nextTryMs) continue;
-            void* actor = Resolve(eid, e.key);
-            if (!actor) {
-                Miss& m = g_miss[eid];
-                m.nextTryMs = nowMs + kMissRetryMs;
-                if (++m.count == kMissSaidAt)
-                    UE_LOGI("[PROP-DRIVE] CLIENT eid=%u has not resolved in %u tries -- the host is "
-                            "streaming a prop this peer does not have (a join still landing, or a "
-                            "prop it never received)", eid, m.count);
-                continue;
-            }
-            g_miss.erase(eid);
-            if (!PR::IsDescendantOfProp(actor)) continue;
-            // A hand's stream on the same prop wins: the holder is its syncer for as long as it
-            // holds it, and the host closes this stream the moment it sees the hand.
-            if (coop::prop_drive_host::InAHand(actor)) {
-                // The first pose found the prop already in a hand: the generation is the hand's.
-                YieldToHand(eid, e.ctx, nullptr, actor);
-                UE_LOGI("[PROP-DRIVE] CLIENT eid=%u gen=%u -- a hand holds it at the first pose; "
-                        "generation yielded", eid, static_cast<unsigned>(e.ctx));
-                continue;
-            }
-            Drive& dr = g_drives[eid];
-            if (dr.d.actor && dr.d.actor != actor) GiveBackPhysics(dr, dr.d.LiveActor());
-            AD::ResetDriveState(dr.d);
-            dr.d.actor    = actor;
-            dr.d.actorIdx = R::InternalIndexOf(actor);
-            dr.d.mesh     = PR::GetStaticMesh(actor);
-            dr.d.isTrashMirror = true;  // the fixed-delay follow of a carried clump: freeze on a gap
-            dr.d.lastEid  = eid;
-            dr.gen        = e.ctx;
-            dr.physicsParked = false;
-            dr.relatches  = 0;
-            if (dr.d.mesh && !PhysicsStaysOff(actor)) {
-                coop::prop_park::Park(actor, dr.d.mesh);
-                dr.physicsParked = true;
-            }
-            if (ended != g_endedGen.end()) g_endedGen.erase(ended);
-            g_yieldedGen.erase(eid);
-            // The parked newer generation supersedes the END pose a correction was judged against.
-            g_endOnActor.erase(eid);
-            // A pose of a closed generation never reaches here, so a pending end for this prop is
-            // of an OLDER generation than the one parking now: stale, and dropped before it can
-            // land on the new stream.
-            g_pendingEnd.erase(eid);
-            UE_LOGI("[PROP-DRIVE] CLIENT park eid=%u gen=%u actor=%p (physics %s)",
-                    eid, static_cast<unsigned>(e.ctx), actor,
-                    dr.physicsParked ? "off" : "left as it was");
-            AD::BeginLerpToPose(dr.d, ue_wrap::FVector{e.x, e.y, e.z},
-                                ue_wrap::FRotator{e.pitch, e.yaw, e.roll}, nowMs);
-        }
-    }
+    if (s.TakeRemotePropDriveBatch(g_batch))
+        for (const coop::net::PropPoseSnapshot& e : g_batch) ApplyPose(e, nowMs, "CLIENT");
     for (auto it = g_drives.begin(); it != g_drives.end();) {
         Drive& dr = it->second;
         void* actor = dr.d.LiveActor();
