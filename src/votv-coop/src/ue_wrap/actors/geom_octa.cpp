@@ -36,10 +36,19 @@ void* LivePointerAt(void* base, int32_t off) {
 void* TargetActor(void* octa) { return octa ? LivePointerAt(octa, g_target.Of(octa)) : nullptr; }
 
 bool IsAnim(void* octa) {
-    int32_t off = -1;
-    uint8_t mask = 0;
-    if (!octa || !R::FindBoolProperty(R::ClassOf(octa), L"isAnim", off, mask)) return false;
-    return (*(static_cast<const uint8_t*>(octa) + off) & mask) != 0;
+    if (!octa) return false;
+    // The member's place is kept per class object and found again when another class object comes (a reloaded world).
+    static void*   cls = nullptr;
+    static int32_t off = -1;
+    static uint8_t mask = 0;
+    void* const c = R::ClassOf(octa);
+    if (c != cls) {
+        cls = c;
+        off = -1;
+        mask = 0;
+        if (!R::FindBoolProperty(c, L"isAnim", off, mask)) off = -1;
+    }
+    return off >= 0 && (*(static_cast<const uint8_t*>(octa) + off) & mask) != 0;
 }
 
 void* MinSphere(void* octa) { return octa ? LivePointerAt(octa, g_minSphere.Of(octa)) : nullptr; }
@@ -70,7 +79,9 @@ bool CallFireFinishNotify(void* octa) {
     void* fn = octa ? R::FindFunction(R::ClassOf(octa), kFireFinish) : nullptr;
     ParamFrame f(fn);
     if (!fn || !f.valid()) return false;
-    const R::FName name = fname_utils::StringToFName(L"finish");
+    // The name `finish`, resolved once.
+    static R::FName name{};
+    if (name.ComparisonIndex == 0 && name.Number == 0) name = fname_utils::StringToFName(L"finish");
     return f.SetRaw(L"NotifyName", &name, sizeof(name)) && Call(octa, f);
 }
 

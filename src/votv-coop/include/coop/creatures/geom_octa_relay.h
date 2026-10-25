@@ -7,7 +7,8 @@
 // own refused fire-finish notify (the k-th since the Aggro pairs with verdict base + k, by modular difference) and the
 // notify is replayed with the host's answer written into the one overlap read it makes. Every replay runs in Tick, under
 // a one-shot pass for the entries it names, and nothing outlives its reflected call.
-// The `[OCTA]` lines: aggro held|replayed|skipped, verdict applied|dropped|pending|timeout, event dropped.
+// The `[OCTA]` lines: aggro held|replayed|skipped, verdict applied|dropped|pending|timeout, event dropped. A verdict
+// applied says `wrote=`, the answers the hook wrote into its replay's overlap read: one when the overwrite works.
 
 #pragma once
 
@@ -24,8 +25,8 @@ namespace coop::geom_octa_relay {
 // the Octa's EntitySpawn, so such an event is a destroyed Octa or a host bug). Otherwise it is recorded for Tick.
 void OnEvent(const coop::net::GeomOctaEventPayload& payload);
 
-// Every pump tick: installs the watch on the refused notify and the overlap hook once their classes resolve, then, on a
-// client, serves each Octa's held Aggro and paired verdicts. Game thread.
+// Every pump tick, on a client: watches the refused notify, then serves each live Octa's held Aggro and paired verdicts.
+// The overlap hook is installed at the first Aggro this client applies, and the pairing runs without it. Game thread.
 void Tick();
 
 // What this client has done, for a drill to read; the log lines carry the detail.
@@ -36,6 +37,7 @@ struct Counters {
     uint32_t verdictTimeout;
     uint32_t verdictDropped;
     uint32_t eventDropped;
+    uint32_t overwriteWrites;   // host answers the post hook wrote into a replayed notify's overlap read
 };
 Counters GetCounters();
 

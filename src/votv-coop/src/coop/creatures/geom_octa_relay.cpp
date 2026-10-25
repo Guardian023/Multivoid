@@ -50,6 +50,9 @@ constexpr int32_t kEntryOverlap = 3766;
 constexpr int32_t kEntryAggro = 3592;
 constexpr int32_t kEntryFireFinish = 1092;
 
+// Divergence from MTA, which resends a syncer's ped state every pulse so a lost packet is replaced by the next
+// (reference/mtasa-blue/Server/mods/deathmatch/logic/CPedSync.cpp:220, :305): these decisions are one-shot and paired by
+// count, so a missing one costs the look of one attack, bounded by the waits below, and never an outcome.
 // The "close" section is 2.1667 s, the longest an Octa stays busy after the host's own close finished: an Aggro that
 // arrives first waits for the client's close, at most this long plus a margin. A verdict waits that long plus 2 s.
 constexpr uint64_t kAggroHoldMs = 2167 + 500;
@@ -122,13 +125,30 @@ Counters  g_counters{};
 
 bool g_watched = false;
 void* g_overlapFn = nullptr;   // IsOverlappingActor, once its post hook is installed
+bool  g_hookTried = false;     // tried once, at the first Aggro this client applies; a failure is latched
 
 unsigned long long Now() { return static_cast<unsigned long long>(N::NowMs()); }
 
+// A drop is counted every time and said once per (line, reason): a host that is wrong would otherwise fill the log. The
+// reasons are literals, compared by pointer.
+bool SaidOnce(const char* line, const char* why) {
+    struct Said {
+        const char* line;
+        const char* why;
+    };
+    static Said said[16];
+    static size_t count = 0;
+    for (size_t i = 0; i < count; ++i)
+        if (said[i].line == line && said[i].why == why) return true;
+    if (count < sizeof(said) / sizeof(said[0])) said[count++] = Said{line, why};
+    return false;
+}
+
 void LogDroppedVerdict(uint32_t eid, uint32_t n, const char* why) {
     ++g_counters.verdictDropped;
-    UE_LOGI("[OCTA] verdict dropped eid=%u n=%u why=%s t=%llu", static_cast<unsigned>(eid), static_cast<unsigned>(n), why,
-            Now());
+    if (SaidOnce("verdict", why)) return;
+    UE_LOGI("[OCTA] verdict dropped eid=%u n=%u why=%s (counted; said once per reason) t=%llu", static_cast<unsigned>(eid),
+            static_cast<unsigned>(n), why, Now());
 }
 
 OctaState* Find(uint32_t eid) {
@@ -198,6 +218,7 @@ struct Overwrite {
     void*   minSphere = nullptr;
     void*   graph = nullptr;
     uint8_t refire = 0;
+    uint32_t writes = 0;   // the answers written during the armed replay
 };
 Overwrite g_ow;
 
@@ -209,23 +230,39 @@ void OnOverlapPost(void* context, void* /*source*/, void* /*result*/) {
     if (!g_ow.armed || context != g_ow.minSphere) return;
     const UH::CallerFrame frame = UH::CurrentCallerFrame();
     if (frame.function != g_ow.graph || !frame.locals || frame.locals != B::ScopedEntryPass::Frame()) return;
-    if (void* r = UH::CurrentResult()) *static_cast<uint8_t*>(r) = g_ow.refire;
+    if (void* r = UH::CurrentResult()) {
+        *static_cast<uint8_t*>(r) = g_ow.refire;
+        ++g_ow.writes;
+        ++g_counters.overwriteWrites;
+    }
 }
 
-// Arms the overwrite for one replay and disarms it on every way out.
+// Arms the overwrite for one replay and disarms it on every way out. With no hook installed there is nothing to arm,
+// and the replay's overlap read is the client's own.
 class ArmScope {
 public:
     ArmScope(void* octa, uint8_t refire) {
-        g_ow = Overwrite{true, GO::MinSphere(octa), GO::GraphFunction(octa), refire};
-        UH::SetArmed(g_overlapFn, &OnOverlapPost, true);
+        g_ow = Overwrite{true, GO::MinSphere(octa), GO::GraphFunction(octa), refire, 0};
+        if (g_overlapFn) UH::SetArmed(g_overlapFn, &OnOverlapPost, true);
     }
     ~ArmScope() {
-        UH::SetArmed(g_overlapFn, &OnOverlapPost, false);
+        if (g_overlapFn) UH::SetArmed(g_overlapFn, &OnOverlapPost, false);
         g_ow = Overwrite{};
     }
     ArmScope(const ArmScope&) = delete;
     ArmScope& operator=(const ArmScope&) = delete;
 };
+
+// The disarmed post hook on the overlap read, tried once, at the first Aggro this client applies: a client that never
+// sees an Octa pays nothing for it. A failure is latched and said; the verdict replays then run without the answer.
+void EnsureHook() {
+    if (g_hookTried) return;
+    g_hookTried = true;
+    const ue_wrap::facts::Resolved fn = ue_wrap::facts::Resolve(kRowIsOverlappingActor);
+    if (fn && UH::InstallPostHook(fn, &OnOverlapPost, /*armed=*/false)) g_overlapFn = fn.Fn();
+    else UE_LOGE("geom_octa_relay: the IsOverlappingActor hook did not install -- a verdict is replayed without the host's "
+                 "answer written into the overlap read");
+}
 
 // ---- the refused notify, counted ----
 
@@ -292,6 +329,7 @@ void ServeAggro(OctaState& st, void* octa, uint64_t now) {
     }
     SetBase(st, st.aggroBase);
     st.aggroPending = false;
+    EnsureHook();   // the verdicts of this attack will need it
     bool ran = false;
     {
         B::ScopedEntryPass pass(octa, {kEntryOverlap, kEntryAggro});
@@ -306,15 +344,25 @@ void ServeAggro(OctaState& st, void* octa, uint64_t now) {
     }
 }
 
-// Replays the refused notify with the host's answer in its overlap read. False if the call did not run.
-bool ReplayFinish(void* octa, uint8_t refire) {
+// Replays the refused notify with the host's answer in its overlap read: whether the call ran, and how many answers the
+// hook wrote into the reads it made (one, when the overwrite works).
+struct Replay {
+    bool     ran = false;
+    uint32_t wrote = 0;
+};
+Replay ReplayFinish(void* octa, uint8_t refire) {
     ArmScope arm(octa, refire);
-    B::ScopedEntryPass pass(octa, {kEntryFireFinish});
-    return GO::CallFireFinishNotify(octa);
+    Replay r;
+    {
+        B::ScopedEntryPass pass(octa, {kEntryFireFinish});
+        r.ran = GO::CallFireFinishNotify(octa);
+    }
+    r.wrote = g_ow.writes;
+    return r;
 }
 
 void ServeVerdicts(OctaState& st, void* octa, uint64_t now) {
-    if (!st.haveBase || !g_overlapFn) return;
+    if (!st.haveBase) return;
     while (st.done < st.counted) {
         const uint32_t k = st.done + 1;
         const uint32_t want = st.base + k;
@@ -327,10 +375,12 @@ void ServeVerdicts(OctaState& st, void* octa, uint64_t now) {
             for (size_t i = at + 1; i < st.keptCount; ++i) st.kept[i - 1] = st.kept[i];
             --st.keptCount;
             ++st.done;
-            if (ReplayFinish(octa, v.refire)) {
+            const Replay r = ReplayFinish(octa, v.refire);
+            if (r.ran) {
                 ++g_counters.verdictApplied;
-                UE_LOGI("[OCTA] verdict applied eid=%u n=%u refire=%u t=%llu", static_cast<unsigned>(st.eid),
-                        static_cast<unsigned>(v.n), static_cast<unsigned>(v.refire), Now());
+                UE_LOGI("[OCTA] verdict applied eid=%u n=%u refire=%u wrote=%u t=%llu", static_cast<unsigned>(st.eid),
+                        static_cast<unsigned>(v.n), static_cast<unsigned>(v.refire), static_cast<unsigned>(r.wrote),
+                        Now());
             } else {
                 LogDroppedVerdict(st.eid, v.n, "the notify did not run");
             }
@@ -344,26 +394,26 @@ void ServeVerdicts(OctaState& st, void* octa, uint64_t now) {
         if (now - st.waitAt[slot] <= kVerdictWaitMs) return;
         // No verdict in time: the look ends with the Octa idle (refire 0), and the next Aggro starts clean.
         ++st.done;
-        ++g_counters.verdictTimeout;
-        UE_LOGI("[OCTA] verdict timeout eid=%u n=%u t=%llu", static_cast<unsigned>(st.eid), static_cast<unsigned>(want),
-                Now());
-        ReplayFinish(octa, 0);
+        if (ReplayFinish(octa, 0).ran) {
+            ++g_counters.verdictTimeout;
+            UE_LOGI("[OCTA] verdict timeout eid=%u n=%u t=%llu", static_cast<unsigned>(st.eid),
+                    static_cast<unsigned>(want), Now());
+        } else {
+            LogDroppedVerdict(st.eid, want, "the notify did not run at its timeout");
+        }
     }
 }
 
 void LogDroppedEvent(const N::GeomOctaEventPayload& p, const char* why) {
     ++g_counters.eventDropped;
-    UE_LOGI("[OCTA] event dropped eid=%u op=%u why=%s t=%llu", static_cast<unsigned>(p.octaEid),
-            static_cast<unsigned>(p.op), why, Now());
+    if (SaidOnce("event", why)) return;
+    UE_LOGI("[OCTA] event dropped eid=%u op=%u why=%s (counted; said once per reason) t=%llu",
+            static_cast<unsigned>(p.octaEid), static_cast<unsigned>(p.op), why, Now());
 }
 
-// Installs, once each, the watch on the refused notify and the disarmed post hook on the overlap read.
-void EnsureInstalled() {
+// The watch on the refused notify, once.
+void EnsureWatched() {
     if (!g_watched) g_watched = sg::WatchName(kRowFireFinish, kTagFinish, &OnFinishPre, nullptr);
-    if (!g_overlapFn) {
-        const ue_wrap::facts::Resolved fn = ue_wrap::facts::Resolve(kRowIsOverlappingActor);
-        if (fn && UH::InstallPostHook(fn, &OnOverlapPost, /*armed=*/false)) g_overlapFn = fn.Fn();
-    }
 }
 
 }  // namespace
@@ -423,8 +473,8 @@ void OnEvent(const N::GeomOctaEventPayload& p) {
 void Tick() {
     N::Session* s = coop::npc_sync::GetSession();
     if (!s || s->role() != N::Role::Client) return;
-    EnsureInstalled();
-    const uint64_t now = N::NowMs();
+    EnsureWatched();
+    uint64_t now = 0;   // read once, and only when an Octa is live
     for (OctaState& st : g_octas) {
         if (st.eid == 0) continue;
         void* octa = OctaMirrorOf(st.eid);
@@ -432,6 +482,7 @@ void Tick() {
             st = OctaState{};
             continue;
         }
+        if (!now) now = N::NowMs();
         ServeAggro(st, octa, now);
         ServeVerdicts(st, octa, now);
     }
