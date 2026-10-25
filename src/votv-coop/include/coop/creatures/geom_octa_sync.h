@@ -38,10 +38,10 @@ struct Counters {
 };
 Counters GetCounters();
 
-// Opens a window on the host verdicts counted from now on: when the `n`-th of them is counted, the idle count at that
-// moment is kept in the counters, so a poll that sees the n-th verdict late still tells an idle that came in between.
-// One window at a time; opening another replaces it. Game thread.
-void OpenVerdictWindow(uint32_t n);
+// Opens a window on the host verdicts of `octa` counted from now on (another Octa's are not counted): when the `n`-th
+// of them is counted, the idle count at that moment is kept in the counters, so a poll that sees the n-th verdict late
+// still tells an idle that came in between. One window at a time; opening another replaces it. Game thread.
+void OpenVerdictWindow(uint32_t n, void* octa);
 
 // The target text (`slot:1`, `none`, ...) of the last host aggro line, or an empty string before the first.
 const char* LastAggroTarget();

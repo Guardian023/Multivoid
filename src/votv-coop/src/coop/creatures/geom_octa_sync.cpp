@@ -55,12 +55,14 @@ bool g_watched = false;
 Counters g_counters{};
 char     g_lastTarget[40] = {};
 uint32_t g_windowWanted = 0;    // OpenVerdictWindow: the verdict to mark, 0 for no window
-uint32_t g_windowCounted = 0;   // the host verdicts counted since it opened
+uint32_t g_windowCounted = 0;   // the verdicts of the window's Octa counted since it opened
+int32_t  g_windowIndex = -1;    // the window's Octa, by object slot and the slot's serial
+int32_t  g_windowSerial = 0;
 
 // The host's count of "fire" finish verdicts per Octa, for its life, keyed by the Octa's object slot and the slot's
 // serial (the shape of npc_mirror_brain's mark): an element id or an address recycled for another Octa never inherits a
-// count. A fixed table; entries whose slot no longer holds their serial are the first to be replaced, and when more
-// Octas live than it holds the oldest entry goes.
+// count. A fixed table; a new Octa takes an entry whose slot no longer holds its serial, else the next entry in
+// round-robin order.
 struct VerdictCount {
     int32_t  index = -1;
     int32_t  serial = 0;
@@ -177,7 +179,9 @@ void OnFireFinishPost(const sg::Call& call) {
     char eid[16];
     EidText(id, eid);
     ++g_counters.hostVerdict;
-    if (g_windowWanted > 0 && !g_counters.windowReached && ++g_windowCounted == g_windowWanted) {
+    const int32_t slot = R::InternalIndexOf(call.object);
+    const bool windowOcta = slot >= 0 && slot == g_windowIndex && R::SlotSerial(slot) == g_windowSerial;
+    if (windowOcta && g_windowWanted > 0 && !g_counters.windowReached && ++g_windowCounted == g_windowWanted) {
         g_counters.windowReached = true;
         g_counters.idleAtWindow = g_counters.idle;
     }
@@ -252,8 +256,12 @@ void Install(coop::net::Session* session) {
 
 Counters GetCounters() { return g_counters; }
 
-void OpenVerdictWindow(uint32_t n) {
-    g_windowWanted = n;
+void OpenVerdictWindow(uint32_t n, void* octa) {
+    const int32_t index = octa ? R::InternalIndexOf(octa) : -1;
+    const int32_t serial = index >= 0 ? R::AllocateSlotSerial(index) : 0;
+    g_windowWanted = serial != 0 ? n : 0;   // an Octa that cannot be told apart opens no window
+    g_windowIndex = index;
+    g_windowSerial = serial;
     g_windowCounted = 0;
     g_counters.windowReached = false;
     g_counters.idleAtWindow = 0;
@@ -266,6 +274,8 @@ void OnDisconnect() {
     g_verdictNext = 0;
     g_counters = Counters{};
     g_windowWanted = g_windowCounted = 0;
+    g_windowIndex = -1;
+    g_windowSerial = 0;
     g_lastTarget[0] = '\0';
     g_aggroEntry = AggroEntry{};
 }

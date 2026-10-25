@@ -221,7 +221,7 @@ void HostWait(coop::net::Session* s, void* me) {
         }
         g_octa.Set(octa);
         g_base = GS::GetCounters();
-        GS::OpenVerdictWindow(kBlastsWanted);
+        GS::OpenVerdictWindow(kBlastsWanted, octa);
         UE_LOGI("[OCTA-DRILL] host READY measure: Octa eid=%u at=%.0f,%.0f,%.0f", NpcEidOf(octa), at.X, at.Y, at.Z);
     }
     g_hstep = HStep::Watch;
