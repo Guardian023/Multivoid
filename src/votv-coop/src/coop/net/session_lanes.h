@@ -257,7 +257,10 @@ inline Lane LaneForKind(ReliableKind k) {
     // a leaving holder's last tab.
     case ReliableKind::LaptopTabReport: return Lane::Normal;
     case ReliableKind::LaptopTabState:  return Lane::Normal;
-    default:                           return Lane::Normal;
+    // A lid's rest pose rides ContainerState's lane (the default): the joiner applies it once its copy is open, and
+    // one FIFO makes the open state land first in the ordinary case. Not relayable, not pre-world, by decision.
+    case ReliableKind::SwingerRestPose: return Lane::Normal;
+    default:                          return Lane::Normal;
     }
 }
 

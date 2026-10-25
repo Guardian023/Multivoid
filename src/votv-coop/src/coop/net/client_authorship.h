@@ -224,6 +224,7 @@ constexpr ClientAuthorship AuthorshipOf(ReliableKind k) {
     case ReliableKind::LaptopTabState:
     case ReliableKind::AtvSetComplete:
     case ReliableKind::PropSyncAnswer:
+    case ReliableKind::SwingerRestPose:
         return ClientAuthorship::Host;
     }
     return ClientAuthorship::NotAKind;  // a byte value that names no kind: refused like Host

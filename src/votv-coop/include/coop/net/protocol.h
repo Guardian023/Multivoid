@@ -30,7 +30,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // This file is past the 1500-line hard cap and stays there: it is the single-feature exception the
 // rule names. One wire format, whose enum, payload structs and static_asserts are read together;
 // splitting it would put a kind's number in one file and its bytes in another.
-inline constexpr uint16_t kProtocolVersion = 251;
+inline constexpr uint16_t kProtocolVersion = 252;
 
 // Default LAN port (overridable via multivoid.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -1102,6 +1102,16 @@ enum class ReliableKind : uint8_t {
     // AtvExplodeRequestPayload.
     AtvExplodeRequest = 191,
 
+    // Host to a joining client: where an OPEN swinger lid rests on the host. The game saves nothing for a
+    // swinger and the container lane's connect snapshot carries only open or closed, so a joiner's open lid
+    // would sit at its hinge default; the host sends each open lid's place right after that snapshot, under the
+    // lane's portable key. The joiner applies it once its copy reads open (a physics teleport, zero velocity,
+    // still simulating), and parks it until the key resolves and the open state has landed. A lid a remote drag
+    // drives is left to that stream. Never relayed; a client's copy is refused at the host's receive edge. Late
+    // join: this is the late-join answer; a joiner mid-drag or mid-coast gets this, then the live stream, then
+    // the release. Same lane as ContainerState. SwingerRestPosePayload.
+    SwingerRestPose = 192,
+
     // CLIENT->HOST: this client's player lit a salt rocket (the lighter's attemptIgnite or ignite, or the torch's
     // ignite), which the client's own copy refused to run. The host judges the sender's reach and the tool its hand
     // held, then runs the same verb on its own copy; the rocket's fire() then claims the flight and EX-1 applies the
@@ -1875,6 +1885,17 @@ struct KeyedTogglePayload {
 static_assert(sizeof(KeyedTogglePayload) == 40, "KeyedTogglePayload must be 40 bytes");
 static_assert(sizeof(KeyedTogglePayload) <= 256 - 20 - 8,
               "KeyedTogglePayload must fit in one reliable datagram");
+
+// Where an open swinger lid rests (SwingerRestPose): the container lane's key for the lid, as
+// KeyedTogglePayload carries it, and the lid actor's world location (cm) and rotation (deg).
+struct SwingerRestPosePayload {
+    WireKey key;                          // 32 -- the container lane's portable key ("mv_" + 16 hex)
+    float   locX, locY, locZ;             // 12
+    float   rotPitch, rotYaw, rotRoll;    // 12
+};
+static_assert(sizeof(SwingerRestPosePayload) == 56, "SwingerRestPosePayload must be 56 bytes");
+static_assert(sizeof(SwingerRestPosePayload) <= 256 - 20 - 8,
+              "SwingerRestPosePayload must fit in one reliable datagram");
 
 // A door verb intent (DoorVerbIntent): the door by the door lane's key, which entry verb, and the
 // one argument of it a door's body reads. The press carries its action back as the client's own

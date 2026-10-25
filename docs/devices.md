@@ -78,14 +78,19 @@ item while a lid coasts sends the lid's release at once. A lid the lane has not 
 let go. One limit stays: a second player who drags the same lid during the first one's coast makes two slots
 stream one lid, and each receiver follows whichever pose came last, as for any prop two peers grab; the
 coasting peer, whose copy the other drag parks, ends its coast and sends its release, and a receiver that
-follows the other drag applies nothing for it. A
-peer whose own player is dragging the same lid
-does not apply the remote poses for it, whether its drag began before the stream or in the middle of it.
-The held-item broadcast never expresses a lid as a spawned prop. Mid-join: the connect snapshot carries a
-lid's `opened` and nothing else, so a joiner gets the live stream if a drag is in progress, then the
-release; a peer present at a release ends with the lid where the holder's copy came to rest, but a joiner
-arriving after a free lid has come to rest gets it at its own save pose. That is a recorded open item, not an
-answer. `[?]` until the swinger drill has a two-peer proof.
+follows the other drag applies nothing for it. A peer whose own player is dragging the same lid does not apply
+the remote poses for it, whether its drag began before the stream or in the middle of it.
+The held-item broadcast never expresses a lid as a spawned prop. Mid-join: the game saves nothing for a lid
+(a child actor is skipped by the save), so a joiner's lid spawns closed at its hinge default, and the connect
+snapshot carries a lid's `opened` and nothing else. A closed lid is locked at that default on every peer and
+needs no more. An open one rests wherever it was left, which only the host's copy knows, so right after the
+snapshot the host sends each open lid's place (`SwingerRestPose`, under the lane's portable key), and the
+joiner puts its copy there, with no velocity and still simulating, once the key resolves and its copy reads
+open. A lid without a portable key is skipped and counted in the host's log line. A place that cannot be applied
+yet is parked and retried once per index pass, and dropped by the lane's own rule for its parked states with one
+warning naming the key. A lid a remote stream drives, or the joiner's own player drags, is left to that owner. A
+joiner arriving mid-drag or mid-coast gets the place, then the live stream, then the release.
+`[?]` until the swinger drill has a two-peer proof.
 A client's own press, hit or pry of a door never runs on its copy either: the
 script-body gate refuses the door's entry verb there and sends it to the host
 (`coop/interactables/door_verb_intent`), which
