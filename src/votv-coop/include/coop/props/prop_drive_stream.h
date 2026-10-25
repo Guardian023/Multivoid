@@ -89,4 +89,16 @@ struct AppliedEnd {
 };
 size_t RecentEnds(AppliedEnd* out, size_t max);
 
+namespace dev {   // called only from src/coop/dev/ (the prop syncer drill); compiled always, inert unless called
+struct DriveView {
+    uint8_t          gen = 0;              // the generation of the last row applied (or End applied) for the eid
+    uint32_t         rows = 0;             // rows parked on or driven to in that generation, before its End
+    bool             endApplied = false;   // that generation's End was applied to the copy here
+    ue_wrap::FVector startLoc{};           // the copy's place at the generation's first row, before the park
+    bool             startRead = false;
+};
+// Kept after the End and cleared with the session; a default view when the eid was never driven here.
+DriveView ViewOf(uint32_t eid);
+}  // namespace dev
+
 }  // namespace coop::prop_drive_stream

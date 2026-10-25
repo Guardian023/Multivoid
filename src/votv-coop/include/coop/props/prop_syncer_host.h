@@ -42,4 +42,16 @@ void OnSlotLeft(uint8_t slot);
 // Session end: the buckets, hand-back records, counters and the cached session. Game thread.
 void OnDisconnect();
 
+namespace dev {   // called only from src/coop/dev/ (the prop syncer drill); compiled always, inert unless called
+struct Admitted {
+    uint8_t  gen = 0;     // the generation of the last row admitted for the eid
+    uint32_t rows = 0;    // rows admitted in that generation, kept after the row ends
+};
+Admitted AdmittedOf(uint32_t eid);
+// Rows refused because their sender is no syncer of the prop (no row, or another slot's).
+uint32_t NotSyncerCount();
+// Rows admitted from a sender that is no syncer of the prop: only the drill's red arm can make this nonzero.
+uint32_t NonSyncerAdmitted();
+}  // namespace dev
+
 }  // namespace coop::prop_syncer_host

@@ -26,6 +26,7 @@
 #include "coop/dev/fall_drill.h"  // [dev] a falling host birth lands on the client where it lands on the host
 #include "coop/dev/remover_drill.h"  // [dev] the tool gun's remover pressed by a client
 #include "coop/dev/prop_act_drill.h"  // [dev] a client's take or use of a shared prop asks the host first
+#include "coop/dev/prop_syncer_drill.h"  // [dev] a client syncs a prop its own interaction moves: kick and forge, judged by the host and an observer
 #include "coop/dev/sack_drill.h"  // [dev] a client's point sack is paid by the host, once
 #include "coop/dev/server_upgrade_drill.h"  // [dev] a client's install and take-out at a server box
 #include "coop/dev/server_drill.h"  // [dev] a server box's break is the host's; a client's repair runs there
@@ -196,6 +197,7 @@ void EndSession() {
     coop::dev::fall_drill::OnDisconnect();  // [dev] the drop belongs to one session
     coop::dev::remover_drill::OnDisconnect();  // [dev] the props and the toolgun belong to one session
     coop::dev::prop_act_drill::OnDisconnect();  // [dev] the steps, the target and the walk belong to one session
+    coop::dev::prop_syncer_drill::OnDisconnect();  // [dev] the phases, the target and the walk belong to one session
     coop::dev::sack_drill::OnDisconnect();  // [dev] the sack and the counts belong to one session
     coop::dev::drone_call_drill::OnDisconnect();  // [dev] the console, the legs and the host's watch belong to one world
     coop::dev::server_upgrade_drill::OnDisconnect();  // [dev] the box and the legs belong to one world
@@ -308,6 +310,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::fall_drill::Tick(&session);  // [dev] the fall drill (a latched bool read when off)
     coop::dev::remover_drill::Tick(&session);  // [dev] the remover drill (a latched enum read when off)
     coop::dev::prop_act_drill::Tick(&session);  // [dev] the act drill (a latched phase read when off)
+    coop::dev::prop_syncer_drill::Tick(&session);  // [dev] the prop syncer drill (a latched enum read when off)
     coop::dev::sack_drill::Tick(&session);  // [dev] the point sack drill (a latched bool read when off)
     coop::dev::drone_call_drill::Tick(&session);  // [dev] the drone console drill (a single bool read when off)
     coop::dev::server_upgrade_drill::Tick(&session);  // [dev] the server upgrade drill (a single bool read when off)

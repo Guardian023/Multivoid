@@ -2,6 +2,8 @@
 
 #include "coop/props/prop_drive_host.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/player/hand_item.h"            // IsHandAxisActor: the hotbar hand and its mirrors
@@ -74,6 +76,15 @@ void SendEnd(coop::net::Session& s, const Driven& d, void* actor, const ue_wrap:
 // joined the queue (the tick's rotation counts those), else 0.
 size_t PublishAdmitted(coop::net::Session& s, Driven& d) {
     if (!d.admittedEver || !(d.freshAdmit || d.resend)) return 0;
+    // The developer red arm of the prop syncer drill: an admitted row is applied to the host's copy (at admission)
+    // and never re-published, so the drill's observer must fail. The End still goes. Resolved once.
+    static const bool s_redNoRelay =
+        coop::config::ResolveEnum(coop::config_registry::rows::prop_syncer_red) == "no_relay";
+    if (s_redNoRelay) {
+        d.freshAdmit = false;
+        d.resend     = false;
+        return 0;
+    }
     const coop::net::PoseTurn turn = s.PropDrivePoseTurn(d.eid);
     if (turn == coop::net::PoseTurn::Wait) return 0;   // the pose waiting in the queue is refreshed on a later tick
     coop::net::PropPoseSnapshot pp{};

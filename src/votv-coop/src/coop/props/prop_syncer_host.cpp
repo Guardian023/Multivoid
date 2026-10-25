@@ -6,6 +6,8 @@
 
 #include "coop/props/prop_syncer_host.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/intent_authority.h"
 #include "coop/net/intent_bucket.h"
 #include "coop/net/protocol.h"
@@ -69,6 +71,8 @@ std::vector<coop::net::PropPoseSnapshot> g_take;   // kept capacity: the drain a
 // Each outcome is counted and said at the first and at every 100th, so a client's flood costs the log nothing.
 uint32_t g_granted = 0, g_admitted = 0, g_notSyncer = 0, g_lateSyncer = 0, g_staleGen = 0, g_paced = 0, g_steps = 0;
 uint32_t g_endsAdmitted = 0, g_endsNotSyncer = 0, g_endsStale = 0;
+uint32_t g_nonSyncerAdmitted = 0;
+std::unordered_map<uint32_t, dev::Admitted> g_admittedBy;   // eid -> rows admitted, for the drill's judge
 uint32_t g_refused[8] = {};
 uint32_t g_ended[6] = {};
 
@@ -143,8 +147,12 @@ coop::net::PropDriveEndPayload EndOf(const Driven& d, void* actor) {
 
 // One row from slot `slot`, judged against the row that names it: the sender, the generation, the pace.
 void AdmitRow(const coop::net::PropPoseSnapshot& e, uint8_t slot, uint64_t nowMs) {
+    // The developer red arm of the prop syncer drill: the sender test is skipped, so a forged row of the open
+    // generation is admitted and the drill's forge arm must fail. Resolved once.
+    static const bool s_redNotSyncer =
+        coop::config::ResolveEnum(coop::config_registry::rows::prop_syncer_red) == "not_syncer";
     Driven* row = coop::prop_drive_host::FindByEid(e.elementId);
-    if (!row || row->syncer != slot) {
+    if (!row || (row->syncer != slot && !s_redNotSyncer)) {
         if (IsLateSyncer(e.elementId, slot, nowMs)) Tally(g_lateSyncer, "late row of a handed-back syncer", e.elementId, slot);
         else                                        Tally(g_notSyncer, "row refused: sender is no syncer", e.elementId, slot);
         return;
@@ -169,6 +177,10 @@ void AdmitRow(const coop::net::PropPoseSnapshot& e, uint8_t slot, uint64_t nowMs
     coop::net::PropPoseSnapshot fed = e;
     fed.key = row->key;
     coop::prop_drive_stream::FeedAdmitted(fed);
+    if (row->syncer != slot) ++g_nonSyncerAdmitted;
+    dev::Admitted& seen = g_admittedBy[e.elementId];
+    if (seen.gen != row->gen) seen = dev::Admitted{row->gen, 0};
+    ++seen.rows;
     Tally(g_admitted, "row admitted", e.elementId, slot);
 }
 
@@ -198,8 +210,12 @@ void OnClaim(coop::net::Session& s, const coop::net::PropSyncClaimPayload& p, ui
     g_session = &s;
     // The tests, in the order of the design: the sender's tokens go before any other test runs (MTA tests its
     // anti-spam first, per vehicle), and a row on the prop is judged before the reach is measured.
+    // The developer red arm of the prop syncer drill: every claim is refused as paced, so the drill's kick arm
+    // must fail at its claim. Resolved once.
+    static const bool s_redRefuse =
+        coop::config::ResolveEnum(coop::config_registry::rows::prop_syncer_red) == "refuse";
     if (!s.IsSlotWorldReady(slot)) return Refuse(s, p, slot, PropSyncRefusal::NotReady);
-    if (!g_claimBuckets[slot].Take(kClaimBudget, coop::active_drive::NowMs()))
+    if (s_redRefuse || !g_claimBuckets[slot].Take(kClaimBudget, coop::active_drive::NowMs()))
         return Refuse(s, p, slot, PropSyncRefusal::Paced);
     void* actor = ResolveProp(p.eid);
     if (!actor) return Refuse(s, p, slot, PropSyncRefusal::Unknown);
@@ -313,8 +329,23 @@ void OnDisconnect() {
     g_nextPassMs = 0;
     g_granted = g_admitted = g_notSyncer = g_lateSyncer = g_staleGen = g_paced = g_steps = 0;
     g_endsAdmitted = g_endsNotSyncer = g_endsStale = 0;
+    g_nonSyncerAdmitted = 0;
+    g_admittedBy.clear();
     std::fill(std::begin(g_refused), std::end(g_refused), 0u);
     std::fill(std::begin(g_ended), std::end(g_ended), 0u);
 }
+
+namespace dev {
+
+Admitted AdmittedOf(uint32_t eid) {
+    const auto it = g_admittedBy.find(eid);
+    return it == g_admittedBy.end() ? Admitted{} : it->second;
+}
+
+uint32_t NotSyncerCount() { return g_notSyncer; }
+
+uint32_t NonSyncerAdmitted() { return g_nonSyncerAdmitted; }
+
+}  // namespace dev
 
 }  // namespace coop::prop_syncer_host

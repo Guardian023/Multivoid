@@ -122,6 +122,15 @@ bool YieldedAtOrAfter(uint32_t eid, uint8_t gen) {
     return y != g_yieldedGen.end() && !GenAfter(gen, y->second);
 }
 
+// What the prop syncer drill's judge reads (prop_drive_stream.h, dev::ViewOf): per eid, the rows of the last
+// generation, where the copy stood before its park, and whether that generation's End applied.
+std::unordered_map<uint32_t, dev::DriveView> g_devView;
+dev::DriveView& DevViewOf(uint32_t eid, uint8_t gen) {
+    dev::DriveView& v = g_devView[eid];
+    if (v.gen != gen) v = dev::DriveView{gen};
+    return v;
+}
+
 // The last stream ends applied here, a ring of kRecentEnds (prop_drive_stream.h).
 AppliedEnd g_ends[kRecentEnds];
 size_t g_endCount = 0;   // ends recorded since the session began; the newest is at (g_endCount - 1) % kRecentEnds
@@ -132,6 +141,7 @@ size_t g_endCount = 0;   // ends recorded since the session began; the newest is
 // assigning a velocity wakes a body at rest.
 void ApplyEnd(void* actor, const coop::net::PropDriveEndPayload& p, bool parkedHere) {
     E::SetActorLocation(actor, ue_wrap::FVector{p.x, p.y, p.z});
+    DevViewOf(p.eid, p.gen).endApplied = true;
     EndOnActor& on = g_endOnActor[p.eid];
     on.gen = p.gen;
     on.actor.Set(actor);
@@ -170,9 +180,11 @@ void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char*
         if (it->second.gen == e.ctx) {
             // The steady state: the row already names the actor. No resolve, no string.
             if (void* live = it->second.d.LiveActor()) {
-                if (!coop::prop_drive_host::InAHand(live))   // a hand's stream wins
+                if (!coop::prop_drive_host::InAHand(live)) {   // a hand's stream wins
+                    ++DevViewOf(eid, e.ctx).rows;
                     AD::BeginLerpToPose(it->second.d, ue_wrap::FVector{e.x, e.y, e.z},
                                         ue_wrap::FRotator{e.pitch, e.yaw, e.roll}, nowMs);
+                }
                 return;
             }
         }
@@ -201,6 +213,9 @@ void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char*
                 "generation yielded", who, eid, static_cast<unsigned>(e.ctx));
         return;
     }
+    dev::DriveView& seen = DevViewOf(eid, e.ctx);
+    seen.startRead = E::TryGetActorLocation(actor, seen.startLoc);
+    ++seen.rows;
     Drive& dr = g_drives[eid];
     if (dr.d.actor && dr.d.actor != actor) GiveBackPhysics(dr, dr.d.LiveActor());
     AD::ResetDriveState(dr.d);
@@ -427,8 +442,18 @@ void OnDisconnect() {
     g_yieldedGen.clear();
     g_miss.clear();
     g_pendingEnd.clear();
+    g_devView.clear();
     g_endCount = 0;
     g_batch.clear();
 }
+
+namespace dev {
+
+DriveView ViewOf(uint32_t eid) {
+    const auto it = g_devView.find(eid);
+    return it == g_devView.end() ? DriveView{} : it->second;
+}
+
+}  // namespace dev
 
 }  // namespace coop::prop_drive_stream

@@ -528,6 +528,17 @@ CFG_STRING(sack_drill, "sack_drill", "dev", "", "VOTVCOOP_SACK_DRILL", false,
     "client's puppet once its world is ready; the client aims and presses it; the host's DONE line ends it.")
 CFG_FLAG(point_sack_client_runs, "point_sack_client_runs", "dev", false, "VOTVCOOP_POINT_SACK_CLIENT_RUNS",
     "Developer: a client's point sack runs the game's own body there instead of asking the host (the sack drill's red).")
+CFG_ENUM(prop_syncer_drill, "prop_syncer_drill", "dev", "off", "off|kick|forge", "VOTVCOOP_PROP_SYNCER_DRILL",
+    "Drill (host and BOTH clients, the same value; three peers): a client syncs a prop its own interaction moves. "
+    "kick: the client in slot 1 walks to a keyed prop with the director, claims it, kicks it with the game's own "
+    "physics and holds the claim for a second; the host and the client in slot 2 must each take at least three rows "
+    "of its generation, see the prop travel, and rest within 5 cm / 3 deg of the client's pose. forge: the client in "
+    "slot 2 also publishes rows for the kicked prop at its own place; the host must count them as from a non-syncer, "
+    "admit none and still land on the client's pose. Lines tagged [PROP-SYNC]; the verdict is DONE PASS or FAIL:.")
+CFG_ENUM(prop_syncer_red, "prop_syncer_red", "dev", "off", "off|refuse|no_relay|not_syncer", "VOTVCOOP_PROP_SYNCER_RED",
+    "Developer red arm: never set. refuse (HOST): every claim is refused as paced, so the kick arm's client must fail. "
+    "no_relay (HOST): an admitted client row is applied to the host's copy and never re-published, so the kick arm's "
+    "observer must fail. not_syncer (HOST): the sender test of admission is skipped, so the forge arm's host must fail.")
 CFG_FLAG(drone_call_drill, "drone_call_drill", "dev", false, "VOTVCOOP_DRONE_CALL_DRILL",
     "Drill (BOTH peers): the client walks to the garage's drone console, opens its lid if it is shut, presses "
     "the leave-timer face twice (the click sounds on its copy and the host's stream flips the timer, then flips "
