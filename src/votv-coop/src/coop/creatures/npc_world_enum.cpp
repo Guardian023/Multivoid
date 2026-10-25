@@ -137,8 +137,8 @@ coop::element::ElementId EnrollUntrackedNpcActor(void* obj, const std::wstring& 
 // chain (four killer wisps and a pyramid on the world-actor lane), the ambient sky wisps and night
 // eggs (world-anchored, so the host rolls them and a client's ticker is refused in the spawn
 // authority), the sell gun's coin mint (the host's own sale and the re-commit of a client's alike;
-// without its row the coin allowlist entry is inert), the jellyfish path's seven, and the story-event
-// spawners' creatures. Outputs still pass the allowlist gates in the queue branch below (NPC, else
+// without its row the coin allowlist entry is inert), the jellyfish path's seven, the story-event
+// spawners' creatures, and the gamemode's night roll (an Octa or an egg). Outputs still pass the allowlist gates in the queue branch below (NPC, else
 // world-actor), so no arbitrary EX spawn enrolls. `outputs` narrows a source to the outputs whose
 // client copies the spawn authority makes inert: the eventer also mints world actors whose BeginPlay
 // plays gameplay on a mirror (soltomiaCleaning_C writes the client's ATV and mints a sponge), so they
@@ -148,7 +148,10 @@ struct ExSpawnSource {
     const wchar_t* const* outputs;   // null-terminated; null: any allowlisted output
 };
 constexpr const wchar_t* kEventerOutputs[] = {L"ventCrawler_C", L"superEgger_C", nullptr};
-constexpr const wchar_t* kGeomOctaNpcOutputs[] = {L"geomOcta_C", nullptr};
+// The gamemode mints many classes besides these, and most of its other spawners are not refused on a client yet,
+// so its source is narrowed to the two outputs of the night roll (mainGamemode_C::CustomEvent_5, an Octa or a
+// night egg), whose client roll the spawn authority refuses.
+constexpr const wchar_t* kGeomOctaNpcOutputs[] = {L"geomOcta_C", L"eg_C", nullptr};
 constexpr ExSpawnSource kExSpawnSources[] = {
     {L"trigger_wispSwarm_C",     nullptr},          // the wisps event swarm
     {L"piramidSpawner_C",        nullptr},          // the piramid event chain
@@ -157,7 +160,7 @@ constexpr ExSpawnSource kExSpawnSources[] = {
     {L"prop_coingun_C",          nullptr},          // the sell gun's coin mint
     {L"jellyfishPath_C",         nullptr},          // the space jellyfish's seven (world-actor lane)
     {L"trigger_eventer_C",       kEventerOutputs},  // the scheduler's dispatcher
-    {L"mainGamemode_C",           kGeomOctaNpcOutputs}, // its ubergraph has the Geom Octa deferred spawn
+    {L"mainGamemode_C",          kGeomOctaNpcOutputs}, // the night roll's Octa or egg, and the spawn menu's Octa
     {L"grayEventController_C",   nullptr},          // graysforest: spawn() mints the grayTest_C pack
     {L"superEgger_C",            nullptr},          // eggvasion: spwn() mints the eg_C children
     {L"tentacleBallsFollower_C", nullptr},          // tentacleBalls: runTrigger() mints the pack
@@ -251,6 +254,7 @@ void InstallExSpawnCatch() {
                 "trigger_wispSwarm_C -> wisp_C, piramidSpawner_C -> killerwisp_C + piramid2_C, "
                 "jellyfishPath_C -> jellyfish_C, trigger_eventer_C -> ventCrawler_C + superEgger_C, "
                 "grayEventController_C -> grayTest_C, superEgger_C + ticker_egSpawner_C -> eg_C, "
+                "mainGamemode_C -> geomOcta_C + eg_C, "
                 "tentacleBallsFollower_C -> tentacleBall_C; EX_CallMath spawns now enroll)");
     } else {
         UE_LOGW("npc-sync[ex-spawn]: InstallPostHook FAILED -- EX_CallMath creature spawns will "
