@@ -8,13 +8,11 @@
 
 namespace coop::dev::octa_probe {
 
-// The Octa's minSphere, and the root capsules of the host's player and of a client's puppet (null when there is none):
-// world place, collision enabled state, object type, whether it generates overlap events, its response to the Pawn
-// channel, and its radius.
-void LogColliders(void* octa, void* hostPlayer, void* puppetBody);
-
-// One line a second: the Octa's place, the puppet's and its distance to the Octa, the host player's distance, the
-// Octa's target and `isAnim`, and the overlaps its handlers took. A call within the second of the last is a no-op.
+// One line a second: the Octa's place, the puppet's and its distance to the Octa, the host player's place and distance,
+// the Octa's target and `isAnim`, and the overlaps its handlers took. A call within the second of the last adds no
+// line. Also, once each and as its body first resolves: the collider of the Octa's minSphere (two seconds after the
+// Octa is first seen), of the host player's root capsule and of the client puppet's: world place, collision enabled
+// state, object type, whether it generates overlap events, its response to the Pawn channel, and its radius.
 void Tick(void* octa, void* hostPlayer, void* puppetBody);
 
 // Back to the first line, for a new run of the arm.

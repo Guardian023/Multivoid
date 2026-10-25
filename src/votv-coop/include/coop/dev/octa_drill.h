@@ -3,12 +3,13 @@
 //               shares with it; the host's catch must enrol the Octa (`[OCTA-DRILL] births PASS role=host`) and the
 //               client must materialise its mirror (`births PASS role=client`). The client also calls the night roll's
 //               event, which the spawn authority refuses (a line in the log). Red: octa_red=no_source.
-//   measure  -- the host spawns an Octa on the ground 1500 cm away and stands still; the client walks to the Octa's
-//               mirror with the director, stands until three host blasts have reached its explosion lane, and walks
-//               out. Liveness only: the host prints `[OCTA-DRILL] measure DONE` at the first `[OCTA] idle` after
-//               three verdicts with the client's puppet out of the sphere, or `FAIL: no host aggro` after 30 s of a
-//               puppet within 1000 cm; the client prints `[OCTA-DRILL] client out`, or `FAIL: no host fire` after
-//               90 s with no blast applied. Red: octa_red=no_parking. The counts are read from the two logs.
+//   measure  -- the walker takes its place first (the client's director walks it 2200 cm from the host; with
+//               octa_measure_target=host the host's does, from the client), then the host spawns the Octa 600 cm from
+//               it and 1300 cm or more from the other player, so the sphere's register-time overlap picks the walker.
+//               The walker stands until three host blasts, then walks 1800 cm out. Liveness only: the host prints
+//               `[OCTA-DRILL] measure DONE` at the first `[OCTA] idle` after three verdicts with the walker out of the
+//               sphere, or `FAIL: no host aggro` 30 s after the spawn; the client prints `[OCTA-DRILL] client out`, or
+//               `FAIL: no host fire` after 90 s with no blast applied. Red: octa_red=no_parking.
 // Both players hold `startInvinc` for the arm's span, and measure demands `damage_probe=1` so each blast logs [DMG].
 
 #pragma once

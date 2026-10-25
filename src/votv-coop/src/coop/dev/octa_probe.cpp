@@ -30,8 +30,12 @@ constexpr uint64_t kEveryMs = 1000;
 constexpr int      kMaxLines = 120;
 constexpr uint8_t  kPawnChannel = 3;   // ECC_Pawn
 
+constexpr uint64_t kBeginPlayMs = 2000;
+
 uint64_t g_nextMs = 0;
 int      g_lines = 0;
+uint64_t g_octaSeenAt = 0;
+bool     g_octaSaid = false, g_hostSaid = false, g_puppetSaid = false;
 
 // One reflected UFunction of `comp` with no argument and a byte, bool or float return. -1 (or NaN) when the class does
 // not carry it, said in the line as `?`.
@@ -82,14 +86,23 @@ float Flat(const FVector& a, const FVector& b) { return std::hypot(a.X - b.X, a.
 
 }  // namespace
 
-void LogColliders(void* octa, void* hostPlayer, void* puppetBody) {
-    Collider("octa.minSphere", GO::MinSphere(octa));
-    Collider("client puppet root", puppetBody ? E::RootComponentOf(puppetBody) : nullptr);
-    Collider("host player root", hostPlayer ? E::RootComponentOf(hostPlayer) : nullptr);
-}
-
 void Tick(void* octa, void* hostPlayer, void* puppetBody) {
     const uint64_t now = coop::net::NowMs();
+    // Each collider once, as its body resolves: a body's root component is its capsule (K2_GetRootComponent, as the
+    // code base reads one). The Octa's two seconds after it is first seen, once its BeginPlay has run.
+    if (octa && !g_octaSeenAt) g_octaSeenAt = now;
+    if (!g_octaSaid && octa && now - g_octaSeenAt >= kBeginPlayMs) {
+        g_octaSaid = true;
+        Collider("octa.minSphere", GO::MinSphere(octa));
+    }
+    if (!g_hostSaid && hostPlayer) {
+        g_hostSaid = true;
+        Collider("host player root", E::RootComponentOf(hostPlayer));
+    }
+    if (!g_puppetSaid && puppetBody) {
+        g_puppetSaid = true;
+        Collider("client puppet root", E::RootComponentOf(puppetBody));
+    }
     if (now < g_nextMs || g_lines >= kMaxLines) return;
     g_nextMs = now + kEveryMs;
     ++g_lines;
@@ -100,17 +113,19 @@ void Tick(void* octa, void* hostPlayer, void* puppetBody) {
     void* target = GO::TargetActor(octa);
     const coop::geom_octa_sync::Counters c = coop::geom_octa_sync::GetCounters();
     UE_LOGI("[OCTA-PROBE] t=%llu octa=%s(%.0f,%.0f,%.0f) puppet=%s(%.0f,%.0f,%.0f) dOctaPuppet=%.0f "
-            "hostPlayer=%s dOctaHost=%.0f target=%ls isAnim=%d overlaps min=%u prop=%u",
+            "hostPlayer=%s(%.0f,%.0f,%.0f) dOctaHost=%.0f target=%ls isAnim=%d overlaps min=%u prop=%u",
             static_cast<unsigned long long>(now), haveOcta ? "" : "unread", oa.X, oa.Y, oa.Z,
             puppetBody ? (havePuppet ? "" : "unread") : "unresolved", pa.X, pa.Y, pa.Z,
-            haveOcta && havePuppet ? Flat(oa, pa) : -1.f, haveHost ? "" : "unread",
-            haveOcta && haveHost ? Flat(oa, ha) : -1.f, target ? R::ClassNameOf(target).c_str() : L"none",
+            haveOcta && havePuppet ? Flat(oa, pa) : -1.f, hostPlayer ? (haveHost ? "" : "unread") : "unresolved",
+            ha.X, ha.Y, ha.Z, haveOcta && haveHost ? Flat(oa, ha) : -1.f, target ? R::ClassNameOf(target).c_str() : L"none",
             GO::IsAnim(octa) ? 1 : 0, static_cast<unsigned>(c.overlapMin), static_cast<unsigned>(c.overlapProp));
 }
 
 void Reset() {
     g_nextMs = 0;
     g_lines = 0;
+    g_octaSeenAt = 0;
+    g_octaSaid = g_hostSaid = g_puppetSaid = false;
 }
 
 }  // namespace coop::dev::octa_probe

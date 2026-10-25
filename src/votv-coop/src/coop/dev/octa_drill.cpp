@@ -33,6 +33,8 @@
 
 #include <cmath>
 #include <cstdint>
+#include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <vector>
@@ -52,16 +54,20 @@ constexpr const wchar_t* kOctaClass   = ue_wrap::profile::name::NpcClass_GeomOct
 constexpr const wchar_t* kGuardMember = L"startInvinc";
 
 constexpr uint64_t kEveryMs          = 250;
-constexpr float    kSpawnRingCm      = 1500.f;  // HOST: the Octa stands this far from the host
-constexpr float    kOutRingCm        = 1800.f;  // CLIENT: the walk-out ends this far from the Octa, outside minSphere
+constexpr float    kSpawnRingCm      = 1500.f;  // births: the Octa stands this far from the host
+constexpr float    kPlaceFromCm      = 2200.f;  // measure: the walker takes its place this far from the other player
+constexpr float    kSpawnNearCm      = 600.f;   // measure: the Octa spawns about this far from the walker, inside minSphere
+constexpr float    kSpawnAwayCm      = 1300.f;  // measure: and at least this far from the other player, outside minSphere
+constexpr uint64_t kStillMs          = 2000;    // measure: a puppet that has not moved for this long is in place
+constexpr float    kStillCm          = 30.f;    // ... where "not moved" is less than this between two polls
+constexpr float    kOutRingCm        = 1800.f;  // the walk-out ends this far from the Octa, outside minSphere
 constexpr float    kSphereCm         = 1000.f;  // minSphere's radius
 constexpr int      kStandpoints      = 8;
 constexpr float    kStandReachCm     = 60.f;    // a standpoint is reached within this
-constexpr float    kWalkReachCm      = 500.f;   // the walk to the mirror ends this near it
 constexpr int      kFirstWalkDeadlineS = 400;
 constexpr int      kOutWalkDeadlineS   = 120;
 constexpr uint32_t kBlastsWanted     = 3;       // the blasts the client waits for, and the verdicts the host waits for
-constexpr uint64_t kAggroBoundMs     = 30000;   // HOST: a puppet inside the sphere this long and no aggro is a dead Octa
+constexpr uint64_t kAggroBoundMs     = 30000;   // HOST: no aggro this long after the spawn is a dead Octa
 constexpr uint64_t kFireBoundMs      = 90000;   // CLIENT: this long with no new blast applied is a stalled wait
 constexpr uint64_t kBirthsBoundMs    = 60000;   // births: the enrol, and either arm's mirror, within this
 
@@ -81,9 +87,9 @@ bool HostWalks() {
     return host;
 }
 
-enum class HStep : uint8_t { Wait, Watch, Done };
-enum class WStep : uint8_t { Start, Walk, Stand, Out, Finished };   // the host's own walk (octa_measure_target=host)
-enum class CStep : uint8_t { Ready, Find, Walk, Stand, Out, Done };
+enum class HStep : uint8_t { Wait, Place, Watch, Done };
+enum class WStep : uint8_t { Stand, Out, Finished };   // the host's own legs after the spawn (octa_measure_target=host)
+enum class CStep : uint8_t { Ready, Place, Find, Stand, Out, Done };
 HStep g_hstep = HStep::Wait;
 CStep g_cstep = CStep::Ready;
 
@@ -95,11 +101,13 @@ std::shared_ptr<D::BackgroundWalk> g_walk;
 
 // HOST (measure)
 GS::Counters g_base{};            // the lane's counters when the Octa stood
-uint64_t g_nearAt = 0;            // the first tick a puppet stood inside the sphere
+uint64_t g_spawnMs = 0;           // the Octa was spawned; the aggro bound counts from here
 bool     g_aggroSaid = false;
-bool     g_collidersSaid = false; // [dev] the probe's one-time collider readout
-WStep    g_wstep = WStep::Start;  // octa_measure_target=host: the host's walk
-uint32_t g_capturedBase = 0;      // the host's explosion capture count when the host reached the Octa
+uint8_t  g_walkerSlot = 0;        // the slot the Octa must aggro: the host's own (0), or the client's puppet's
+FVector  g_puppetLast{};          // the client puppet's place at the last poll, and since when it has not moved
+uint64_t g_puppetStillAt = 0;
+WStep    g_wstep = WStep::Stand;  // octa_measure_target=host: the host's legs after the spawn
+uint32_t g_capturedBase = 0;      // the host's explosion capture count when the Octa was spawned
 uint32_t g_capturedSeen = 0;
 // CLIENT (measure)
 uint32_t g_appliedBase = 0;       // the explosion lane's applied count when the client reached the Octa
@@ -165,12 +173,15 @@ uint32_t NpcEidOf(void* actor) {
 
 float FlatDist(const FVector& a, const FVector& b) { return std::hypot(a.X - b.X, a.Y - b.Y); }
 
-// The first puppet's body that is live, or null.
-void* LivePuppetBody() {
-    for (uint8_t slot = 0; slot < coop::players::kMaxPeers; ++slot) {
-        coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(slot);
+// The first puppet's body that is live, with its slot; null when there is none.
+void* LivePuppetBody(uint8_t& slot) {
+    for (uint8_t s = 0; s < coop::players::kMaxPeers; ++s) {
+        coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(s);
         void* body = rp ? rp->GetActor() : nullptr;
-        if (body && R::IsLive(body)) return body;
+        if (body && R::IsLive(body)) {
+            slot = s;
+            return body;
+        }
     }
     return nullptr;
 }
@@ -217,28 +228,103 @@ void HostWait(coop::net::Session* s, void* me) {
         Fail("startInvinc did not resolve on the host's player, so a blast would not leave it alive");
         return;
     }
+    g_stepMs = coop::net::NowMs();
+    if (ArmOf() == Arm::Measure) {
+        g_hstep = HStep::Place;   // the walker takes its place first; the Octa is spawned beside it
+        return;
+    }
     FVector at{};
     if (!RingPoint(me, at)) return;
-    if (ArmOf() == Arm::Births) {
-        if (!CallGamemodeSpawn(at)) {
-            Fail("the gamemode's spawnPropThroughGamemode did not run");
-            return;
-        }
-        UE_LOGI("[OCTA-DRILL] host: births called spawnPropThroughGamemode(cube_0) at=%.0f,%.0f,%.0f", at.X, at.Y,
-                at.Z);
-    } else {
-        void* octa = coop::dev::spawn_npc::SpawnAt(kOctaClass, at);
-        if (!octa) {
-            Fail("the Octa did not spawn");
-            return;
-        }
-        g_octa.Set(octa);
-        g_base = GS::GetCounters();
-        GS::OpenVerdictWindow(kBlastsWanted, octa);
-        UE_LOGI("[OCTA-DRILL] host READY measure: Octa eid=%u at=%.0f,%.0f,%.0f", NpcEidOf(octa), at.X, at.Y, at.Z);
+    if (!CallGamemodeSpawn(at)) {
+        Fail("the gamemode's spawnPropThroughGamemode did not run");
+        return;
     }
+    UE_LOGI("[OCTA-DRILL] host: births called spawnPropThroughGamemode(cube_0) at=%.0f,%.0f,%.0f", at.X, at.Y, at.Z);
     g_hstep = HStep::Watch;
-    g_stepMs = coop::net::NowMs();
+}
+
+// measure: spawns the Octa about 600 cm from the walker, on the side away from the other player (a reachable point of a
+// ring about the walker, the one farthest from the other, at least 1300 cm from it). The Octa's sphere registers inside
+// its own finish-spawn and reports the walker's capsule as an overlap there, which is how it aggros, with the other
+// player out of the sphere's reach.
+void SpawnOctaBeside(void* me, const FVector& walker, const FVector& other) {
+    const std::vector<FVector> ring = D::ReachableStandpoints(me, walker, kSpawnNearCm, kStandpoints, kStandReachCm);
+    const FVector* best = nullptr;
+    float bestD = 0.f;
+    for (const FVector& p : ring) {
+        const float d = FlatDist(p, other);
+        if (d >= kSpawnAwayCm && (!best || d > bestD)) {
+            best = &p;
+            bestD = d;
+        }
+    }
+    if (!best) {
+        Fail("no reachable point 600 cm from the walker lies 1300 cm or more from the other player");
+        return;
+    }
+    void* octa = coop::dev::spawn_npc::SpawnAt(kOctaClass, *best);
+    if (!octa) {
+        Fail("the Octa did not spawn");
+        return;
+    }
+    g_octa.Set(octa);
+    g_base = GS::GetCounters();
+    GS::OpenVerdictWindow(kBlastsWanted, octa);
+    g_capturedBase = g_capturedSeen = coop::explosion_sync::GetCounters().captured;
+    g_wstep = WStep::Stand;
+    g_spawnMs = g_stepMs = coop::net::NowMs();
+    g_hstep = HStep::Watch;
+    UE_LOGI("[OCTA-DRILL] host READY measure: Octa eid=%u at=%.0f,%.0f,%.0f, %.0f cm from the walker (slot %u), %.0f "
+            "from the other player", NpcEidOf(octa), best->X, best->Y, best->Z, FlatDist(*best, walker),
+            static_cast<unsigned>(g_walkerSlot), bestD);
+}
+
+// measure: the walker takes its place. The client's: its director walks it (the client's own half) and the host spawns
+// the Octa once the puppet has stood still for two seconds, 1300 cm or more from the host. The host's: its own director
+// walks it 2200 cm from the client's puppet, and the Octa is spawned beside it.
+void HostPlace(void* me) {
+    uint8_t slot = 0;
+    void* puppet = LivePuppetBody(slot);
+    FVector hp{}, pp{};
+    if (!E::TryGetActorLocation(me, hp)) return;
+    if (!puppet || !E::TryGetActorLocation(puppet, pp)) {
+        if (Expired(kBirthsBoundMs)) Fail("the client's puppet never resolved on the host");
+        return;
+    }
+    if (HostWalks()) {
+        if (!g_walk) {
+            const std::vector<FVector> ring = D::ReachableStandpoints(me, pp, kPlaceFromCm, kStandpoints, kStandReachCm);
+            if (ring.empty()) {
+                Fail("no NavMesh route from the host reaches a standpoint 2200 cm from the client's puppet");
+                return;
+            }
+            g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kFirstWalkDeadlineS);
+            UE_LOGI("[OCTA-DRILL] host: walking to its place, 2200 cm from the client's puppet");
+            return;
+        }
+        const int state = g_walk->state.load();
+        if (state == 0) return;
+        if (state == 2) {
+            Fail("no walk reached the host's place: its route ended with none");
+            return;
+        }
+        g_walk.reset();
+        g_walkerSlot = 0;
+        UE_LOGI("[OCTA-DRILL] host in place t=%llu", Now());
+        if (!E::TryGetActorLocation(me, hp)) return;
+        SpawnOctaBeside(me, hp, pp);
+        return;
+    }
+    // The client is in place when its puppet is far from the host and has not moved for two seconds.
+    const uint64_t now = coop::net::NowMs();
+    if (!g_puppetStillAt || FlatDist(pp, g_puppetLast) >= kStillCm) {
+        g_puppetLast = pp;
+        g_puppetStillAt = now;
+        return;
+    }
+    if (now - g_puppetStillAt < kStillMs || FlatDist(pp, hp) < kSpawnAwayCm) return;
+    g_walkerSlot = slot;
+    SpawnOctaBeside(me, pp, hp);
 }
 
 void HostWatchBirths() {
@@ -254,31 +340,10 @@ void HostWatchBirths() {
 
 uint32_t CapturedCount() { return coop::explosion_sync::GetCounters().captured; }
 
-// octa_measure_target=host: the host's own player walks to the Octa with the director, stands until three blasts have
-// been captured on this machine, and walks out. The same legs, bounds and reach as the client's.
+// octa_measure_target=host: the host's own player, in place beside the Octa it spawned, stands until three blasts have
+// been captured on this machine and walks out, from the Octa's live place. The same bounds as the client's.
 void HostWalkTick(void* octa, void* me) {
     switch (g_wstep) {
-    case WStep::Start: {
-        FVector at{};
-        if (!E::TryGetActorLocation(octa, at)) return;
-        g_walk = D::StartBackgroundWalk(at, kWalkReachCm, kFirstWalkDeadlineS);
-        UE_LOGI("[OCTA-DRILL] host: walking to the Octa");
-        g_wstep = WStep::Walk;
-        return;
-    }
-    case WStep::Walk: {
-        const int state = g_walk ? g_walk->state.load() : 2;
-        if (state == 0) return;
-        if (state == 2) {
-            Fail("no walk reached the Octa: the host's route to it ended with none");
-            return;
-        }
-        g_capturedBase = g_capturedSeen = CapturedCount();
-        g_stepMs = coop::net::NowMs();
-        UE_LOGI("[OCTA-DRILL] host at the Octa t=%llu captured=%u", Now(), g_capturedBase);
-        g_wstep = WStep::Stand;
-        return;
-    }
     case WStep::Stand: {
         const uint32_t now = CapturedCount();
         if (now > g_capturedSeen) {
@@ -331,32 +396,31 @@ void HostWatchMeasure() {
     const GS::Counters c = GS::GetCounters();
     FVector op{};
     FVector pp{};
-    void* puppet = LivePuppetBody();
-    // The body that walks into the sphere: the client's puppet, or the host's own player for the control.
+    uint8_t puppetSlot = 0;
+    void* puppet = LivePuppetBody(puppetSlot);
+    // The body that stands in the sphere: the client's puppet, or the host's own player for the control.
     void* walker = HostWalks() ? me : puppet;
     const bool haveBoth = E::TryGetActorLocation(octa, op) && walker && E::TryGetActorLocation(walker, pp);
     const float dist = haveBoth ? FlatDist(op, pp) : -1.f;
     const uint64_t now = coop::net::NowMs();
-    if (!g_collidersSaid && Expired(2000)) {   // after the Octa's BeginPlay has run
-        g_collidersSaid = true;
-        coop::dev::octa_probe::LogColliders(octa, me, puppet);
-    }
     coop::dev::octa_probe::Tick(octa, me, puppet);
     if (HostWalks()) {
         HostWalkTick(octa, me);
         if (g_hstep == HStep::Done) return;
     }
-    if (!g_nearAt && haveBoth && dist <= kSphereCm) {
-        g_nearAt = now;
-        UE_LOGI("[OCTA-DRILL] host: the %s is %.0f cm from the Octa", HostWalks() ? "host player" : "client's puppet",
-                dist);
-    }
     if (!g_aggroSaid && c.hostAggro > g_base.hostAggro) {
         g_aggroSaid = true;
-        UE_LOGI("[OCTA-DRILL] host: the Octa aggro'd target=%s", GS::LastAggroTarget());
+        char want[16];
+        std::snprintf(want, sizeof(want), "slot:%u", static_cast<unsigned>(g_walkerSlot));
+        UE_LOGI("[OCTA-DRILL] host: the Octa aggro'd target=%s (the walker is %s) %llu ms after the spawn",
+                GS::LastAggroTarget(), want, static_cast<unsigned long long>(now - g_spawnMs));
+        if (std::strcmp(GS::LastAggroTarget(), want) != 0) {
+            Fail("aggro'd the wrong player");
+            return;
+        }
     }
-    if (g_nearAt && !g_aggroSaid && now - g_nearAt > kAggroBoundMs) {
-        Fail("no host aggro (the client's puppet stood within 1000 cm of the Octa for 30 s)");
+    if (!g_aggroSaid && now - g_spawnMs > kAggroBoundMs) {
+        Fail("no host aggro (30 s from the spawn)");
         return;
     }
     // An idle after the third verdict, with the puppet out of the sphere. The lane keeps the idle count at the moment
@@ -377,7 +441,8 @@ void HostTick(coop::net::Session* s) {
         HostWait(s, me);
         return;
     }
-    if (ArmOf() == Arm::Births) HostWatchBirths();
+    if (g_hstep == HStep::Place) HostPlace(me);
+    else if (ArmOf() == Arm::Births) HostWatchBirths();
     else HostWatchMeasure();
     if (g_hstep == HStep::Done) Unguard();
 }
@@ -402,30 +467,42 @@ void ClientFindMirror() {
         Unguard();
         return;
     }
-    if (HostWalks()) {
-        // The control: the host's player walks into the sphere; this client stands where it spawned, guarded.
-        UE_LOGI("[OCTA-DRILL] client: stands where it spawned, the host walks (mirror eid=%u)", eid);
-        Go(CStep::Done);
-        return;
-    }
-    FVector at{};
-    if (!E::TryGetActorLocation(octa, at)) return;
+    // In place already: the host spawned the Octa beside it, and it stands until the host's blasts have come.
     g_octa.Set(octa);
-    g_walk = D::StartBackgroundWalk(at, kWalkReachCm, kFirstWalkDeadlineS);
-    UE_LOGI("[OCTA-DRILL] client: walking to the Octa mirror eid=%u", eid);
-    Go(CStep::Walk);
+    g_appliedBase = g_appliedSeen = AppliedSum();
+    UE_LOGI("[OCTA-DRILL] client: the Octa mirror eid=%u stands beside it t=%llu applied=%u", eid, Now(), g_appliedBase);
+    Go(CStep::Stand);
 }
 
-void ClientWalk() {
-    const int state = g_walk ? g_walk->state.load() : 2;
-    if (state == 0) return;
-    if (state == 2) {
-        Fail("no walk reached the Octa: the client's route to it ended with none");
+// measure, the client's place: its director walks it 2200 cm from the host's puppet; the host spawns the Octa beside it
+// once it has stood still.
+void ClientPlace(void* me) {
+    coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(coop::players::kPeerIdHost);
+    void* hostBody = rp ? rp->GetActor() : nullptr;
+    FVector hp{};
+    if (!hostBody || !R::IsLive(hostBody) || !E::TryGetActorLocation(hostBody, hp)) {
+        if (Expired(kBirthsBoundMs)) Fail("the host's puppet never resolved on this client");
         return;
     }
-    g_appliedBase = g_appliedSeen = AppliedSum();
-    UE_LOGI("[OCTA-DRILL] client at the Octa t=%llu applied=%u", Now(), g_appliedBase);
-    Go(CStep::Stand);
+    if (!g_walk) {
+        const std::vector<FVector> ring = D::ReachableStandpoints(me, hp, kPlaceFromCm, kStandpoints, kStandReachCm);
+        if (ring.empty()) {
+            Fail("no NavMesh route from the client reaches a standpoint 2200 cm from the host");
+            return;
+        }
+        g_walk = D::StartBackgroundWalk(ring[0], kStandReachCm, kFirstWalkDeadlineS);
+        UE_LOGI("[OCTA-DRILL] client: walking to its place, 2200 cm from the host");
+        return;
+    }
+    const int state = g_walk->state.load();
+    if (state == 0) return;
+    if (state == 2) {
+        Fail("no walk reached the client's place: its route ended with none");
+        return;
+    }
+    g_walk.reset();
+    UE_LOGI("[OCTA-DRILL] client in place t=%llu", Now());
+    Go(CStep::Find);
 }
 
 // Stands until three host blasts have reached this client's explosion lane. The bound counts from the last blast that
@@ -498,13 +575,21 @@ void ClientTick() {
             g_calledEvent = true;
             UE_LOGI("[OCTA-DRILL] births client: called CustomEvent_5");
         }
-        Go(CStep::Find);
+        if (ArmOf() == Arm::Measure && HostWalks()) {
+            // The control: the host's player takes its place and meets the Octa; this client stands where it spawned,
+            // guarded, and has nothing to wait for.
+            UE_LOGI("[OCTA-DRILL] client: stands where it spawned, the host walks");
+            Go(CStep::Done);
+            return;
+        }
+        // measure: the client takes its place first; the Octa is spawned beside it after.
+        Go(ArmOf() == Arm::Measure ? CStep::Place : CStep::Find);
+        return;
+    case CStep::Place:
+        ClientPlace(me);
         return;
     case CStep::Find:
         ClientFindMirror();
-        return;
-    case CStep::Walk:
-        ClientWalk();
         return;
     case CStep::Stand:
         ClientStand(me);
@@ -539,10 +624,11 @@ void OnDisconnect() {
     g_nextMs = g_stepMs = 0;
     g_octa.Reset();
     g_base = GS::Counters{};
-    g_nearAt = 0;
+    g_spawnMs = 0;
     g_aggroSaid = false;
-    g_collidersSaid = false;
-    g_wstep = WStep::Start;
+    g_walkerSlot = 0;
+    g_puppetStillAt = 0;
+    g_wstep = WStep::Stand;
     g_capturedBase = g_capturedSeen = 0;
     coop::dev::octa_probe::Reset();
     g_appliedBase = g_appliedSeen = 0;
