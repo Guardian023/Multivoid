@@ -32,6 +32,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/event_relay_drill.cpp
     src/coop/dev/creature_hit_drill.cpp
     src/coop/dev/drill_hand.cpp
+    src/coop/dev/drill_hold.cpp
     src/coop/dev/announce_hold.cpp
     src/coop/dev/hostile_drill.cpp
     src/coop/dev/hostile_drill_act.cpp
