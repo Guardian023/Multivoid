@@ -7,7 +7,7 @@
 //              on each sign in turn ((-,-), (+,-), (-,+), (+,+): a lid's spring holds it at its open limit) until the
 //              door has turned. It lets go and, once its door has come to rest (the stream releases it only then),
 //              says so in the lobby chat with the rotation and place it rests at; its DONE follows the host's verdict.
-//   observe -- a second client (any later client does the same), which only watches. rejoin -- measure, then the joiner arm (swinger_drill_join.h).
+//   observe -- a second client (and any later one), which only watches. rejoin -- measure, then swinger_drill_join.h.
 // The client's chat lines (grab with the lid's two keys, settled, each on a state edge) and the poses a watching
 // peer takes are what it judges on: PASS when its copy of the door turned 10 degrees during the drag and, once at rest,
 // lies within 3 degrees (the angle between the two quaternions) and 5 cm of where the client's door rests; a client door that

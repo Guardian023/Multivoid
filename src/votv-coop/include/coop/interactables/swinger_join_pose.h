@@ -24,6 +24,9 @@ namespace coop::net { class Session; }
 
 namespace coop::swinger_join_pose {
 
+// True when the joiner send covers the lid under `laneKey`: a portable `mv_` key that fits the wire key.
+bool SendsRestPose(const std::wstring& laneKey);
+
 // HOST: send `peerSlot` the place of every open lid the container lane indexes. A lid without a portable key is
 // skipped (the receiver finds a lid by that key alone); one line per call says how many went and were skipped.
 void QueueConnectBroadcastForSlot(coop::net::Session* session, int peerSlot);
@@ -45,7 +48,7 @@ void OnDisconnect();
 
 namespace dev {   // called only from src/coop/dev/ (the swinger drill); compiled always, inert unless called
 // How the last rest pose for `key` stands: None (none arrived), Pending (parked), Applied (the lid was placed) or
-// Dropped (a stream or a local drag owned the lid, or the wait ran out).
+// Dropped (a stream or a local drag owned the lid, the wait ran out, or the pending cap refused the pose).
 enum class State : uint8_t { None, Pending, Applied, Dropped };
 State Outcome(const std::wstring& key);
 }  // namespace dev

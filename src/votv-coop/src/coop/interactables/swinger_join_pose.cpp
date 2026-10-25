@@ -46,8 +46,9 @@ constexpr size_t kPendingCap = 256;
 std::unordered_map<std::wstring, Pending> g_pending;
 uint64_t g_lastPass = 0;
 bool g_capSaid = false;
-// How each key's last pose ended: true placed, false dropped (a stream or a drag owned the lid, or the wait ran
-// out). Read by the dev query only; bounded by the keys the host sends, and cleared with the session.
+// How each key's last pose ended: true placed, false dropped (a stream or a drag owned the lid, the wait ran out,
+// or the pending cap refused it). Read by the dev query only (COLD: one write per pose, bounded by the world's lids
+// and kPendingCap, cleared with the session; the shape of remote_prop.h's dev::).
 std::unordered_map<std::wstring, bool> g_ended;
 std::unordered_set<std::wstring> g_failSaid;   // the keys whose failed placement has been said
 
@@ -78,6 +79,8 @@ Try TryApply(const std::wstring& key, const Rest& rest) {
 
 }  // namespace
 
+bool SendsRestPose(const std::wstring& laneKey) { return laneKey.rfind(L"mv_", 0) == 0 && laneKey.size() <= 31; }
+
 void QueueConnectBroadcastForSlot(coop::net::Session* s, int peerSlot) {
     if (!s || s->role() != coop::net::Role::Host) return;
     UE_ASSERT_GAME_THREAD("swinger_join_pose::QueueConnectBroadcastForSlot");
@@ -89,7 +92,7 @@ void QueueConnectBroadcastForSlot(coop::net::Session* s, int peerSlot) {
         if (!ue_wrap::swinger::TryReadOpen(lid.second, open) || !open) continue;  // a closed lid is locked at its default
         ue_wrap::FVector loc{};
         ue_wrap::FRotator rot{};
-        if (lid.first.rfind(L"mv_", 0) != 0 || lid.first.size() > 31 ||
+        if (!SendsRestPose(lid.first) ||
             !ue_wrap::engine::TryGetActorLocation(lid.second, loc) ||
             !ue_wrap::engine::TryGetActorRotation(lid.second, rot)) {
             ++skipped;
@@ -128,6 +131,7 @@ void OnReliable(const coop::net::SwingerRestPosePayload& p) {
             g_capSaid = true;
             UE_LOGW("swinger_join_pose: %zu rest poses already wait -- '%ls' refused", kPendingCap, key.c_str());
         }
+        g_ended[key] = false;
         return;
     }
     g_ended.erase(key);

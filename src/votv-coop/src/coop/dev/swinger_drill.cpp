@@ -13,6 +13,7 @@
 #include "coop/element/portable_identity.h"
 #include "coop/dev/toggle_drill.h"
 #include "coop/interactables/interactable_sync.h"
+#include "coop/interactables/swinger_join_pose.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"
@@ -114,6 +115,7 @@ struct Lid {
     bool perProcessKey = false;            // a child of a keyed prop (`k:<parent>/<part>`): its game Key differs
     ue_wrap::FRotator scanned{};           // the mesh's world rotation at the last scan that saw it move
     ue_wrap::FRotator restRot{};           // its rotation while the lid was not moving: where a move starts from
+    ue_wrap::FRotator armRot{};            // its rotation when the drill armed: where the door began, never updated
     float maxDev = 0.f;                    // the largest angle from restRot since the lid last started moving
     bool tracked = false;
     Clock::time_point lastMoveAt{}, nextSample{};
@@ -161,7 +163,7 @@ void ArmWatch() {
         l.ident = coop::element::PortableIdentity(o);
         l.perProcessKey = l.ident.rfind(L"k:", 0) == 0 && l.ident.find(L'/') != std::wstring::npos;
         const Reading r = Read(o);
-        l.scanned = l.restRot = r.meshWorld;
+        l.scanned = l.restRot = l.armRot = r.meshWorld;
         g_lids.push_back(std::move(l));
         Say("lid", g_lids.back(), r);
     }
@@ -202,7 +204,7 @@ void PrintRx() {
 // carry no phase, so a watching peer judges on these lines and never on a gap in the stream. The host admits a
 // client's chat at a fixed rate, so a peer's lines go out one per kTalkEveryMs.
 
-enum class Phase { Grab, Settled, Verdict, Go, Rest };
+enum class Phase { Grab, Settled, Verdict };
 struct ChatEvent {
     unsigned long long key;
     Phase what;
@@ -216,7 +218,6 @@ size_t g_outNext = 0;
 uint64_t g_nextSayMs = 0;
 unsigned long long g_chatMark = 0;   // the feed's newest row when the drill armed: older rows are another run's
 bool g_hostVerdict = false;   // the client has seen the host's verdict line
-bool g_go = false;            // the client has heard the host's `go` (the rejoin arm picks no lid before)
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(
@@ -247,18 +248,12 @@ std::vector<ChatEvent> NewChat() {
         top = (std::max)(top, r.key);
         const std::string rest(r.line.substr(at + std::strlen(kTag)));
         ChatEvent e{r.key, Phase::Verdict, {}, {}, {}};
-        // "grab <lane key> <game Key>", "settled <p> <y> <r> <x> <y> <z>", "verdict <role> <PASS|FAIL|INVALID>", and the
-        // host's word for a client that became world-ready: "go", or "rest <lane key> <p> <y> <r> <x> <y> <z>".
-        std::vector<std::string> word;
-        for (size_t from = 0; from < rest.size();) {
-            const size_t sp = rest.find(' ', from);
-            word.push_back(rest.substr(from, sp == std::string::npos ? std::string::npos : sp - from));
-            from = sp == std::string::npos ? rest.size() : sp + 1;
-        }
+        // "grab <lane key> <game Key>", "settled <p> <y> <r> <x> <y> <z>", "verdict <role> <PASS|FAIL|INVALID>". The
+        // host's word to a world-ready client (go, rest, void) is read by J::PollWord, not here.
+        const std::vector<std::string> word = J::SplitWords(rest);
         float v[6] = {};
-        const bool isRest = word.size() == 8 && word[0] == "rest";
-        if ((word.size() == 7 && word[0] == "settled") || isRest)
-            for (int i = 0; i < 6; ++i) v[i] = std::strtof(word[static_cast<size_t>(i) + (isRest ? 2 : 1)].c_str(), nullptr);
+        if (word.size() == 7 && word[0] == "settled")
+            for (int i = 0; i < 6; ++i) v[i] = std::strtof(word[static_cast<size_t>(i) + 1].c_str(), nullptr);
         if (word.size() == 3 && word[0] == "grab") {
             if (word[1].empty() || word[2].empty()) {   // an empty key would match the first lid that has none
                 UE_LOGW("[SWING-DRILL] %s refuses a grab line with an empty key", Role());
@@ -271,9 +266,6 @@ std::vector<ChatEvent> NewChat() {
             e.what = Phase::Settled;
             e.rot = {v[0], v[1], v[2]};
             e.at = {v[3], v[4], v[5]};
-        } else if (isRest || (word.size() == 1 && word[0] == "go")) {
-            e.what = isRest ? Phase::Rest : Phase::Go;
-            if (isRest) { e.mv = word[1]; e.rot = {v[0], v[1], v[2]}; e.at = {v[3], v[4], v[5]}; }
         } else if (word.size() == 3 && word[0] == "verdict") {
             e.mv = word[1];
             e.gameKey = word[2];
@@ -320,6 +312,7 @@ void Judge(bool timedOut) {
     const ue_wrap::FRotator mine = mesh ? E::GetComponentWorldRotation(mesh) : ue_wrap::FRotator{};
     ue_wrap::FVector mineAt{};
     if (door) E::TryGetActorLocation(door, mineAt);
+    const float fromArmDeg = mesh ? E::RotatorAngleDeg(mine, l->armRot) : -1.f;   // how far the door moved overall
     const char* result = "INVALID";
     if (g_v.clientDev < kSwingDeg) {
         UE_LOGW("[SWING-DRILL] %s INVALID the client's door turned only %.1f deg on the stream (need %.0f)", Role(),
@@ -333,13 +326,14 @@ void Judge(bool timedOut) {
         UE_LOGI("[SWING-DRILL] %s %s: follow -- this peer's door turned %.1f deg of the client's %.1f (need >= %.0f) | "
                 "settle -- this peer's door at (%.2f, %.2f, %.2f) place (%.1f, %.1f, %.1f), the client's at (%.2f, %.2f, "
                 "%.2f) place (%.1f, %.1f, %.1f): %.2f deg between the two orientations (need <= %.0f), %.1f cm apart "
-                "(need <= %.0f)%s | poses resolved %u, unresolved %u", Role(), result, hostDev, g_v.clientDev,
-                kFollowDeg, mine.Pitch, mine.Yaw, mine.Roll, mineAt.X, mineAt.Y, mineAt.Z, g_v.clientRest.Pitch,
-                g_v.clientRest.Yaw, g_v.clientRest.Roll, g_v.clientAt.X, g_v.clientAt.Y, g_v.clientAt.Z, settle,
-                kSettleDeg, apart, kSettleCm,
+                "(need <= %.0f)%s | poses resolved %u, unresolved %u | rests %.1f deg from where it began", Role(),
+                result, hostDev, g_v.clientDev, kFollowDeg, mine.Pitch, mine.Yaw, mine.Roll, mineAt.X, mineAt.Y,
+                mineAt.Z, g_v.clientRest.Pitch, g_v.clientRest.Yaw, g_v.clientRest.Roll, g_v.clientAt.X,
+                g_v.clientAt.Y, g_v.clientAt.Z, settle, kSettleDeg, apart, kSettleCm,
                 timedOut ? " (no settled line, or this peer's door never came to rest)" : "", g_v.resolved,
-                g_v.unresolved);
+                g_v.unresolved, fromArmDeg);
     }
+    J::NoteVerdict(l ? l->laneKey : std::wstring(), result, fromArmDeg);
     SayLine(std::string("verdict ") + Role() + " " + result);
     UE_LOGI("[SWING-DRILL] %s DONE", Role());
 }
@@ -372,8 +366,6 @@ void CheckKey(const ChatEvent& e) {
 }
 
 void OnChat(const ChatEvent& e) {
-    if (e.what == Phase::Go) { g_go = true; return; }   // the host has no verdict yet: the life-1 sequence
-    if (e.what == Phase::Rest) { if (Acts()) J::Begin(e.mv, e.rot, e.at); return; }   // its verdict is given: judge
     if (e.what == Phase::Verdict) {   // the client is done once the host has judged
         if (Acts() && e.mv == "host") g_hostVerdict = true;
         return;
@@ -485,6 +477,12 @@ void Go(Step s) {
     g_stepSince = Clock::now();
 }
 
+void EndActor() {
+    g_step = Step::Done;
+    g_walk.reset();
+    g_grab.reset();
+}
+
 void LogTarget(const char* what) {
     void* d = g_target.Get();
     if (!d) { UE_LOGI("[SWING-DRILL] client %s -- the door is gone", what); return; }
@@ -538,11 +536,16 @@ bool PickTarget(void* player, const char*& why) {
     if (!E::TryGetActorLocation(player, me)) { why = "the player's location could not be read"; return false; }
     why = "no non-lockable lid among the nearest few that a route reaches";
     std::vector<std::pair<float, size_t>> perProcess, others;
+    bool covered = false;   // a lid the joiner send covers exists (the rejoin arm picks only those)
     for (size_t i = 0; i < g_lids.size(); ++i) {
+        if (Rejoin() && !coop::swinger_join_pose::SendsRestPose(g_lids[i].laneKey)) continue;
+        covered = true;
         void* d = g_lids[i].ref.Get();
         ue_wrap::FVector at{};
         if (d && E::TryGetActorLocation(d, at)) (g_lids[i].perProcessKey ? perProcess : others).emplace_back(Dist(me, at), i);
     }
+    if (!covered && !g_lids.empty())
+        why = "no non-lockable lid has a lane key the joiner send covers (an mv_ key of at most 31 characters)";
     float best = 1e30f;
     if (!PickAmong(player, me, perProcess, best) && !PickAmong(player, me, others, best)) return false;
     UE_LOGI("[SWING-DRILL] client target key='%ls' identity '%ls' game Key '%ls'%s at (%.1f, %.1f, %.1f), a %.0f cm route "
@@ -559,7 +562,7 @@ void TickActor(Clock::time_point now) {
     if (!player || !R::IsLive(player) || !E::GetController(player)) return;
     switch (g_step) {
     case Step::Pick: {
-        if (Rejoin() && !g_go) return;   // the host's word first: a `rest` ends this life's drag before it starts
+        if (Rejoin() && !J::HeardGo()) return;   // the host's word first: a `rest` or a `void` ends this life's drag
         const char* why = "";
         if (!PickTarget(player, why)) { Invalid(why); return; }
         g_walk = coop::director::StartBackgroundWalk(g_targetAt, kReachCm, kWalkDeadlineS, /*carry=*/false);
@@ -690,9 +693,7 @@ void TickActor(Clock::time_point now) {
         }
         PrintRx();
         UE_LOGI("[SWING-DRILL] client %s: the door turned %.1f deg at its peak", Rejoin() ? "LIFE DONE" : "DONE", g_peakDev);
-        g_step = Step::Done;
-        g_walk.reset();
-        g_grab.reset();
+        EndActor();
         return;
     case Step::Done:
     case Step::Invalid:
@@ -707,6 +708,9 @@ bool IsEnabled() { return ArmOf() != Arm::Off; }
 void Tick(coop::net::Session* session) {
     if (!IsEnabled() || !session || !session->connected()) return;
     if (!SW::EnsureResolved()) return;
+    // The rejoin client reads the host's word from its first connected tick, ahead of the arm gate: a live row fades
+    // after a few seconds and the join takes longer. A `void` word or the word bound ends this life.
+    if (Rejoin() && Acts() && J::PollWord(kTag, Clock::now()) == J::Word::Void) EndActor();
     if (!g_armed) {
         // The host's world is up at once; a client's once its join is over.
         if (!coop::roster::LocalIsHost() &&
@@ -719,7 +723,7 @@ void Tick(coop::net::Session* session) {
     const Clock::time_point now = Clock::now();
     PumpOutbox();
     if (Rejoin() && coop::roster::LocalIsHost())   // the host's word to each client that became world-ready
-        J::GreetReadySlots(*session, g_v.said && g_v.lid >= 0 ? g_lids[static_cast<size_t>(g_v.lid)].laneKey : std::wstring(), &SayLine);
+        J::GreetReadySlots(*session, &SayLine);
     TickWatch(now);
     if (Acts() && !J::Active()) TickActor(now);
     J::Tick(now);
@@ -739,7 +743,7 @@ void OnDisconnect() {
     g_outNext = 0;
     g_nextSayMs = 0;
     g_chatMark = 0;
-    g_hostVerdict = g_go = false;
+    g_hostVerdict = false;
     J::Reset();
     g_haveRead = g_releaseEdge = false;
     g_target.Reset();
