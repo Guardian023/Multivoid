@@ -305,6 +305,7 @@ inline constexpr RefFn kRefFns[] = {
     {L"powercontrol_c", L"virus_pb", L"powercontrol_c.virus_pb", 0x6a2d5d90ab51fa2dull, 0xc5e644aa4066e676ull},
     {L"primitivecomponent", L"addimpulse", L"primitivecomponent.addimpulse", 0xf91352f4820d6d78ull, 0xcbf29ce484222325ull},
     {L"primitivecomponent", L"getoverlappingactors", L"primitivecomponent.getoverlappingactors", 0x2793d79b1756c517ull, 0xcbf29ce484222325ull},
+    {L"primitivecomponent", L"isoverlappingactor", L"primitivecomponent.isoverlappingactor", 0xce57f4d16f3f17f8ull, 0xcbf29ce484222325ull},
     {L"primitivecomponent", L"setphysicsangularvelocityindegrees", L"primitivecomponent.setphysicsangularvelocityindegrees", 0xe11ba67ff77558d6ull, 0xcbf29ce484222325ull},
     {L"primitivecomponent", L"setphysicslinearvelocity", L"primitivecomponent.setphysicslinearvelocity", 0x977a7e6c3b4e7196ull, 0xcbf29ce484222325ull},
     {L"prop_box_c", L"receiveactorbeginoverlap", L"prop_box_c.receiveactorbeginoverlap", 0x21b3fbf6adea9c01ull, 0xb226fa573bcd098full},
