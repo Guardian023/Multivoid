@@ -27,7 +27,6 @@
 #include "coop/interactables/portable_pc_lid.h"  // the portable PC's lid lane
 #include "coop/interactables/floppy_slot_sync.h"
 #include "coop/interactables/floppybox_sync.h"  // the disc crate LIFO lane
-#include "coop/props/container_birth.h"
 #include "coop/props/container_contents_sync.h"  // the world-container GObjStack slice
 #include "coop/interactables/signal_catch_sync.h"
 #include "coop/interactables/signal_sync.h"
