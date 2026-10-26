@@ -52,19 +52,25 @@ namespace PT = coop::prop_element_tracker;
 // TriggerForSlot on it.
 std::atomic<coop::net::Session*> g_session_ptr{nullptr};
 
-// The running drain's enumeration, game thread only.
-std::vector<void*> g_snapshotCandidates;
-std::vector<coop::element::ElementId> g_snapshotEids;  // parallel; same idx as g_snapshotCandidates
-// Each candidate's GUObjectArray index, captured while it was live: DrainChunk re-validates with
-// IsLiveByIndex, so a candidate purged between enumeration and its tick is rejected without a
-// dereference.
-std::vector<int32_t> g_snapshotInternalIdxs;
+// The running drain's enumeration, game thread only. A candidate is an ELEMENT ID, not an actor:
+// an entity re-skins mid-drain (a pile becomes a clump becomes a pile), so the actor the
+// enumeration saw may be gone at the candidate's turn while the eid still names the entity. The
+// drain resolves each eid to its element's current actor at its turn (MTA's CMapManager builds a
+// joiner's entity list in one pass over its elements, not over a copy of their pointers).
+std::vector<coop::element::ElementId> g_snapshotCandidates;
 size_t g_snapshotCandidateIdx = 0;
 // PropSpawns actually sent this drain (skips excluded); reported in SnapshotComplete.
 uint32_t g_snapshotSentTotal = 0;
-// Rows left out this drain because the prop's location or rotation could not be read; reported at
-// completion.
-uint32_t g_snapshotUnreadTotal = 0;
+// Why a candidate that resolved to a live actor still sent no row; each is counted per drain and
+// named in the completion line.
+enum class Skip : uint8_t { kNone, kChildActor, kDevSkipChipPile, kNotLive, kWireSuppressed,
+                            kPerPlayer, kNoIdentity, kUnread, kCount };
+constexpr const char* kSkipNames[static_cast<size_t>(Skip::kCount)] = {
+    "none", "child_actor", "dev_skip_chippile", "not_live", "wire_suppressed", "per_player",
+    "no_identity", "unread"};
+uint32_t g_snapshotSkipped[static_cast<size_t>(Skip::kCount)]{};
+// Candidates whose element or actor was gone at their turn (the one expected drop), per drain.
+uint32_t g_snapshotDropped = 0;
 // The slot being drained (-1 = none) and the slots waiting their turn.
 int g_currentTargetSlot = -1;
 std::vector<int> g_pendingSlots;
@@ -151,28 +157,22 @@ void StartEnumerationFor(int peerSlot) {
     // the same generation.
     g_drainSeedGen = PT::SeedGeneration();
     g_snapshotCandidates.clear();
-    g_snapshotEids.clear();
-    g_snapshotInternalIdxs.clear();
     g_snapshotCandidateIdx = 0;
     int skippedDying = 0, skippedDead = 0;
     // SnapshotActorsByType copies (actor, id, index) under the registry mutex; no Element is
-    // dereferenced after it releases, and the eid travels with the actor so the drain takes no
-    // per-candidate lock.
+    // dereferenced after it releases. Only the eid is kept: the actor is judged live now, for the
+    // majority-dead guard, and resolved again from the eid at the candidate's turn.
     std::vector<coop::element::Registry::ActorIdPair> pairs;
     const size_t trackedCount =
         coop::element::Registry::Get().SnapshotActorsByType(
             coop::element::ElementType::Prop, pairs);
     g_snapshotCandidates.reserve(trackedCount);
-    g_snapshotEids.reserve(trackedCount);
-    g_snapshotInternalIdxs.reserve(trackedCount);
     for (const auto& pr : pairs) {
         if (!pr.actor) { ++skippedDead; continue; }
         // IsLiveByIndex: a mass purge does not fire K2_DestroyActor, so dying props linger in the
         // registry, and IsLive on the freed pointer faults. Only the GUObjectArray slot is read.
         if (!R::IsLiveByIndex(pr.actor, pr.internalIdx)) { ++skippedDying; continue; }
-        g_snapshotCandidates.push_back(pr.actor);
-        g_snapshotEids.push_back(pr.id);
-        g_snapshotInternalIdxs.push_back(pr.internalIdx);
+        g_snapshotCandidates.push_back(pr.id);
     }
     // A registry whose dying elements outnumber its live ones is mid-purge, not a live world: this
     // closes the window (up to 4 s) between a world transition and the reaper's next scan raising
@@ -193,7 +193,8 @@ void StartEnumerationFor(int peerSlot) {
             g_snapshotCandidates.size(), peerSlot, trackedCount, skippedDead, skippedDying, kSnapshotChunkSize);
 
     g_snapshotSentTotal = 0;
-    g_snapshotUnreadTotal = 0;
+    std::fill(std::begin(g_snapshotSkipped), std::end(g_snapshotSkipped), 0u);
+    g_snapshotDropped = 0;
     // SnapshotBegin carries the candidate count (the progress denominator) on the Default lane ahead
     // of the first PropSpawn; in-lane ordering keeps it first. Host only.
     if (auto* s = g_session_ptr.load(std::memory_order_acquire)) {
@@ -208,12 +209,11 @@ void StartEnumerationFor(int peerSlot) {
 // (which must not send SnapshotComplete).
 void ClearDrainState_() {
     g_snapshotCandidates.clear(); g_snapshotCandidates.shrink_to_fit();
-    g_snapshotEids.clear(); g_snapshotEids.shrink_to_fit();
-    g_snapshotInternalIdxs.clear(); g_snapshotInternalIdxs.shrink_to_fit();
     g_snapshotCandidateIdx = 0;
     g_currentTargetSlot = -1;
     g_snapshotSentTotal = 0;
-    g_snapshotUnreadTotal = 0;
+    std::fill(std::begin(g_snapshotSkipped), std::end(g_snapshotSkipped), 0u);
+    g_snapshotDropped = 0;
 }
 
 // Dequeues through TriggerForSlot until a drain starts or the queue empties: a not-ready slot is
@@ -284,8 +284,20 @@ void CompleteDrainForCurrentSlot(coop::net::Session* s) {
         if (!QueuedBehind_(g_currentTargetSlot)) s->CloseJoinGate(g_currentTargetSlot);
         if (sent) CloseBracket_(g_currentTargetSlot);
     }
-    UE_LOGI("snapshot: drain complete for slot %d (%zu candidates, %u sent, %u left out unread)",
-            g_currentTargetSlot, g_snapshotCandidates.size(), g_snapshotSentTotal, g_snapshotUnreadTotal);
+    // Every candidate is accounted for: sent, skipped for a named reason, or dropped as gone.
+    uint32_t skippedTotal = 0;
+    char skipDetail[160] = "";
+    size_t skipLen = 0;
+    for (size_t r = 0; r < static_cast<size_t>(Skip::kCount); ++r) {
+        if (g_snapshotSkipped[r] == 0) continue;
+        skippedTotal += g_snapshotSkipped[r];
+        const int w = std::snprintf(skipDetail + skipLen, sizeof(skipDetail) - skipLen, "%s%s=%u",
+                                    skipLen ? ", " : "", kSkipNames[r], g_snapshotSkipped[r]);
+        if (w > 0 && skipLen + static_cast<size_t>(w) < sizeof(skipDetail)) skipLen += static_cast<size_t>(w);
+    }
+    UE_LOGI("snapshot: drain complete for slot %d (%zu candidates: %u sent, %u skipped (%s), %u dropped (gone))",
+            g_currentTargetSlot, g_snapshotCandidates.size(), g_snapshotSentTotal, skippedTotal,
+            skipLen ? skipDetail : "none", g_snapshotDropped);
     coop::dev::eid_lifetime_trace::EmitVerdict();  // read-only: capture-eid vs wire-eid verdict
     ClearDrainState_();
     // The next pending slot re-enumerates: the world may have changed since this drain started.
@@ -293,30 +305,34 @@ void CompleteDrainForCurrentSlot(coop::net::Session* s) {
 }
 
 // The one PropSpawnPayload builder, shared by the bracketed drain and the incremental express.
-// False when the actor is not expressible: null, dead, wire-suppressed, per-player, or keyless and
-// not a chipPile. internalIdx >= 0 re-checks liveness by index (the drain's cached index); < 0
-// means the caller confirmed it. A keyless chipPile keeps key.len 0, so the receiver takes the
-// eid-only lane.
+// False when the actor is not expressible: null, dead, a child actor, wire-suppressed, per-player,
+// or keyless and not a chipPile; `why`, when given, names which (Skip). internalIdx >= 0 re-checks
+// liveness by index; < 0 means the caller confirmed it. A keyless chipPile keeps key.len 0, so the
+// receiver takes the eid-only lane.
 bool BuildPropSpawnPayload_(void* obj, coop::element::ElementId eid, int32_t internalIdx,
-                            coop::net::PropSpawnPayload& p, int matchSlot, bool* unread = nullptr) {
-    if (!obj) return false;
+                            coop::net::PropSpawnPayload& p, int matchSlot, Skip* why = nullptr) {
+    const auto skip = [why](Skip reason) {
+        if (why) *why = reason;
+        return false;
+    };
+    if (!obj) return skip(Skip::kNotLive);
     // A child actor (a kerfur's eye cam) is never expressed: without MarkPropElement it would go
     // out as a keyed payload with elementId 0 and re-create a floating mirror the gated destroy
     // seam never tears down. Predicate and rationale: ue_wrap::engine::IsChildActor.
-    if (ue_wrap::engine::IsChildActor(obj)) return false;
+    if (ue_wrap::engine::IsChildActor(obj)) return skip(Skip::kChildActor);
     // Dev only, ini-gated: skipping chipPile expression leaves the joiner's natives unclaimed, so
     // its sweep would doom them en masse and the completeness floor must keep them. A no-op without
     // the ini key.
     if (coop::dev::force_overdestroy_test::HostSkipChipPileExpression() && ue_wrap::prop::IsChipPile(obj)) {
-        return false;
+        return skip(Skip::kDevSkipChipPile);
     }
     // By index: a candidate purged since enumeration is rejected without touching freed memory.
-    if (internalIdx >= 0 && !R::IsLiveByIndex(obj, internalIdx)) return false;
+    if (internalIdx >= 0 && !R::IsLiveByIndex(obj, internalIdx)) return skip(Skip::kNotLive);
     const std::wstring cls = R::ClassNameOf(obj);
     // The same wire-suppress and per-player skips as the Init observer: an intermediate variant
     // (mushroom7_C) and a per-player prop never cross the wire.
-    if (coop::prop_lifecycle::IsWireSuppressedPropClass(cls)) return false;
-    if (coop::prop_lifecycle::IsPerPlayerPropClass(cls)) return false;
+    if (coop::prop_lifecycle::IsWireSuppressedPropClass(cls)) return skip(Skip::kWireSuppressed);
+    if (coop::prop_lifecycle::IsPerPlayerPropClass(cls)) return skip(Skip::kPerPlayer);
     p.className.len = 0;
     for (size_t j = 0; j < cls.size() && j < 63; ++j) {
         p.className.data[p.className.len++] = static_cast<char>(cls[j]);
@@ -328,7 +344,7 @@ bool BuildPropSpawnPayload_(void* obj, coop::element::ElementId eid, int32_t int
         // no stable identity, matching the client sweep's universe test.
         if (!ue_wrap::prop::IsTrashActor(obj) ||
             eid == coop::element::kInvalidId || eid == 0) {
-            return false;
+            return skip(Skip::kNoIdentity);
         }
         // key.len stays 0: the eid-only lane.
     } else {
@@ -347,8 +363,7 @@ bool BuildPropSpawnPayload_(void* obj, coop::element::ElementId eid, int32_t int
     ue_wrap::FVector loc{};
     ue_wrap::FRotator rot{};
     if (!ue_wrap::engine::TryGetActorLocation(obj, loc) || !ue_wrap::engine::TryGetActorRotation(obj, rot)) {
-        if (unread) *unread = true;
-        return false;
+        return skip(Skip::kUnread);
     }
     p.look = coop::pile_look::Capture(obj);
     p.locX = loc.X; p.locY = loc.Y; p.locZ = loc.Z;
@@ -523,31 +538,32 @@ void DrainChunk() {
                                     g_snapshotCandidates.size());
     int sent = 0;
     for (; g_snapshotCandidateIdx < limit; ++g_snapshotCandidateIdx) {
-        void* obj = g_snapshotCandidates[g_snapshotCandidateIdx];
-        // Liveness re-validated by the cached index (a purge since enumeration); once it passes,
-        // the UFunction reads below are safe, since the GC purge runs on the game thread and cannot
-        // interleave mid-tick.
-        const int32_t cachedIdx = g_snapshotCandidateIdx < g_snapshotInternalIdxs.size()
-                                      ? g_snapshotInternalIdxs[g_snapshotCandidateIdx]
-                                      : -1;
-        if (!obj || !R::IsLiveByIndex(obj, cachedIdx)) continue;
-        // The eid cached at enumeration.
-        const coop::element::ElementId eid =
-            g_snapshotCandidateIdx < g_snapshotEids.size()
-                ? g_snapshotEids[g_snapshotCandidateIdx]
-                : coop::element::kInvalidId;
+        const coop::element::ElementId eid = g_snapshotCandidates[g_snapshotCandidateIdx];
+        // The eid's CURRENT actor: an entity that re-skinned since the enumeration (a pile that
+        // became a clump) is the same candidate in its new form, and its row is built from the
+        // actor as it is now. Liveness is re-validated by the element's cached index (a purge since
+        // enumeration); once it passes, the UFunction reads below are safe, since the GC purge runs
+        // on the game thread and cannot interleave mid-tick.
+        const coop::element::Element* el = coop::element::Registry::Get().Get(eid);
+        void* obj = el ? el->GetActor() : nullptr;
+        if (!obj || !R::IsLiveByIndex(obj, el->GetInternalIdx())) {
+            // The one expected drop: the entity is gone, not replaced.
+            if (++g_snapshotDropped == 1 || g_snapshotDropped % 100 == 0)
+                UE_LOGI("snapshot: eid=%u gone at its turn -- dropped (#%u)", static_cast<unsigned>(eid),
+                        g_snapshotDropped);
+            continue;
+        }
         coop::net::PropSpawnPayload p{};
         // -1: liveness was just re-validated. The target slot makes this the join drain, so a pile
         // gets its save-time match key.
-        bool unread = false;
-        if (!BuildPropSpawnPayload_(obj, eid, -1, p, g_currentTargetSlot, &unread)) {
+        Skip why = Skip::kNone;
+        if (!BuildPropSpawnPayload_(obj, eid, -1, p, g_currentTargetSlot, &why)) {
+            ++g_snapshotSkipped[static_cast<size_t>(why)];
             // A failed read is a dispatch that faulted, which a retry repeats: the row is left out,
             // named here and counted in the completion line.
-            if (unread) {
-                ++g_snapshotUnreadTotal;
+            if (why == Skip::kUnread)
                 UE_LOGW("snapshot: row for eid=%u (%p) left out for slot %d -- its location or rotation could not be read",
                         static_cast<unsigned>(eid), obj, g_currentTargetSlot);
-            }
             continue;
         }
         // The drained prop is the snapshot's own send, so its spawn, clump generation and save record
@@ -585,9 +601,9 @@ static void BroadcastIncrementalPropSpawn_(coop::net::Session* s, void* actor, c
     coop::net::PropSpawnPayload p{};
     // -1 and -1: liveness confirmed by the caller, and a mid-game express has no save-loaded twin
     // to stamp a match key for.
-    bool unread = false;
-    if (!BuildPropSpawnPayload_(actor, eid, -1, p, -1, &unread)) {   // not expressible
-        if (unread)
+    Skip why = Skip::kNone;
+    if (!BuildPropSpawnPayload_(actor, eid, -1, p, -1, &why)) {   // not expressible
+        if (why == Skip::kUnread)
             UE_LOGW("snapshot: incremental PropSpawn for %sprop %p (eid=%u) not sent -- its location or rotation "
                     "could not be read",
                     kindTag, actor, static_cast<unsigned>(eid));
