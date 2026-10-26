@@ -164,7 +164,6 @@ constexpr ClientAuthorship AuthorshipOf(ReliableKind k) {
     case ReliableKind::RosterRow:
     case ReliableKind::PlayerHit:
     case ReliableKind::BalanceSync:
-    case ReliableKind::CoffeeDeviceState:
     case ReliableKind::KeypadState:
     case ReliableKind::SnapshotBegin:
     case ReliableKind::SnapshotComplete:

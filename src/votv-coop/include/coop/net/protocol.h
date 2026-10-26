@@ -1175,15 +1175,13 @@ enum class ReliableKind : uint8_t {
     // host is a listen server, so the host is the only sender. GeomOctaEventPayload.
     GeomOctaEvent = 200,
 
-    // Client to host: a coffee vending machine or coffee maker action, or a coffee cup's final
-    // eaten edge. The host resolves the keyed actor and runs the game's action for the requesting
-    // player's puppet, so shared points and cup/empty-cup births have one author.
+    // CLIENT->HOST: this client pressed a coffee vending machine or a coffee maker (action 4), which its own copy
+    // refused to run. The host resolves the device by its key, judges the sender's reach and that the key is
+    // exactly one of the two classes, then runs the game's own action on its copy with the sender's puppet as the
+    // player; the debit crosses by BalanceSync and the cup by the prop spawn lane. Never relayed; not pre-world;
+    // a press whose sender has no body on the host yet waits in its queue. Late join: none, a press is an act.
     // CoffeeActionIntentPayload.
     CoffeeActionIntent = 194,
-
-    // Host to all and at connect replay: vending/maker state and a coffee cup's first flag and remaining uses.
-    // CoffeeDeviceStatePayload.
-    CoffeeDeviceState = 203,
 };
 
 #pragma pack(push, 1)
@@ -2176,23 +2174,13 @@ struct PointSackRedeemPayload {
 };
 static_assert(sizeof(PointSackRedeemPayload) == 40, "PointSackRedeemPayload must be 40 bytes");
 
-// A coffee appliance action: its host-allocated prop element and the selected game action.
+// A client's press of a coffee device (CoffeeActionIntent): the device by its prop key, the same on every peer.
+// The host pins the action to the brew itself, so no action byte travels.
 struct CoffeeActionIntentPayload {
-    uint32_t elementId;
-    uint8_t verb;       // 0 appliance action, 1 coffee cup eaten (host spawns the empty cup)
-    uint8_t action;
-    uint8_t reserved[2];
+    WireKey key;  // 32 -- the vending machine's or the coffee maker's prop key
 };
-static_assert(sizeof(CoffeeActionIntentPayload) == 8, "CoffeeActionIntentPayload must be 8 bytes");
-
-struct CoffeeDeviceStatePayload {
-    uint32_t elementId;
-    uint8_t device;     // 0 vending, 1 maker, 2 coffee cup
-    uint8_t flags;      // maker: hasCup/hasCoffee/coffeeReady/hasPower; vending: processing; cup: first sip remains
-    uint16_t reserved;  // 2 -- zeroed; keeps the payload naturally aligned to 12 bytes on the wire
-    int32_t balance;    // vending's inserted points, or coffee-cup uses remaining; otherwise ignored
-};
-static_assert(sizeof(CoffeeDeviceStatePayload) == 12, "CoffeeDeviceStatePayload must be 12 bytes");
+static_assert(sizeof(CoffeeActionIntentPayload) == 32, "CoffeeActionIntentPayload must be 32 bytes");
+static_assert(sizeof(CoffeeActionIntentPayload) <= 256 - 20 - 8, "CoffeeActionIntentPayload must fit one datagram");
 
 // A client's press of the tool gun's remover (RemoverRequest): the element it hit, the camera point it looked
 // from and the point its shot struck, in world centimetres. The host judges all three; none is trusted.
