@@ -166,6 +166,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/coffee_drill_cast.cpp
     src/coop/dev/coffee_drill_client.cpp
     src/coop/dev/coffee_drill_host.cpp
+    src/coop/dev/coffee_drill_maker.cpp
     src/coop/dev/grid_drill.cpp
     src/coop/dev/grid_drill_checks.cpp
     src/coop/dev/grid_drill_upgrade.cpp

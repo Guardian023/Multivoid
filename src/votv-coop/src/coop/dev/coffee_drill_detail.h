@@ -35,7 +35,9 @@ inline constexpr float   kMakerReachCm = 90.f;  // ... near the maker it carries
 inline constexpr float   kAboveCm = 60.f;       // a drop over the maker starts this far above its origin
 inline constexpr float   kCupLiftCm = 30.f;     // the host's spare cups start this far above the stand point
 inline constexpr float   kOverMakerCm = 45.f;   // a carried cup counts as over the maker within this, flat
-inline constexpr int     kAimSettleTicks = 60;  // the camera holds on the maker this many ticks before the release
+inline constexpr float   kFeetCm = 150.f;       // a carry has arrived only with the player this near the maker's height
+inline constexpr float   kReleaseMinCm = 10.f;  // a cup is let go only this far above the maker's origin ...
+inline constexpr float   kReleaseMaxCm = 120.f; // ... and not farther
 
 // ---- the cast (coffee_drill_cast.cpp) ----
 
@@ -81,14 +83,30 @@ bool HeldByDrive(void* actor);
 // The live vending machine nearest `player`, or null when the world holds none.
 void* NearestVending(void* player);
 
+// Where this peer's copy of the maker is: one line now (`when` names the moment), and every 5 s from the first
+// tick that holds a maker one line with its place, its speed, how often its hit handler ran in those 5 s and the
+// classes of what touched it (coffee_drill_maker.cpp).
+void LogMakerAt(const char* when);
+void MakerProbeTick();
+void MakerProbeReset();
+
+// The vending machine's floor stand: its place projected onto the nav mesh; false when none lies near it.
+bool VendingStand(void* player, void* vending, ue_wrap::FVector& place, ue_wrap::FVector& stand);
+
 // The host's pick of a socket: a free level socket that is powered, with a nominal stand point on the nav mesh, a
-// client stand beside it, and a clear line from a knee-high point there to the maker's spot.
+// client stand and a host stand beside it, and a clear line from a knee-high point there to the maker's spot.
+// Only a socket on the vending machine's floor qualifies: both stands within kFloorCm of height of `vendStand`,
+// and a route from there to the client stand that stays within kFloorCm of that height and is at most kRouteCm
+// long. The shortest such route wins.
+inline constexpr float kFloorCm = 120.f;
+inline constexpr float kRouteCm = 2500.f;
 struct Pick {
     void* sock = nullptr;
-    ue_wrap::FVector at{}, fwd{}, stand{}, makerAt{};
-    int free = 0, powered = 0, placed = 0, blocked = 0;
+    ue_wrap::FVector at{}, fwd{}, stand{}, makerAt{}, clientNav{}, hostNav{};
+    float routeCm = 0.f, maxDzCm = 0.f;
+    int free = 0, powered = 0, placed = 0, blocked = 0, offFloor = 0, noRoute = 0;
 };
-bool ChooseSocket(void* player, Pick& out);
+bool ChooseSocket(void* player, const ue_wrap::FVector& vendStand, Pick& out);
 
 // ---- the chat edges (coffee_drill.cpp) ----
 

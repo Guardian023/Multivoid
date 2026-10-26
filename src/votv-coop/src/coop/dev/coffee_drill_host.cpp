@@ -11,6 +11,7 @@
 
 #include "ue_wrap/actors/prop.h"
 #include "ue_wrap/core/log.h"
+#include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/devices/coffee.h"
 #include "ue_wrap/devices/cord.h"
@@ -72,14 +73,23 @@ bool FreshReady() {
 // ---- the cast: a maker plugged into a powered wall socket ----
 
 bool SetUp(void* player) {
-    Pick pick;
-    const bool found = ChooseSocket(player, pick);
-    UE_LOGI("[COFFEE] host setup: free sockets=%d powered=%d placed=%d side-blocked=%d socket=%s", pick.free,
-            pick.powered, pick.placed, pick.blocked, found ? "found" : "none");
-    if (!found) { Fail("stage", "no free powered wall socket a standing player reaches"); return false; }
     void* vend = NearestVending(player);
     const std::wstring vendKey = vend ? ue_wrap::prop::GetKeyString(vend) : std::wstring();
     if (!KeyRides(vendKey)) { Fail("stage", "the world holds no keyed vending machine"); return false; }
+    ue_wrap::FVector vendAt{}, vendStand{};
+    if (!VendingStand(player, vend, vendAt, vendStand)) { Fail("stage", "the vending machine has no nav point near it"); return false; }
+    Pick pick;
+    const bool found = ChooseSocket(player, vendStand, pick);
+    UE_LOGI("[COFFEE] host setup: free sockets=%d powered=%d placed=%d side-blocked=%d off the vending floor=%d "
+            "without a route=%d socket=%s", pick.free, pick.powered, pick.placed, pick.blocked, pick.offFloor,
+            pick.noRoute, found ? "found" : "none");
+    if (!found) {
+        // The world gave the drill no ground to run on: not a verdict on the lane. The client is told so it ends too.
+        UE_LOGW("[COFFEE] INVALID (host) -- no maker spot on the vending floor");
+        Say("coffee host invalid");
+        g_h.ph = Ph::Done;
+        return false;
+    }
     void* cls = ue_wrap::reflection::FindClass(L"prop_coffeeMaker_C");
     void* maker = cls ? E::SpawnActor(cls, pick.makerAt) : nullptr;
     const std::wstring makerKey = maker ? ue_wrap::prop::GetKeyString(maker) : std::wstring();
@@ -96,6 +106,11 @@ bool SetUp(void* player) {
     g_h.standAt = pick.stand;
     UE_LOGI("[COFFEE] host chose socket key=%s, spawned the maker key=%s, the vending machine key=%s",
             CDD::Narrow(sockKey).c_str(), CDD::Narrow(makerKey).c_str(), CDD::Narrow(vendKey).c_str());
+    UE_LOGI("[COFFEE] host layout: vending at (%.0f,%.0f,%.0f) stand (%.0f,%.0f,%.0f); socket at (%.0f,%.0f,%.0f); "
+            "client stand (%.0f,%.0f,%.0f), host stand (%.0f,%.0f,%.0f); route %.0f cm, largest height delta %.0f cm",
+            vendAt.X, vendAt.Y, vendAt.Z, vendStand.X, vendStand.Y, vendStand.Z, pick.at.X, pick.at.Y, pick.at.Z,
+            pick.clientNav.X, pick.clientNav.Y, pick.clientNav.Z, pick.hostNav.X, pick.hostNav.Y, pick.hostNav.Z,
+            pick.routeCm, pick.maxDzCm);
     return true;
 }
 
@@ -127,6 +142,7 @@ void HostPlug() {
     if (!ReadFlags(maker, f) || f.power != 1) return;
     const Cast& c = TheCast();
     UE_LOGI("[COFFEE] host maker is plugged and powered");
+    LogMakerAt("after the plug");
     Say("coffee keys V=" + CDD::Narrow(c.vendKey) + " M=" + CDD::Narrow(c.makerKey) + " S=" + CDD::Narrow(c.sockKey));
     g_h.ph = Ph::Stage;
     g_h.phaseMs = NowMs();
@@ -140,6 +156,32 @@ void HostStage() {
 }
 
 // A spare empty cup over the stand point; it falls to the floor there, clear of the maker.
+// The brew of arm 3 leaves its coffee cup on the maker's plate, where an empty cup carried there lands on it and
+// never touches the maker. Every coffee cup on the maker goes before the carry. Collected first: the instance walk
+// must not destroy what it walks.
+void ClearCoffeeCupsOnMaker() {
+    void* maker = Maker();
+    ue_wrap::FVector m{};
+    void* cls = ue_wrap::object_index::ClassByName(L"prop_food_coffeeCup_C");
+    if (!maker || !cls || !E::TryGetActorLocation(maker, m)) return;
+    std::vector<void*> cups;
+    ue_wrap::object_index::ForEachInstance(cls, [](void* ctx, void* o, int32_t) {
+        static_cast<std::vector<void*>*>(ctx)->push_back(o);
+    }, &cups);
+    int cleared = 0;
+    for (void* c : cups) {
+        ue_wrap::FVector at{};
+        if (ue_wrap::reflection::NameStartsWith(ue_wrap::reflection::NameOf(c), L"Default__") ||
+            !E::TryGetActorLocation(c, at))
+            continue;
+        const float dx = at.X - m.X, dy = at.Y - m.Y, dz = at.Z - m.Z;
+        if (dx * dx + dy * dy + dz * dz > 120.f * 120.f) continue;
+        E::DestroyActor(c);
+        ++cleared;
+    }
+    UE_LOGI("[COFFEE] host cleared %d coffee cup(s) off the maker before the carry", cleared);
+}
+
 bool SpawnSpareCup(int n) {
     const ue_wrap::FVector at{g_h.standAt.X, g_h.standAt.Y, g_h.standAt.Z + kCupLiftCm};
     void* cup = SpawnProp(L"prop_C", at, L"cup");
@@ -158,6 +200,9 @@ void OpenArm(int n) {
     g_h.armMs = NowMs();
     g_h.closable = g_h.seen = false;
     g_h.clientArriving = n == 1 || n == 3 || n == 4 || n == 5;
+    char when[24];
+    std::snprintf(when, sizeof(when), "at arm %d's open", n);
+    LogMakerAt(when);
     Say(ArmLine(n));
     if (n == 1) {
         ue_wrap::economy::AddPoints(kGrantPoints);
@@ -176,6 +221,7 @@ void OpenArm(int n) {
         // The arm-4 cup lies where the arm-5 cup will; it goes first so the client's grab aims at one.
         if (void* old = g_h.cup.Get()) E::DestroyActor(old);
         g_h.cup.Reset();
+        ClearCoffeeCupsOnMaker();
         SpawnSpareCup(5);
     }
 }
@@ -296,8 +342,9 @@ void HostArm() {
         h.clientArriving = false;
         h.armMs = NowMs();
     }
-    if (h.arm == 4 && Heard("coffee client inconclusive 4")) {
-        UE_LOGW("[COFFEE] arm4 INCONCLUSIVE: the client reports its fall raised no hit on its copy of the maker");
+    if ((h.arm == 4 || h.arm == 5) && Heard("coffee client inconclusive " + std::to_string(h.arm))) {
+        UE_LOGW("[COFFEE] arm%d INCONCLUSIVE: the client reports it could not run the arm (its own line has why)",
+                h.arm);
         h.ph = Ph::Done;
         return;
     }

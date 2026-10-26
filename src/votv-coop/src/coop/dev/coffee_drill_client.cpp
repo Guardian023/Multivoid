@@ -55,7 +55,7 @@ struct Client {
     ue_wrap::CachedObjRef cup;
     std::shared_ptr<D::BackgroundWalk> walk;
     std::unique_ptr<D::AimedGrab> grab;
-    int         grabTries = 0, aimTicks = 0;
+    int         grabTries = 0;
     uint64_t    cancelled0 = 0;   // arm 4: the cancel counter when the cup was lifted
 };
 Client g_c;
@@ -77,15 +77,20 @@ void FailArm(const char* why) {
     Fail(name, why);
 }
 
-// Arm 4's verdict when the fall raised no hit: never a pass, never a fail of the lane.
-void Inconclusive(const char* why) {
-    UE_LOGW("[COFFEE] arm4 INCONCLUSIVE: %s", why);
-    Say("coffee client inconclusive 4");
+// The verdict of arm 4 (the fall raised no hit) and arm 5 (the cup was never put over the maker): never a pass,
+// never a fail of the lane.
+void Inconclusive(int arm, const char* why) {
+    UE_LOGW("[COFFEE] arm%d INCONCLUSIVE: %s", arm, why);
+    Say("coffee client inconclusive " + std::to_string(arm));
     CancelWalk();
     g_c.ph = Ph::Done;
 }
 
 void StartWalk(const ue_wrap::FVector& to, float reachCm, bool carry = false) {
+    ue_wrap::FVector me{};
+    E::TryGetActorLocation(coop::players::Registry::Get().Local(), me);
+    UE_LOGI("[COFFEE] client walk arm=%d target (%.0f,%.0f,%.0f) reach %.0f from (%.0f,%.0f,%.0f)", g_c.arm, to.X,
+            to.Y, to.Z, reachCm, me.X, me.Y, me.Z);
     g_c.walk = D::StartBackgroundWalk(to, reachCm, kWalkDeadlineS, carry);
 }
 int WalkState() { return g_c.walk ? g_c.walk->state.load() : 2; }
@@ -103,6 +108,19 @@ std::string Saw() {
     const bool read = Maker() && ReadFlags(Maker(), f);
     std::snprintf(buf, sizeof(buf), "%s, points=%d, cup %s", read ? FlagsText(f).c_str() : "flags unread",
                   static_cast<int>(Points()), g_c.cup.Get() ? "lives" : "gone or unknown");
+    return buf;
+}
+
+// Where the player, the maker and the cup are, for the line that ends arm 5 undecided.
+std::string CarryPlaces() {
+    ue_wrap::FVector me{}, mk{}, cp{};
+    const bool haveMe = E::TryGetActorLocation(coop::players::Registry::Get().Local(), me);
+    const bool haveMk = Maker() && E::TryGetActorLocation(Maker(), mk);
+    const bool haveCp = g_c.cup.Get() && E::TryGetActorLocation(g_c.cup.Get(), cp);
+    char buf[200];
+    std::snprintf(buf, sizeof(buf), "player %s(%.0f,%.0f,%.0f) maker %s(%.0f,%.0f,%.0f) cup %s(%.0f,%.0f,%.0f)",
+                  haveMe ? "" : "unread ", me.X, me.Y, me.Z, haveMk ? "" : "unread ", mk.X, mk.Y, mk.Z,
+                  haveCp ? "" : "gone ", cp.X, cp.Y, cp.Z);
     return buf;
 }
 
@@ -136,6 +154,11 @@ void ClientWait() {
 // The host's first word is the keys (a run's first life) or the expectation line (the rejoin).
 void ClientBranch() {
     std::string keys, expect;
+    if (Heard("coffee host invalid")) {
+        UE_LOGW("[COFFEE] INVALID (client) -- the host found no maker spot on the vending floor");
+        g_c.ph = Ph::Done;
+        return;
+    }
     if (Rest("coffee keys ", &keys)) {
         g_c.vendKey = CDD::Token(keys, "V=");
         g_c.makerKey = CDD::Token(keys, "M=");
@@ -267,7 +290,7 @@ void ArmCancel() {
         if (!cup) return FailArm("the cup died before the lift");
         // A cup the host's drive still holds is posed by the host; once it is free it simulates here.
         if (HeldByDrive(cup)) {
-            if (now - c.armMs > kArmFailMs) Inconclusive("the cup never left the host's drive");
+            if (now - c.armMs > kArmFailMs) Inconclusive(4, "the cup never left the host's drive");
             return;
         }
         ue_wrap::FVector mp{};
@@ -352,19 +375,21 @@ void ArmCarry(void* player) {
         if (w == 0) return;
         c.walk.reset();
         if (w == 2) return FailArm("walk: the carry to the maker failed or ran out its deadline");
-        c.aimTicks = 0;
         c.sub = 6;
     } else if (c.sub == 6) {
         void* cup = c.cup.Get();
         if (!cup) { c.sub = 7; return; }
-        ue_wrap::FVector cp{};
+        ue_wrap::FVector cp{}, me{};
         void* ctrl = E::GetController(player);
-        if (!ctrl || !Maker() || !E::TryGetActorLocation(Maker(), mp) || !E::TryGetActorLocation(cup, cp))
-            return FailArm("no controller, maker or cup place to aim with");
+        if (!ctrl || !Maker() || !E::TryGetActorLocation(Maker(), mp) || !E::TryGetActorLocation(cup, cp) ||
+            !E::TryGetActorLocation(player, me))
+            return FailArm("no controller, maker, cup or player place to aim with");
+        // The carry's reach is flat: the walker has arrived only when it stands at the maker's height too.
+        if (std::fabs(me.Z - mp.Z) > kFeetCm) return;
         const ue_wrap::FVector over{mp.X, mp.Y, mp.Z + kAboveCm};
         E::SetControlRotation(ctrl, D::LookAt(E::GetCameraLocation(), over));
-        const bool above = std::hypot(cp.X - mp.X, cp.Y - mp.Y) <= kOverMakerCm;
-        if (++c.aimTicks < kAimSettleTicks && !above) return;
+        const float up = cp.Z - mp.Z;
+        if (std::hypot(cp.X - mp.X, cp.Y - mp.Y) > kOverMakerCm || up < kReleaseMinCm || up > kReleaseMaxCm) return;
         if (!D::CallOnPlayer(player, L"dropGrabObject")) return FailArm("dropGrabObject did not run");
         UE_LOGI("[COFFEE] client let go of the cup over the maker");
         c.sub = 7;
@@ -398,8 +423,14 @@ void ClientArm(void* player) {
     if (c.pre) {
         if (now - c.armMs > kStageFailMs) return FailArm("walk: the arm's arrival never came");
     } else if (now - c.armMs > kArmFailMs) {
-        const std::string why = "not closed within " + std::to_string(kArmFailMs) + " ms of its bound's start: " + Saw();
-        if (c.arm == 4) return Inconclusive(why.c_str());
+        std::string why = "not closed within " + std::to_string(kArmFailMs) + " ms of its bound's start: " + Saw();
+        if (c.arm == 4) return Inconclusive(4, why.c_str());
+        if (c.arm == 5 && (c.sub == 5 || c.sub == 6)) {
+            // The carry never arrived at the maker's height, or the cup never came over it: the drill's own
+            // geometry, not the lane's.
+            why += "; " + CarryPlaces();
+            return Inconclusive(5, why.c_str());
+        }
         return FailArm(why.c_str());
     }
     ArmActs(player);

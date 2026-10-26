@@ -20,6 +20,7 @@
 #include <chrono>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace coop::coffee_state {
 namespace {
@@ -110,10 +111,37 @@ void OnBrewPost(const sg::Call& call) {
 }
 
 // ---- the fill --------------------------------------------------------------------------------
+// The drill's tally of the hit handler's runs by the class of the actor that touched the maker. The class name is
+// resolved the first time a class is seen; only the drill's runs fill it.
+struct ClassTally {
+    void*        cls;
+    std::wstring name;
+    uint64_t     n;
+};
+std::vector<ClassTally> g_tally;
+uint64_t g_tallyHits = 0;
+
+void TallyOther(void* other) {
+    ++g_tallyHits;
+    void* cls = other ? R::ClassOf(other) : nullptr;
+    for (ClassTally& t : g_tally)
+        if (t.cls == cls) { ++t.n; return; }
+    g_tally.push_back({cls, cls ? R::ClassNameOf(other) : std::wstring(L"none"), 1});
+}
+
 sg::Verdict OnHitPre(const sg::Call& call) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !s->running() || !call.object) return sg::Verdict::Run;
     static R::ParamOffset s_other{L"OtherActor"};
+    // The coffee drill's reads of what touches the maker, on both roles; with the drill off the client's path is
+    // a role test and a counter. Resolved once.
+    static const bool s_drill = coop::config::ResolveFlag(coop::config_registry::rows::coffee_drill);
+    if (s_drill && (s->role() == coop::net::Role::Client || s->role() == coop::net::Role::Host)) {
+        const int32_t offDrill = s_other.Of(call.function);
+        void* seen = offDrill >= 0 ? *reinterpret_cast<void* const*>(call.locals + offDrill) : nullptr;
+        TallyOther(seen);
+        if (s->role() == coop::net::Role::Client && seen != g_lastOther.Raw()) g_lastOther.Set(seen);
+    }
     if (s->role() == coop::net::Role::Client) {
         // The coffee drill's red arm: this copy's own run of the hit handler is not cancelled. Resolved once.
         static const bool s_redNoCancel =
@@ -121,10 +149,7 @@ sg::Verdict OnHitPre(const sg::Call& call) {
         if (s_redNoCancel) return sg::Verdict::Run;
         // The fill is the host's: this copy's run would destroy its mirror of the cup and set flags no record
         // carries. The cup's destroy and the maker's record come from the host. Contact rate: counted, said for
-        // the first three and every sixtieth. The newest other actor is kept for the drill's read, by pointer.
-        const int32_t offSeen = s_other.Of(call.function);
-        void* seen = offSeen >= 0 ? *reinterpret_cast<void* const*>(call.locals + offSeen) : nullptr;
-        if (seen != g_lastOther.Raw()) g_lastOther.Set(seen);
+        // the first three and every sixtieth.
         const uint64_t n = ++g_cancelled;
         if (n <= 3 || n % 60 == 0)
             UE_LOGI("[COFFEE-STATE] a client's hit on maker %p is cancelled -- the fill is the host's (#%llu)",
@@ -213,11 +238,15 @@ void OnDisconnect() {
     g_brewNote = Note{};
     g_hitNote = Note{};
     g_lastOther.Reset();
+    g_tally.clear();
+    g_tallyHits = 0;
 }
 
 DrillView ReadForDrill() {
     DrillView v;
     v.cancelled = g_cancelled;
+    v.hits = g_tallyHits;
+    for (const ClassTally& t : g_tally) v.byClass.push_back({t.name, t.n});
     void* other = g_lastOther.Get();
     if (other && ue_wrap::prop::IsDescendantOfProp(other)) v.lastOtherKey = ue_wrap::prop::GetKeyString(other);
     return v;

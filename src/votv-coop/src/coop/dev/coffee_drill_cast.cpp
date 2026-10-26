@@ -4,6 +4,7 @@
 #include "coffee_drill_detail.h"  // co-located private header (src tree, not include/)
 #include "cord_drill_detail.h"    // co-located private header: the stand points and socket reads the cord drill proved
 
+#include "coop/dev/director/routes.h"
 #include "coop/props/prop_drive_stream.h"
 #include "coop/props/prop_key_index.h"
 #include "coop/props/remote_prop.h"
@@ -14,6 +15,7 @@
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/trace.h"
 #include "ue_wrap/engine/engine.h"
+#include "ue_wrap/engine/engine_nav.h"
 #include "ue_wrap/world/economy.h"
 
 #include <algorithm>
@@ -60,10 +62,29 @@ float Dist(const ue_wrap::FVector& a, const ue_wrap::FVector& b) {
 
 struct PickCtx {
     void* player;
-    ue_wrap::FVector me;
+    ue_wrap::FVector vendStand;
     float bestCm;
     Pick* out;
 };
+
+// The route from the vending machine's stand to `to`, as the director walks it: its length, and the largest height
+// it strays from the vending stand. False when there is no route, it ends short of `to`, or a waypoint is off
+// the vending floor or the route is too long.
+bool RouteOnFloor(void* player, const ue_wrap::FVector& from, const ue_wrap::FVector& to, float& lengthCm,
+                  float& maxDzCm) {
+    std::vector<ue_wrap::FVector> route;
+    if (!coop::director::RouteFrom(player, from, to, &route) || route.size() < 2) return false;
+    const ue_wrap::FVector& end = route.back();
+    if (std::hypot(end.X - to.X, end.Y - to.Y) > CDD::kStandReachCm) return false;
+    lengthCm = 0.f;
+    maxDzCm = 0.f;
+    for (size_t i = 0; i < route.size(); ++i) {
+        if (i) lengthCm += Dist(route[i - 1], route[i]);
+        const float dz = std::fabs(route[i].Z - from.Z);
+        if (dz > maxDzCm) maxDzCm = dz;
+    }
+    return maxDzCm <= kFloorCm && lengthCm <= kRouteCm;
+}
 
 void ConsiderSocket(void* p, void* o, int32_t) {
     auto& cx = *static_cast<PickCtx*>(p);
@@ -74,11 +95,22 @@ void ConsiderSocket(void* p, void* o, int32_t) {
     BoolProp powered;
     if (!ResolveBool(R::ClassOf(o), L"powered", powered) || !ReadBool(o, powered)) return;
     ++pk.powered;
-    ue_wrap::FVector at{}, fwd{}, nominal{}, stand{}, nav{};
+    ue_wrap::FVector at{}, fwd{}, nominal{}, stand{}, nav{}, hostStand{}, hostNav{};
     if (!CDD::SocketGeometry(o, at, fwd) || !CDD::NominalStand(cx.player, at, fwd, nominal) ||
-        !CDD::PeerStand(cx.player, at, fwd, nominal, CDD::Peer::Client, stand, nav))
+        !CDD::PeerStand(cx.player, at, fwd, nominal, CDD::Peer::Client, stand, nav) ||
+        !CDD::PeerStand(cx.player, at, fwd, nominal, CDD::Peer::Host, hostStand, hostNav))
         return;
     ++pk.placed;
+    // The client walks from the vending machine to its stand: both stands must be on the vending machine's floor.
+    if (std::fabs(nav.Z - cx.vendStand.Z) > kFloorCm || std::fabs(hostNav.Z - cx.vendStand.Z) > kFloorCm) {
+        ++pk.offFloor;
+        return;
+    }
+    float lengthCm = 0.f, maxDzCm = 0.f;
+    if (!RouteOnFloor(cx.player, cx.vendStand, nav, lengthCm, maxDzCm)) {
+        ++pk.noRoute;
+        return;
+    }
     // The maker's spot is to the side of the stand point, as the cord drill's makers are; the line from knee height
     // there must be clear, so it does not spawn inside a wall.
     const ue_wrap::FVector knee{nominal.X, nominal.Y, nominal.Z + CDD::kKneeCm};
@@ -87,9 +119,12 @@ void ConsiderSocket(void* p, void* o, int32_t) {
         ++pk.blocked;
         return;
     }
-    const float d = Dist(at, cx.me);
-    if (pk.sock && d >= cx.bestCm) return;
-    cx.bestCm = d;
+    if (pk.sock && lengthCm >= cx.bestCm) return;
+    cx.bestCm = lengthCm;
+    pk.routeCm = lengthCm;
+    pk.maxDzCm = maxDzCm;
+    pk.clientNav = nav;
+    pk.hostNav = hostNav;
     pk.sock = o;
     pk.at = at;
     pk.fwd = fwd;
@@ -220,10 +255,15 @@ void* NearestVending(void* player) {
     return nearest.best;
 }
 
-bool ChooseSocket(void* player, Pick& out) {
-    PickCtx cx{player, {}, 0.f, &out};
+bool VendingStand(void* player, void* vending, ue_wrap::FVector& place, ue_wrap::FVector& stand) {
+    const ue_wrap::FVector box{300.f, 300.f, kFloorCm};
+    return vending && E::TryGetActorLocation(vending, place) && E::ProjectToNav(player, place, box, &stand);
+}
+
+bool ChooseSocket(void* player, const ue_wrap::FVector& vendStand, Pick& out) {
+    PickCtx cx{player, vendStand, 0.f, &out};
     void* cls = OI::ClassByName(L"cordSocket_C");
-    if (!cls || !player || !E::TryGetActorLocation(player, cx.me)) return false;
+    if (!cls || !player) return false;
     OI::ForEachInstance(cls, &ConsiderSocket, &cx);
     return out.sock != nullptr;
 }

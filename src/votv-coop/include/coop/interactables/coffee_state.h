@@ -15,6 +15,7 @@
 
 #include <cstdint>
 #include <string>
+#include <vector>
 
 namespace coop::net {
 class Session;
@@ -34,9 +35,17 @@ void OnDisconnect();
 
 // What the coffee drill reads of a client: how many of its own runs of the hit handler were cancelled this
 // session, and the key of the other actor of the newest one ("" when it is no keyed prop or no longer here).
+// With the drill on (coffee_drill), every run of the hit handler on either role is also tallied: `hits` in all and
+// `byClass` by the class of the actor that touched the maker. Both stay empty with it off.
+struct ClassCount {
+    std::wstring cls;
+    uint64_t     n = 0;
+};
 struct DrillView {
     uint64_t     cancelled = 0;
     std::wstring lastOtherKey;
+    uint64_t     hits = 0;
+    std::vector<ClassCount> byClass;
 };
 DrillView ReadForDrill();
 

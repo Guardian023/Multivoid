@@ -46,7 +46,7 @@ const std::vector<std::string>& Watched() {
             v.push_back(D::HostSeenLine(n));
             v.push_back(D::ClientSeenLine(n));
         }
-        for (const char* l : {"coffee client staged", "coffee client hit 4", "coffee client inconclusive 4"})
+        for (const char* l : {"coffee client staged", "coffee client hit 4", "coffee client inconclusive 4", "coffee client inconclusive 5", "coffee host invalid"})
             v.push_back(l);
         return v;
     }();
@@ -113,6 +113,7 @@ void Tick() {
     }
     if (s->role() == coop::net::Role::Host) D::HostTick(s);
     else if (s->connected()) D::ClientTick(s);
+    D::MakerProbeTick();
 }
 
 void OnDisconnect() {
@@ -120,6 +121,7 @@ void OnDisconnect() {
     g_heard.clear();
     g_rests.clear();
     D::ClientReset();
+    D::MakerProbeReset();
     if (!D::HostOnDisconnect()) D::ResetCast();
 }
 

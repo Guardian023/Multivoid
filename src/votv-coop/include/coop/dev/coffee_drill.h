@@ -6,8 +6,8 @@
 //   2 the host drops an empty cup and a bag onto the maker: flags 1,1 on both, the client powered, cup gone
 //   3 the client presses the maker: a cup is live on both, both flags read 0
 //   4 the client lets its OWN copy of an empty cup fall on its copy of the maker: the hit is cancelled and counted,
-//     the maker stays empty and the cup lives on both; no such hit is `[COFFEE] arm4 INCONCLUSIVE`
-//   5 the client carries an empty cup against the maker: hasCup=1 on both, the cup gone on both
+//     the maker stays empty and the cup lives on both; no such hit leaves the arm INCONCLUSIVE (arm 5 likewise)
+//   5 the client carries an empty cup over the maker: hasCup=1 on both, the cup gone on both
 // The client prints `[COFFEE] client arms 1-5 PASS` (the rig's rejoin marker); the rejoined client reads the maker
 // as the host holds it and prints `[COFFEE] client DONE -- PASS`. A line `[COFFEE] FAIL:` is an arm not closed within
 // its bound (it starts when the client has arrived), a walk that did not arrive, or a step that cannot be driven.
