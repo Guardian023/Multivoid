@@ -62,7 +62,7 @@ bool IsParked(void* actor);
 // copy holds of that prop's drive: a live drive row of a newer generation, or else the END pose
 // ApplyEnd wrote onto the eid's CURRENTLY bound actor, of a newer generation, or of the same one
 // while the correction was read with it still open. An END pose that died with its actor (a
-// load-tail re-create, a purge), never applied (pending expiry) or yielded to a hand judges
+// load-tail re-create, a purge), never applied (its hold given up) or yielded to a hand judges
 // nothing: the correction then stands. Game thread.
 // Divergences from MTA's CanUpdateSync (reference/mtasa-blue/Server/mods/deathmatch/logic/
 // CElement.cpp:1300, its stamp compared at CUnoccupiedVehicleSync.cpp:285 of the same folder):

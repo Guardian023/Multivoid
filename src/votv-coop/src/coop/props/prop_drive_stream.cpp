@@ -5,7 +5,8 @@
 #include "coop/dev/prop_syncer_drill.h"        // IsEnabled: the drill's view is kept only while it is on
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
-#include "coop/element/registry.h"             // IsCorrectionStale: the eid's bound actor
+#include "coop/element/bind_wait.h"            // Hold / NoteNeverBound: an end whose prop has no bind yet
+#include "coop/element/registry.h"           // IsCorrectionStale: the eid's bound actor
 #include "coop/props/active_drive.h"
 #include "coop/props/prop_drive_host.h"        // InAHand: who is a hand
 #include "coop/props/prop_child_release.h"      // OnParentReleased: a jointed door waits for its parent
@@ -26,6 +27,7 @@
 #include <windows.h>
 
 #include <cstdint>
+#include <cstring>
 #include <mutex>
 #include <string>
 #include <unordered_map>
@@ -66,13 +68,6 @@ struct Miss { uint64_t nextTryMs = 0; uint32_t count = 0; };
 std::unordered_map<uint32_t, Miss> g_miss;
 constexpr uint64_t kMissRetryMs = 250;
 constexpr uint32_t kMissSaidAt  = 40;     // about ten seconds of misses: one line
-
-// An end edge whose prop has not arrived here yet -- a joiner mid-drag whose snapshot is still
-// landing -- is kept until the prop resolves, so its copy still gets the rest pose the host's
-// came to, or until it expires.
-struct PendingEnd { coop::net::PropDriveEndPayload p; uint64_t expiresMs = 0; };
-std::unordered_map<uint32_t, PendingEnd> g_pendingEnd;
-constexpr uint64_t kPendingEndMs = 30000;
 
 // The drained batch, kept across ticks for its capacity: the session swaps its buffer with this
 // one, so the steady state of a drag allocates nothing on either thread. Game thread only.
@@ -252,10 +247,8 @@ void ApplyPose(const coop::net::PropPoseSnapshot& e, uint64_t nowMs, const char*
     g_yieldedGen.erase(eid);
     // The parked newer generation supersedes the END pose a correction was judged against.
     g_endOnActor.erase(eid);
-    // A pose of a closed generation never reaches here, so a pending end for this prop is
-    // of an OLDER generation than the one parking now: stale, and dropped before it can
-    // land on the new stream.
-    g_pendingEnd.erase(eid);
+    // A pose of a closed generation never reaches here, so an end held for this prop (bind_wait) is of
+    // an OLDER generation than the one parking now: its replay finds the drive parked and drops it as stale.
     UE_LOGI("[PROP-DRIVE] %s park eid=%u gen=%u actor=%p (physics %s)",
             who, eid, static_cast<unsigned>(e.ctx), actor,
             dr.physicsParked ? "off" : "left as it was");
@@ -348,33 +341,29 @@ void TickApplyAndDrive(coop::net::Session& s) {
         AD::AdvanceLerp(dr.d, nowMs);
         ++it;
     }
-    // An end edge that arrived before its prop: applied the moment the prop resolves.
-    for (auto it = g_pendingEnd.begin(); it != g_pendingEnd.end();) {
-        if (nowMs >= it->second.expiresMs || g_drives.count(it->first)) {
-            it = g_pendingEnd.erase(it);   // expired, or a newer stream parked the prop first
-            continue;
-        }
-        void* actor = coop::remote_prop::ResolveLiveActorByEid(it->first);
-        if (!actor) { ++it; continue; }
-        if (PR::IsDescendantOfProp(actor) && !coop::prop_drive_host::InAHand(actor) &&
-            !YieldedAtOrAfter(it->first, it->second.p.gen)) {
-            ApplyEnd(actor, it->second.p, /*parkedHere=*/false);
-            UE_LOGI("[PROP-DRIVE] CLIENT END eid=%u gen=%u -> (%.1f,%.1f,%.1f) applied late (the "
-                    "prop arrived after its stream ended)", it->first,
-                    static_cast<unsigned>(it->second.p.gen), it->second.p.x, it->second.p.y,
-                    it->second.p.z);
-        }
-        it = g_pendingEnd.erase(it);
-    }
     coop::prop_child_release::Tick(nowMs);   // a waiting door's liveness and its failure bound
 }
+
+namespace {
+constexpr uint16_t kEndKind = static_cast<uint16_t>(coop::net::ReliableKind::PropDriveEnd);
+
+// An end held in bind_wait runs again once its prop is bound: the whole of OnEnd, so a drive that parked
+// meanwhile takes the parked branch and a hand that took the prop since is yielded to as on a first arrival.
+void ReplayEnd(const uint8_t* bytes, size_t n, int /*senderSlot*/) {
+    coop::net::PropDriveEndPayload p{};
+    if (n != sizeof p) return;
+    std::memcpy(&p, bytes, sizeof p);
+    OnEnd(p);
+}
+}  // namespace
 
 void OnEnd(const coop::net::PropDriveEndPayload& p) {
     UE_ASSERT_GAME_THREAD("prop_drive_stream::OnEnd");
     auto it = g_drives.find(p.eid);
     if (it == g_drives.end()) {
         // Never parked here. The generation still closes, so a pose of it in flight cannot park
-        // the prop now; the rest pose is applied if the prop is here, kept for it if not, and
+        // the prop now; the rest pose is applied if the prop is here, held in bind_wait for its bind if the
+        // bind is deferred (a joiner mid-drag whose snapshot is still landing), and
         // dropped for a prop a hand holds -- that stream owns it -- or one a hand took this generation
         // over from: the hand moved it since, so this pose is older than where it lies. The same for a
         // generation this peer closed itself (CloseGen). An end older than the generation already closed
@@ -396,8 +385,10 @@ void OnEnd(const coop::net::PropDriveEndPayload& p) {
                 UE_LOGI("[PROP-DRIVE] CLIENT END eid=%u gen=%u -> (%.1f,%.1f,%.1f) (never parked here)",
                         p.eid, static_cast<unsigned>(p.gen), p.x, p.y, p.z);
             }
-        } else {
-            g_pendingEnd[p.eid] = PendingEnd{p, AD::NowMs() + kPendingEndMs};
+        } else if (!coop::element::bind_wait::Hold(p.eid, kEndKind, /*senderSlot=*/0, &ReplayEnd, &p, sizeof p,
+                                                   /*coalesce=*/true)) {
+            // Not deferred: no bind is coming for this eid, so there is nothing to wait for.
+            coop::element::bind_wait::NoteNeverBound(kEndKind, p.eid);
         }
         return;
     }
@@ -461,7 +452,6 @@ void OnDisconnect() {
     g_endOnActor.clear();
     g_yieldedGen.clear();
     g_miss.clear();
-    g_pendingEnd.clear();
     g_devView.clear();
     {
         std::lock_guard<std::mutex> lk(g_mergedMu);
