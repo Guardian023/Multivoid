@@ -206,6 +206,7 @@ replacement for the position key.
 | the pile-to-clump identity | the host | one id, rebound onto each successor at its birth, guarded by the sync context |
 | a dispenser's counters | each peer, minimum wins | the host as sent at join |
 | a broom stroke | the host | a client's stroke is what it read of its holder; the host runs the stroke with those reads, reach- and rate-checked |
+| a native a joiner has not bound | the host | only host messages move it (converts, position corrections, pose streams); the joiner runs no morph of it (`coop/props/trash_morph_gate`) |
 | bagging a pile | the host, by intent | a client's press is refused at the script-body gate and sent as the target's id; the host spawns the bag and destroys the target, so the prop seams carry both |
 
 ## Wire messages
@@ -233,15 +234,17 @@ is not sent to it, and the pile reaches it in the world-ready snapshot; a land a
 as to everyone, and carries no position key, since the spawn already did. The snapshot drain is
 keyed by id: each id is resolved to its element's current actor at its turn, so an entity that
 changes form while the drain runs still gets its row, and an id whose element is gone at its turn
-is dropped and counted `[?]`. A convert for an id whose native has not loaded waits for its bind
-and is dropped if the bind is given up `[?]`.
+is dropped and counted `[?]`. A convert for an id whose native has not loaded waits for its bind,
+and only the newest of them is kept. If the bind is given up it replays on the unbound path, so the
+host's pile lands from it; a `PropDestroy` for the id drops it `[?]`.
 
 The client's own piles do not all exist when the snapshot arrives -- its save load is still
 draining -- so an expression that finds no actor at its save-time position is HELD rather than
 answered: the id is recorded and the quiescence sweep binds the actor when it appears. The hold is
 bounded. An id whose actor never appears is given up after the sweep's retry budget and that pile
-is absent on that client until a later join expresses it again; nothing is invented at the stale
-save position, because the host may have moved or removed the pile since.
+is absent on that client until a later join expresses it again, unless a convert is held for it:
+that one replays and lands the host's pile. Nothing is invented at the stale save position, because
+the host may have moved or removed the pile since.
 
 ## Known limits
 
