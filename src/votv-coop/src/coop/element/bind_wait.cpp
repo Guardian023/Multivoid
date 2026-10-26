@@ -49,7 +49,7 @@ uint32_t g_epoch = 0;                                      // bumped by Clear: a
 std::vector<std::pair<uint32_t, uint16_t>> g_droppedInPump;
 
 // The per-kind tallies a drill reads (the header's HeldOf and its siblings).
-struct Tally { uint32_t held = 0, coalesced = 0, replayed = 0, dropped = 0, neverBound = 0; };
+struct Tally { uint32_t held = 0, coalesced = 0, replayed = 0, dropped = 0, givenUp = 0, neverBound = 0; };
 std::unordered_map<uint16_t, Tally> g_kinds;
 
 uint32_t g_deferredN = 0, g_heldN = 0, g_replayedN = 0, g_givenUpN = 0, g_neverBoundN = 0;
@@ -212,13 +212,27 @@ void Pump() {
     auto leftInPump = [](int slot) {
         return std::find(g_leftInPump.begin(), g_leftInPump.end(), slot) != g_leftInPump.end();
     };
-    for (Due& d : due) {
+    // A Clear made by a replay ends the pass: the holds not yet reached are dropped by it, counted per kind.
+    auto clearedRest = [&](size_t di, size_t hi) {
+        for (; di < due.size(); ++di, hi = 0)
+            for (; hi < due[di].holds.size(); ++hi) {
+                ++g_givenUpN;
+                ++g_kinds[due[di].holds[hi].kind].givenUp;
+            }
+    };
+    for (size_t di = 0; di < due.size(); ++di) {
+        Due& d = due[di];
         size_t ran = 0;
-        for (Held& h : d.holds) {
-            if (g_epoch != epoch) return;   // a replay tore the session down
+        for (size_t hi = 0; hi < d.holds.size(); ++hi) {
+            Held& h = d.holds[hi];
+            if (g_epoch != epoch) {   // a replay tore the session down
+                clearedRest(di, hi);
+                return;
+            }
             Release(h.bytes.size());
             if (GenOf(d.eid) != d.gen || leftInPump(h.slot)) {   // given up, or its sender left, since it fell due
                 ++g_givenUpN;
+                ++g_kinds[h.kind].givenUp;
                 continue;
             }
             if (std::find(g_droppedInPump.begin(), g_droppedInPump.end(), std::make_pair(d.eid, h.kind)) !=
@@ -263,6 +277,7 @@ void GiveUp(uint32_t eid, const char* why) {
     size_t dropped = 0;
     if (auto it = g_holds.find(eid); it != g_holds.end()) {
         dropped = it->second.size();
+        for (const Held& h : it->second) ++g_kinds[h.kind].givenUp;
         Release(BytesOf(it->second));
         g_holds.erase(it);
     }
@@ -284,6 +299,7 @@ void OnSlotLeft(int slot) {
                                [&](const Held& h) {
                                    if (h.slot != slot) return false;
                                    Release(h.bytes.size());
+                                   ++g_kinds[h.kind].givenUp;
                                    return true;
                                }),
                 v.end());
@@ -299,8 +315,12 @@ void OnSlotLeft(int slot) {
 void Clear(const char* why) {
     UE_ASSERT_GAME_THREAD("bind_wait::Clear");
     size_t dropped = 0;
-    for (const auto& kv : g_holds) dropped += kv.second.size();
-    for (const Due& d : g_due) dropped += d.holds.size();
+    auto count = [&](const std::vector<Held>& v) {
+        dropped += v.size();
+        for (const Held& h : v) ++g_kinds[h.kind].givenUp;
+    };
+    for (const auto& kv : g_holds) count(kv.second);
+    for (const Due& d : g_due) count(d.holds);
     if (dropped > 0 || !g_deferred.empty())
         UE_LOGI("[BIND-WAIT] cleared (%s) -- %zu eid(s) deferred, %zu hold(s) dropped, %u mark(s) ended empty so far",
                 why, g_deferred.size(), dropped, g_emptyGiveUpN);
@@ -342,6 +362,7 @@ uint32_t HeldOf(uint16_t kind)       { UE_ASSERT_GAME_THREAD("bind_wait::HeldOf"
 uint32_t CoalescedOf(uint16_t kind)  { UE_ASSERT_GAME_THREAD("bind_wait::CoalescedOf");  return TallyOf(kind, &Tally::coalesced); }
 uint32_t ReplayedOf(uint16_t kind)   { UE_ASSERT_GAME_THREAD("bind_wait::ReplayedOf");   return TallyOf(kind, &Tally::replayed); }
 uint32_t DroppedOf(uint16_t kind)    { UE_ASSERT_GAME_THREAD("bind_wait::DroppedOf");    return TallyOf(kind, &Tally::dropped); }
+uint32_t GivenUpOf(uint16_t kind)    { UE_ASSERT_GAME_THREAD("bind_wait::GivenUpOf");    return TallyOf(kind, &Tally::givenUp); }
 uint32_t NeverBoundOf(uint16_t kind) { UE_ASSERT_GAME_THREAD("bind_wait::NeverBoundOf"); return TallyOf(kind, &Tally::neverBound); }
 
 }  // namespace coop::element::bind_wait

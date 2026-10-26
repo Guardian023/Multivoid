@@ -236,6 +236,14 @@ const char* CheckGreen() {
     BW::Pump();
     if (!Calls("C") || BW::ReplayedOf(94) != replayed94 + 1) return "a coalesced hold did not replay once, latest bytes";
     g_calls.clear();
+    // 14. A GiveUp of an eid with two holds of one kind counts both into GivenUpOf.
+    const uint32_t e16 = kBase + 1;
+    const uint32_t givenUp95 = BW::GivenUpOf(95);
+    BW::MarkDeferred(e16, "selftest: given-up tally");
+    HoldTag(e16, 95, 1, 'g', false);
+    HoldTag(e16, 95, 1, 'h', false);
+    BW::GiveUp(e16, "selftest");
+    if (BW::GivenUpOf(95) != givenUp95 + 2) return "a GiveUp of two holds of one kind was not counted into GivenUpOf";
     return nullptr;
 }
 
@@ -269,7 +277,7 @@ void Run() {
     const char* failed = CheckGreen();
     Cleanup();
     if (failed) UE_LOGE("[BIND-WAIT-SELFTEST] FAIL: %s", failed);
-    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (13 checks)");
+    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (14 checks)");
 }
 
 }  // namespace

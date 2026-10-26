@@ -76,12 +76,14 @@ uint32_t GivenUpCount();
 uint32_t RefusedCount();   // holds refused at a bound (Hold returned true, the message was not kept)
 
 // Per kind, for a drill's verdict on one module. HeldOf counts distinct holds (a coalesced overwrite counts
-// into CoalescedOf); a correct run keeps HeldOf == ReplayedOf + DroppedOf + the holds of that kind given
-// up or lost with a slot. A module's own drop at replay time is the module's to count.
+// into CoalescedOf); a correct run keeps HeldOf == ReplayedOf + DroppedOf + GivenUpOf. GivenUpOf counts the
+// holds of the kind dropped by GiveUp, OnSlotLeft and Clear (those a running Pump skips included). A module's
+// own drop at replay time is the module's to count.
 uint32_t HeldOf(uint16_t kind);
 uint32_t CoalescedOf(uint16_t kind);
 uint32_t ReplayedOf(uint16_t kind);
 uint32_t DroppedOf(uint16_t kind);
+uint32_t GivenUpOf(uint16_t kind);
 uint32_t NeverBoundOf(uint16_t kind);
 
 }  // namespace coop::element::bind_wait
