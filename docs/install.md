@@ -174,7 +174,7 @@ nothing is written over the file and your inventory is back the next launch. Lea
 you want a new identity: deleting it (and a `multivoid_identity_<code>.key` of yours beside
 it, if any) orphans the inventory hosts stored for you, and so does deleting the
 `Mods\Multivoid` folder, which holds it. A `multivoid_identity.key` left beside the executable
-by an earlier build is no longer read (the log names it once); you can delete it.
+by an earlier build is read no more (the log names it once); you can delete it.
 
 ## Troubleshooting
 

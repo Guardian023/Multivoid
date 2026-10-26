@@ -253,7 +253,7 @@ exec-handler table, `ue_wrap/core/script_loop`), and the arm checks it against t
 objects. Under the proxy the game's start waits for these scans, so each anchors on its pattern's
 longest run of concrete bytes (`ue_wrap/core/sig_scan`), and the boot log reports what the patches
 took. `hook::VerifyEntries` re-reads each shared entry against what our patch left, at the arm and
-at the script gate's first hold. A foreign patch no longer than our jump, written between our read
+at the script gate's first hold. A foreign patch at most as long as our jump, written between our read
 and our write, is overwritten whole and leaves nothing to compare: the order, not the check, is what
 prevents the race.
 

@@ -75,7 +75,7 @@ host validates and commits contested writes), `local` (never shared).
 | Server boxes | the signal-server simulation state and its notices; a client's repair run on the host | host | snapshot | built |
 | Disc slots | the slot a laptop or a signal server holds a disc in, and the disc that comes back out of one | host owns the slot; the peer whose game changed it reports the outcome | every device's slot at the barrier | tested |
 | Shop orders | the client names a row, the host performs and prices it; the delivery queue is the host's, mirrored | arbiter | a reset and every queued order | built |
-| ATV | the driver authors the pose; a non-driving peer runs the rig natively and is corrected; condition (tyres, fuel, health) travels | driver, host for the rest | snapshot | tested; eject and configuration intents not built |
+| ATV | the driver authors the pose; a non-driving peer runs the rig natively and is steered; condition (tyres, fuel, health) travels | driver, host for the rest | snapshot | tested; eject and configuration intents not built |
 | Sleep | each peer's rest state and the host's sleeping flag | each peer for its own state; the host relays | the host's flag and every peer not awake | built |
 | Player inventory | per-peer, persisted by the host per player identity; the contents never cross the wire | local; host stores | seeded before the world | tested |
 

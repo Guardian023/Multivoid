@@ -11,7 +11,7 @@ carry a one-line-per-person summary; the detail lives here so those stay readabl
 gets a row** — no gatekeeping on how polished it was. A log pack saying "it felt
 wrong around here" has repeatedly been worth more than a tidy description, and the
 largest single change in this project's history came from someone saying, in
-public, that a decision in it was wrong.
+public, that a decision in it was mistaken.
 
 **How to land in here:** open a pull request, or report anything on
 [Discord](https://discord.gg/bA6tGBvGMN) or in
@@ -93,7 +93,7 @@ Community commits are adopted with their **original authorship preserved**
   the notebook piece); a measurement, the pinger's identity on the wire and the observer checks were added
   beside them.
 - **The sleeping bag and mattress** ([#50](https://github.com/VOTV-MP/Multivoid/pull/50), its third piece): a
-  bag a player unrolls or folds no longer vanishes on the other peers (FI-11). The host runs the
+  bag a player unrolls or folds stays on the other peers (FI-11). The host runs the
   game's own transition for a client and the unrolled bag, which the game never keys, gets a key. Their
   commit is kept as written; the bunk-bed mattress, the press-side watch and the drill were added.
 - **The notebook** ([#50](https://github.com/VOTV-MP/Multivoid/pull/50), its fourth piece): what one player
@@ -251,7 +251,7 @@ symptom pointed at. The triage of her log found:
    violations per second**, every one of them written to the log. The root: a
    dying world's actors are not marked dead until garbage collection runs, which
    was measured at **44+ seconds** later, so "is this object alive?" was
-   answering yes for a world that no longer existed. Every cached engine
+   answering yes for a world that was gone. Every cached engine
    reference now carries the world it came from and is dropped when that world
    goes.
 2. **~1,600 spurious destroy broadcasts on every client world load** — from
@@ -361,7 +361,7 @@ reported.
 ## Review
 
 Neither of these was a bug report. Both were people looking at how the mod is
-built and saying, in public and in good faith, that a decision in it was wrong.
+built and saying, in public and in good faith, that a decision in it was mistaken.
 Both were right, and the project's largest single change came out of them.
 
 ### Moddy — the architecture and documentation review that became the UE4SS move
@@ -383,7 +383,7 @@ for it. Two stale documentation claims were found and fixed the same day too:
 reversed the day after it was written and never annotated, and the overlay was
 still described as riding "UE4SS's built-in ImGui" months after the mod
 hand-rolled its own present hook. That pair became a standing project lesson: in a
-public repo, an un-annotated superseded decision is ammunition.
+public repo, an un-annotated replaced decision is ammunition.
 
 **Relay.** Moddy is also the author of [Relay](https://github.com/modestimpala/Relay), a Blueprint
 networking API for Voices of the Void

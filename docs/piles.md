@@ -190,7 +190,7 @@ A joiner's world comes from the host's save, so the client has its own copy of e
 host expresses each with its id and the pile's save-time position; the client binds its own
 save-loaded actor to the host's id by that position, at spawn time (`coop/props/pile_spawn_bind`)
 or at quiescence (`coop/element/quiescence_drain`), and a pile the host moved during the window
-is corrected by the host's position message, with the identity following the host's word rather
+is set right by the host's position message, with the identity following the host's word rather
 than the frozen save position. The index-to-id sidecar on [join.md](join.md) is the intended
 replacement for the position key.
 

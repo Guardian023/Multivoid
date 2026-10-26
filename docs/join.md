@@ -151,7 +151,7 @@ On the ready announce the host runs the replay for that slot, in this order
 (`coop/session/subsystems`):
 
 1. **Explicit deletes.** One destroy per keyed prop the joiner's blob had and the host's live
-   world no longer has (grabbed, eaten, converted during the download). The joiner drops exactly
+   world lacks (grabbed, eaten, converted during the download). The joiner drops exactly
    those instead of inferring them.
 2. **The snapshot bracket.** A begin marker, one spawn per live keyed prop, an end marker. On the
    client an existing actor is adopted by key, a missing one is created, and a transform that

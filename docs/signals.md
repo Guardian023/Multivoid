@@ -212,7 +212,7 @@ not built. The ATV's physical modules are on [vehicles.md](vehicles.md).
 | drives, racks, modules, the crate, the file buffer | the host, canonical | any peer's operations, the host's array back |
 | a drive's recorded row | the host | sent at the drive's own `upd`; a client's new drive's first row, from the client that brought it |
 | the eraser's delete | the host | a client's press as an intent; the host's press and wipe shown on every client's eraser |
-| the tape accrual | each peer, host-corrected | a one-hertz re-snap |
+| the tape accrual | each peer, host-adjusted | a one-hertz re-snap |
 | the servers | the host | state driven into each box |
 | a SAT console command that rests on the world | the host, on a terminal kept for its typist | the typed line up; the printed lines and the busy state back |
 | the upgrade levels | the host's save, once | not mirrored |
