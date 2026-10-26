@@ -3,6 +3,7 @@
 #include "coop/props/trash_morph_gate.h"
 
 #include "coop/net/session.h"
+#include "ue_wrap/core/game_thread.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/script_gate.h"
 #include "ue_wrap/facts/function_row.h"
@@ -30,7 +31,8 @@ UE_FACT_FN(kRowClumpContact, "trash_morph_gate", L"prop_garbageClump_C",
 std::atomic<coop::net::Session*> g_session{nullptr};
 
 // Registration is process-wide (a name watch matches every incarnation of its class), so the watches
-// are registered once; the role gate below is what turns the refusals on and off.
+// are registered once, and the flag is set only when all three took: a partial set is retried by the
+// next Install. The role gate below is what turns the refusals on and off.
 std::atomic<bool> g_watched{false};
 
 // The watch tags, distinct so the gate's tables keep them apart.
@@ -79,7 +81,7 @@ sg::Verdict OnClumpContact(const sg::Call& call)  { return Judge(g_clumpContact,
 
 void Install(coop::net::Session* session) {
     g_session.store(session, std::memory_order_release);  // re-cache at every session start
-    if (g_watched.exchange(true, std::memory_order_acq_rel)) return;
+    if (g_watched.load(std::memory_order_acquire)) return;
     // Name watches, registered at session start before the trash classes need to be loaded: a watch
     // matches by the owning class's name once its names are resolved, whether or not the class has
     // loaded yet, so a class that loads later is judged from its first instance. A Declared row, not
@@ -100,9 +102,17 @@ void Install(coop::net::Session* session) {
                     "that transition locally", r.row->Class(), r.row->Name());
         }
     }
-    sg::ResolvePendingNames();  // on the game thread the names resolve now, not at the next posted task
-    UE_LOGI("trash_morph_gate: %d/3 trash morph verbs watched by class and name -- on a client every "
-            "pile-clump transition is the host's, delivered as PropConvert", watched);
+    // Install runs on the TimelineThread, where ResolvePendingNames does nothing, so the resolve is posted to
+    // the game thread: it runs at the next outermost ProcessEvent, before the session can be connected, and
+    // MustNotAuthor refuses nothing until then.
+    ue_wrap::game_thread::Post([] { sg::ResolvePendingNames(); });
+    if (watched != 3) {
+        UE_LOGW("trash_morph_gate: only %d/3 trash morph verbs watched -- the next session start retries", watched);
+        return;
+    }
+    g_watched.store(true, std::memory_order_release);
+    UE_LOGI("trash_morph_gate: 3/3 trash morph verbs watched by class and name -- on a client every "
+            "pile-clump transition is the host's, delivered as PropConvert");
 }
 
 void OnSessionStart() {

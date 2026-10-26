@@ -23,7 +23,8 @@ namespace coop::trash_morph_gate {
 // Cache the session the refusals read and watch the three verbs by class and name (the watches
 // are registered once per process; the session is re-cached at every call, so a reconnect keeps
 // the refusals live). From the session start, before the world: a watch needs no loaded class,
-// since the gate matches by the owning class's name from the first instance. Game thread.
+// since the gate matches by the owning class's name from the first instance. Called from the
+// session start (the TimelineThread); the name resolve is posted to the game thread.
 void Install(coop::net::Session* session);
 
 // Zero the per-verb tallies so a second session's numbers are its own. Game thread.
