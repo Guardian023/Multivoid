@@ -371,7 +371,7 @@ void ArmPendingSaveTimeTwin(coop::element::ElementId eid, const ue_wrap::FVector
         return;
     // Record the save-time key for the post-quiescence sweep; no bracket index is needed, since the
     // sweep walks the GUObjectArray fresh and matches the key through the shared kernel. Idempotent
-    // per eid; the latest grab, land or spawn miss wins.
+    // per eid; the latest spawn miss or stale-twin retire wins.
     PendingTwin twin{savePos.X, savePos.Y, savePos.Z, chipType};
     twin.wantClump = wantClump;
     g_pendingSaveTimeTwin[static_cast<uint32_t>(eid)] = twin;

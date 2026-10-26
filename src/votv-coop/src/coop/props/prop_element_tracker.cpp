@@ -371,16 +371,18 @@ void RebindLocalElementActor(coop::element::ElementId eid, void* newActor) {
             eid, oldActor, newActor);
 }
 
-// The capture's two ways to walk a trash actor and not key it, counted per run on the game thread;
-// each says its first and then every 100th.
+// The capture's two ways to walk a trash actor and not key it, counted per capture walk on the game
+// thread (each walk resets them, so every join's first failure is said); each says its first and then
+// every 100th.
 static uint32_t g_captureMintDeclined = 0;
 static uint32_t g_captureLocUnread    = 0;
 static bool CaptureDeclineSaid_(uint32_t& n) { return ++n == 1 || n % 100 == 0; }
 
-// MTA divergence: its entity add mints the IDs (CEntityAddPacket.cpp:103), and content the client
-// already holds is addressed by model, position and radius (CBuildingRemovalSA.cpp:28-75). The
-// joiner's natives are that kind of content, so ours is keyed by the pose its save holds, and this
-// walk is the only place the key is written.
+// MTA divergence: its server mints an element's id at creation (Server/mods/deathmatch/logic/
+// CElement.cpp:39) and the entity add only carries it (packets/CEntityAddPacket.cpp:103), and content
+// the client already holds is addressed by model, position and radius (Client/game_sa/
+// CBuildingRemovalSA.cpp:28-75). The joiner's natives are that kind of content, so ours is keyed by
+// the pose its save holds, and this walk is the only place the key is written.
 //
 // The save-time position of every live tracked trash actor of one form, by host eid: read right
 // after the scratch save was serialised (save_transfer's capture, the same game-thread tick), so
@@ -392,6 +394,7 @@ static bool CaptureDeclineSaid_(uint32_t& n) { return ++n == 1 || n % 100 == 0; 
 // One walk, game thread.
 static void CollectTrackedTrashTransforms_(
     bool clumps, std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out) {
+    g_captureMintDeclined = g_captureLocUnread = 0;
     const int32_t n = R::NumObjects();
     int minted = 0;
     // [MEASURE sync-order-wp5, temporary]

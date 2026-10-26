@@ -55,8 +55,10 @@ std::atomic<coop::net::Session*> g_session_ptr{nullptr};
 // The running drain's enumeration, game thread only. A candidate is an ELEMENT ID, not an actor:
 // an entity re-skins mid-drain (a pile becomes a clump becomes a pile), so the actor the
 // enumeration saw may be gone at the candidate's turn while the eid still names the entity. The
-// drain resolves each eid to its element's current actor at its turn (MTA's CMapManager builds a
-// joiner's entity list in one pass over its elements, not over a copy of their pointers).
+// drain resolves each eid to its element's current actor at its turn. MTA's SendMapInformation
+// (Server/mods/deathmatch/logic/CMapManager.cpp:195-297) does copy element pointers
+// (packets/CEntityAddPacket.h:29), but builds and serialises them in one synchronous call, so no
+// element can die between; ours is time-sliced (net/snapshot_send_scope.h), hence the id.
 std::vector<coop::element::ElementId> g_snapshotCandidates;
 size_t g_snapshotCandidateIdx = 0;
 // PropSpawns actually sent this drain (skips excluded); reported in SnapshotComplete.
