@@ -25,6 +25,7 @@
 #include "coop/props/trash_sweep.h"        // NoteSwept, a broom stroke's clumps
 #include "coop/props/trash_use_intercept.h"
 #include "coop/props/trash_morph_gate.h"  // OnDisconnect: the session the refusals read
+#include "coop/props/trash_native_hold.h"  // OnDisconnect: the load catch's cached session
 #include "coop/props/prop_wire_parity.h"  // PhysFlagsOf, the one flag builder
 #include "coop/interactables/drive_payload_sync.h"
 #include "ue_wrap/desk/drive_chain.h"
@@ -403,6 +404,7 @@ void OnDisconnect() {
     g_pilelessClumpSources.clear();
     coop::trash_use_intercept::OnDisconnect();  // clears its cached session + gesture-pairing latch
     coop::trash_morph_gate::OnDisconnect();     // with no session the game's trash authors itself again
+    coop::trash_native_hold::OnDisconnect();    // and a save load holds nothing
 }
 
 bool DebugSendGrabIntent(uint32_t eid) {

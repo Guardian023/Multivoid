@@ -12,6 +12,7 @@
 #include "coop/props/prop_echo_suppress.h"  // MarkIncomingDestroy (an authoritative destroy is not our news)
 #include "coop/props/prop_element_tracker.h"  // UnmarkKnownKeyedProp
 #include "coop/props/remote_prop.h"  // RegisterPropMirror / ClearAnyDriveFor
+#include "coop/props/trash_native_hold.h"  // Hold: the one recipe that parks a trash body
 #include "coop/props/trash_clump_pose_stream.h"  // ClearDriveForEid (the per-eid carry drive)
 
 #include "ue_wrap/engine/engine.h"
@@ -123,9 +124,7 @@ void* Materialize(coop::element::ElementId eid, const std::wstring& className, u
     // after it exactly one peer authors each, which is what makes these root-cause parkings and
     // not blindfolds. All three are restorable; the session teardown destroys what it made rather
     // than restoring, because a mirror expresses a remote entity and there is none left.
-    E::SetActorTickEnabled(native, false);         // scheduler kill: a clump's tick wakes its body every second
-    E::SetActorSimulatePhysics(native, false);     // physics receiver: kinematic while the host drives it
-    E::SetActorRootMovable(native);                // else SetActorLocation silently no-ops on a Static root
+    coop::trash_native_hold::Hold(native);         // tick off, kinematic, root Movable: the host authors it
     // Skin the host's chip type the GAME's OWN way: the chip type through the actor's own init,
     // then the scale and the host actor's rotation. The SpawnActor above already ran init once,
     // through the construction script, with the default chip type of 0; this re-skins it to the

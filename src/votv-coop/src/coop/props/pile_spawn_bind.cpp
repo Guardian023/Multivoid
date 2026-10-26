@@ -18,6 +18,7 @@
 #include "coop/props/prop_element_tracker.h"  // IsBoundMirrorNative / GetPropElementIdForActor
 #include "coop/props/prop_wire_parity.h"  // RestoreCollisionIfNeeded
 #include "coop/props/remote_prop.h"  // RegisterPropMirror
+#include "coop/props/trash_native_hold.h"  // Hold: the one recipe that parks a trash body
 #include "coop/props/save_time_retire_util.h"  // kExactMatchR2Cm (the shared match radius)
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/core/log.h"
@@ -275,12 +276,12 @@ void AdoptOwnNative(void* native, uint32_t eid, int senderSlot, const char* why)
     if (!native || eid == 0u) return;
     // A bound PILE is a Static, inert actor. A bound CLUMP is a ticking, simulating body, and from
     // this bind the host authors its pose and its turn back into a pile: left as loaded it is a
-    // second author of both (it rolls and is pushed on this peer alone). The same two parkings a
-    // spawned clump mirror gets (trash_mirror::Materialize); its collision stays, because a clump
-    // at rest is aimed at and stood on like the host's.
+    // second author of both (it rolls and is pushed on this peer alone). The same parking a
+    // spawned clump mirror gets (trash_mirror::Materialize) and a joiner's load spawn gave it
+    // (trash_native_hold); its collision stays, because a clump at rest is aimed at and stood on
+    // like the host's.
     if (ue_wrap::prop::IsGarbageClump(native)) {
-        ue_wrap::engine::SetActorTickEnabled(native, false);      // a clump's tick wakes its body every second
-        ue_wrap::engine::SetActorSimulatePhysics(native, false);  // kinematic: the host drives it
+        coop::trash_native_hold::Hold(native);   // the join's load hold, kept: the host drives it from here
         g_parkedClumps.push_back({native, R::InternalIndexOf(native)});
     }
     // The claim: this actor was expressed on the wire this bracket, so the membership sweep must

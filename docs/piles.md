@@ -206,7 +206,7 @@ replacement for the position key.
 | the pile-to-clump identity | the host | one id, rebound onto each successor at its birth, guarded by the sync context |
 | a dispenser's counters | each peer, minimum wins | the host as sent at join |
 | a broom stroke | the host | a client's stroke is what it read of its holder; the host runs the stroke with those reads, reach- and rate-checked |
-| a native a joiner has not bound | the host | only host messages move it (converts, position corrections, pose streams); the joiner runs no morph of it (`coop/props/trash_morph_gate`) |
+| a native a joiner has not bound | the host | only host messages move it (converts, position corrections, pose streams); the joiner runs no morph of it (`coop/props/trash_morph_gate`), and a clump of it is held still from its load spawn (`coop/props/trash_native_hold`) |
 | bagging a pile | the host, by intent | a client's press is refused at the script-body gate and sent as the target's id; the host spawns the bag and destroys the target, so the prop seams carry both |
 
 ## Wire messages

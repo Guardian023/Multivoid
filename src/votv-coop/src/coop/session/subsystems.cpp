@@ -124,6 +124,7 @@
 #include "coop/props/prop_park.h"  // the parks' held Characters, given back at session end
 #include "coop/props/rider_hold.h"  // the holds on welded Characters' movement, released last
 #include "coop/props/trash_collect_sync.h"
+#include "coop/props/trash_native_hold.h"  // the load catch on the join's save spawns
 #include "coop/items/broom_stroke.h"
 #include "coop/props/pack_trash_intent.h"
 #include "coop/interactables/verb_lanes.h"  // the interactable lanes on a device's own verbs, at the script gate
@@ -206,6 +207,7 @@ void InstallLoadWatchers(coop::net::Session& session) {
     coop::explosion_sync::Install(&session);  // the birth seam on every Blueprint deferred spawn: a client's own explosions dissolve, from the load window on; also the request lane's session and client watches
     coop::explosion_parking::Install(&session);  // the explosion copy's parking watches: the four verbs, the rune check, the force narrowing (client session only)
     coop::world_load_episode::InstallReplayWatch(session);
+    coop::trash_native_hold::Install(&session);  // the join load's clumps held still at their spawn: a catch installed with the world would arm after the load
 }
 
 void Install(coop::net::Session& session) {

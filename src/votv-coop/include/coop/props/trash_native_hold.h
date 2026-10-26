@@ -1,0 +1,41 @@
+// coop/props/trash_native_hold.h -- a native trash body the host authors is held still.
+//
+// A trash body whose pose the host authors (a spawned mirror, a bound save-loaded native) has its tick
+// and physics simulation turned off, and its root made Movable so a pose write takes. Hold is that
+// recipe, and the one copy of it: the mirror spawn, the bind of a save-loaded native and the join's
+// load catch all call it.
+
+#pragma once
+
+namespace coop::net { class Session; }
+
+namespace coop::trash_native_hold {
+
+// The load catch. A joiner's world is the host's save loaded by the game's own spawn loop, and a clump
+// saved in flight would run its physics from its first frame and settle off the pose its save holds,
+// which is the pose the host's snapshot keys it by. So a client holds the clumps the join's load
+// spawns, at their saved pose, until the bind takes them (AdoptOwnNative keeps the hold) or the
+// join's divergence sweep retires them.
+
+// What a join matches by pose, and whether it needs the hold:
+//   - chip piles (the capture map, the sweep's exact match): Static mobility, never simulate. Exempt.
+//   - clumps (the capture map, the sweep's exact match): simulate. HELD.
+//   - off-form kerfurs: matched by their portable save key, or by class within 500 cm
+//     (kerfur_prop_adoption); a loaded kerfur prop is at rest and follows the host's physics flags
+//     at the bind. Exempt.
+//   - any other keyed prop: matched by its key; the 30 cm class-and-radius fuzzy match is a
+//     fallback whose bind reconciles the physics flags (prop_wire_parity). Exempt.
+
+// Hold a trash body still: tick off, physics simulation off, root Movable. Idempotent. The caller
+// has a live trash actor. Game thread.
+void Hold(void* actor);
+
+// Cache the session the catch reads and, until it has taken, patch FinishSpawningActor with the load
+// catch. Called every session tick from the first one (the load watchers), since the join's load
+// spawns run before the world is up. Game thread.
+void Install(coop::net::Session* session);
+
+// Drop the cached session. Game thread.
+void OnDisconnect();
+
+}  // namespace coop::trash_native_hold

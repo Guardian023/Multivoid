@@ -392,6 +392,7 @@ set(VOTVCOOP_SOURCES
     src/coop/props/trash_collect_sync.cpp
     src/coop/props/trash_use_intercept.cpp
     src/coop/props/trash_morph_gate.cpp
+    src/coop/props/trash_native_hold.cpp
     src/coop/props/trash_pile_sync.cpp
     src/coop/props/trash_mirror.cpp
     src/coop/player/puppet_carry_drive.cpp
