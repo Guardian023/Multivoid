@@ -187,7 +187,9 @@ cm off in an earlier run, a knock being no verb ([props.md](props.md)) `[V]`.
 ### Save-loaded piles at a join
 
 A joiner's world comes from the host's save, so the client has its own copy of every pile. The
-host expresses each with its id and the pile's save-time position; the client binds its own
+host expresses each with its id and the pile's save-time position, which is the blob capture's
+alone (nothing writes it afterwards, so a pile that loops between pile and clump keeps the key its
+save holds) and rides the spawn only; the client binds its own
 save-loaded actor to the host's id by that position, at spawn time (`coop/props/pile_spawn_bind`)
 or at quiescence (`coop/element/quiescence_drain`), and a pile the host moved during the window
 is set right by the host's position message, with the identity following the host's word rather
@@ -228,8 +230,11 @@ clump held by someone at the moment of the join binds without a duplicate. A pil
 during the window arrives as a position correction after the snapshot. A clump a broom has swept
 and that is still rolling is in no snapshot, having no key. A land before the joiner's world is up
 is not sent to it, and the pile reaches it in the world-ready snapshot; a land after is sent to it
-as to everyone, carrying the pile's pre-sweep position so the joiner's save-loaded copy at the old
-spot is retired `[RD]`.
+as to everyone, and carries no position key, since the spawn already did. The snapshot drain is
+keyed by id: each id is resolved to its element's current actor at its turn, so an entity that
+changes form while the drain runs still gets its row, and an id whose element is gone at its turn
+is dropped and counted `[?]`. A convert for an id whose native has not loaded waits for its bind
+and is dropped if the bind is given up `[?]`.
 
 The client's own piles do not all exist when the snapshot arrives -- its save load is still
 draining -- so an expression that finds no actor at its save-time position is HELD rather than

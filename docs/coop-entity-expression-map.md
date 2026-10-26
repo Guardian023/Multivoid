@@ -157,7 +157,10 @@ copy of the row's form at the save-time position and parks it (tick and physics 
 authors its pose), and the row is followed by a to-clump convert at the entity's current
 generation, without which every later pose of it is held. The key on a row says which form the
 save held: an entity that changed form in the join window is materialised as it is now, and the
-joiner's copy of the old form is retired at the key. `[V]`
+joiner's copy of the old form is retired at the key. `[V]` The key and its form are the blob
+capture's: the capture is the only writer, an id sits in exactly one of the capture's pile and clump
+maps, and the row is the key's one carrier (no convert repeats it). The snapshot drain is keyed by
+id and resolves each to its element's current actor at its turn. `[?]`
 
 A DISPENSER pile (`trashBitsPile_C`, the "uses 6 of 7" one) is the opposite: it is a save actor and
 its save key IS its cross-peer identity, which is what its counter mirror, its depletion destroy and

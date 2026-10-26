@@ -205,8 +205,12 @@ is tied to its host id by the exact position it had at the blob instant, carried
 that delivers it and matched at quiescence (`coop/props/pile_spawn_bind`,
 `coop/element/quiescence_drain`, `coop/creatures/kerfur_reconcile`); a pile the host grabs
 inside the window has its id minted at the grab edge so the identity survives the pile-to-clump
-change of actor. The index-to-id sidecar of step 2 is the intended replacement for the position
-match; see the limits.
+change of actor. That position is the capture's alone: the blob capture records it in the tick the
+save is serialised and nothing writes it afterwards, so a pile that loops between pile and clump
+while the joiner loads keeps the key its save holds. The spawn is the key's one carrier (a later
+convert carries none), and the snapshot drain is keyed by id: each id is resolved to its element's
+current actor at its turn, so an entity that changes form mid-drain still gets its row `[?]`. The
+index-to-id sidecar of step 2 is the intended replacement for the position match; see the limits.
 
 ### A world change mid-session
 
