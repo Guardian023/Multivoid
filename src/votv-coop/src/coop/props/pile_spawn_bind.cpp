@@ -11,6 +11,7 @@
 #include "coop/element/bind_wait.h"  // MarkDeferred: messages for the unbound eid wait for the sweep's bind
 #include "coop/element/quiescence_drain.h"  // ArmPendingSaveTimeTwin (the spawn mechanism CAPTURES into the order owner)
 #include "coop/config/config.h"  // ResolveFlag -- the [PILE-DELTA] probe flag (multivoid.ini [dev], not bats/env)
+#include "coop/dev/pile_defer_drill.h"  // [dev] the pile deferral drill's counts
 #include "coop/dev/pile_key_probe.h"  // [MEASURE sync-order-wp5, temporary] the key against the native, at the bind miss
 #include "coop/element/registry.h"  // Element::SetSaveNative on the bound native
 #include "coop/props/join_membership_sweep.h"  // RecordClaimIfTracking (a bound native is expressed this bracket)
@@ -213,8 +214,10 @@ void* BindOwnSavePile(const coop::net::PropSpawnPayload& payload,
             // Messages for the eid wait for the sweep's bind only while it owns no actor: the same twin is
             // also armed for a bound eid (a dup retire), which has nothing to wait for.
             coop::element::Element* row = coop::element::Registry::Get().Get(payload.elementId);
-            if (!row || !row->GetActor() || !R::IsLiveByIndex(row->GetActor(), row->GetInternalIdx()))
+            if (!row || !row->GetActor() || !R::IsLiveByIndex(row->GetActor(), row->GetInternalIdx())) {
                 coop::element::bind_wait::MarkDeferred(payload.elementId, why);
+                coop::dev::pile_defer_drill::NoteDeferred(payload.elementId);   // [dev] the pile deferral drill's count
+            }
         } else {
             UE_LOGW("[PILE] BIND eid=%u at (%.1f,%.1f,%.1f) -- %s, and the expression carries no "
                     "save-time key to retry from", payload.elementId, matchPos.X, matchPos.Y, matchPos.Z, why);
@@ -292,6 +295,7 @@ void AdoptOwnNative(void* native, uint32_t eid, int senderSlot, const char* why)
     // Save-native is what the rest of the machinery tests (IsBoundMirrorNative): the grab route,
     // the morph hand-off, the divergence-sweep exemption and the retire all read it.
     if (auto* el = coop::element::Registry::Get().Get(eid)) el->SetSaveNative(true);
+    coop::dev::pile_defer_drill::NoteBound(eid);   // [dev] the pile deferral drill's count
     ++g_pileBindCount;
     if (g_pileBindCount <= 8 || (g_pileBindCount % 200) == 0) {
         ue_wrap::FVector at{};

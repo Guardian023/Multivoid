@@ -11,6 +11,7 @@
 #include "coop/props/remote_prop.h"
 #include "remote_prop_internal.h"  // ResolveLiveActorByEid + DestroyEchoSuppressed (impl-private seam)
 
+#include "coop/dev/pile_defer_drill.h"        // [dev] the converts that meet a deferred eid
 #include "coop/element/bind_wait.h"           // Hold: a convert for an eid whose twin is pending
 #include "coop/props/trash_mirror.h"         // Materialize / RepositionBoundNative
 #include "coop/props/pile_look.h"
@@ -71,12 +72,15 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
     // longer deferred: the convert carries the host's real pose and form, and standing the mirror up
     // from it is today's unbound path. Before the context gate, so a held convert does not advance
     // E's generation and the replay is judged fresh.
-    if (!cur && coop::element::bind_wait::IsDeferred(E) &&
-        coop::element::bind_wait::HoldReplayOnGiveUp(E, kConvertKind, senderSlot, &ReplayConvert, &payload,
-                                                     sizeof payload)) {
-        UE_LOGI("[PILE] CLIENT convert %s eid=%u ctx=%u -- the eid's twin is pending; held in bind_wait",
-                edge, E, static_cast<unsigned>(payload.ctx));
-        return nullptr;
+    if (!cur && coop::element::bind_wait::IsDeferred(E)) {
+        const bool held = coop::element::bind_wait::HoldReplayOnGiveUp(E, kConvertKind, senderSlot, &ReplayConvert,
+                                                                       &payload, sizeof payload);
+        coop::dev::pile_defer_drill::NoteConvertAtDeferred(held);   // [dev] the pile deferral drill's count
+        if (held) {
+            UE_LOGI("[PILE] CLIENT convert %s eid=%u ctx=%u -- the eid's twin is pending; held in bind_wait",
+                    edge, E, static_cast<unsigned>(payload.ctx));
+            return nullptr;
+        }
     }
     // Adopt the host's context for E and drop a stale or out-of-order convert (a duplicate, or
     // one older than a transition already applied).
