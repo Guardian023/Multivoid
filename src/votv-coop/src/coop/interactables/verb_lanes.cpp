@@ -4,6 +4,7 @@
 
 #include "coop/interactables/camera_toggle_intent.h"
 #include "coop/interactables/coffee_intent.h"
+#include "coop/interactables/coffee_state.h"
 #include "coop/interactables/cord_sync.h"
 #include "coop/interactables/desk_verb_intent.h"
 #include "coop/interactables/door_state_verbs.h"
@@ -33,6 +34,7 @@ void Install(coop::net::Session& session) {
     coop::point_sack_intent::Install(&session);  // a client's opened point sack is paid by the host
     coop::cord_sync::Install(&session);          // a cord's link is the host's: a client claims its own player's plug, the host answers
     coop::coffee_intent::Install(&session);      // a client's press of the coffee vending machine or the coffee maker is run by the host
+    coop::coffee_state::Install(&session);       // the coffee maker's state is the host's: it publishes the maker's record, a client's fill is cancelled
 }
 
 void Tick(coop::net::Session& session) {
@@ -48,6 +50,7 @@ void Tick(coop::net::Session& session) {
     { ue_wrap::ScopedWalkTimer _w{"sync:desk_verb"}; coop::desk_verb_intent::Tick(session); }  // settle its seams; HOST: run one queued desk press a tick a client
     { ue_wrap::ScopedWalkTimer _w{"sync:cord"}; coop::cord_sync::Tick(); }  // settle its watches; HOST: the seed a joiner is owed; CLIENT: retry the parked links
     { ue_wrap::ScopedWalkTimer _w{"sync:coffee"}; coop::coffee_intent::Tick(session); }  // settle its gates; HOST: run one queued coffee press a tick a client
+    coop::coffee_state::Tick();         // settle the maker's brew and fill gates
 }
 
 void ConnectReplayForSlot(int slot) {
@@ -67,6 +70,7 @@ void OnDisconnect() {
     coop::point_sack_intent::OnDisconnect();
     coop::cord_sync::OnDisconnect();
     coop::coffee_intent::OnDisconnect();   // a coffee device's own press runs where it is made
+    coop::coffee_state::OnDisconnect();    // the maker's own fill runs where it is made
 }
 
 }  // namespace coop::verb_lanes
