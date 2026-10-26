@@ -35,6 +35,10 @@ inline constexpr uint64_t kTtlMs = 30'000;
 // has no actor yet waits in bind_wait, this pen is for the one that is here and not ready.
 void Admit(uint32_t eid, uint8_t authorSlot, std::vector<uint8_t>&& blob, uint64_t nowMs);
 
+// A slice for the eid applied directly: its older pen entry is erased, so it cannot apply over the newer state
+// at the next sweep. Not for the replay callback of Sweep, whose entry the sweep retires itself.
+void Erase(uint32_t eid);
+
 // Re-offer each parked blob to its own author's arbitration. The callback returns false only when
 // the container is STILL not ready; anything else (applied, refused, malformed) retires the
 // entry.
@@ -52,7 +56,7 @@ void Reset();
 
 // The arithmetic selftest, un-gated at session start: the cap that evicts this author's own oldest
 // and nobody else's, the host author that is not capped at all, the re-park that does not grow the
-// table, the TTL that drops an entry only outside a bracket, and a replay that retires what it
+// table, the TTL that drops an entry only outside a bracket, an erase of one eid, and a replay that retires what it
 // dealt with.
 bool RunSelftest();
 

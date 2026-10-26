@@ -498,6 +498,8 @@ void ReplayHeld(const uint8_t* bytes, size_t n, int senderSlot) {
         coop::element::bind_wait::NoteNeverBound(kContainerContents, eid);
     else if (outcome == Ingest::Park)
         pk::Admit(eid, static_cast<uint8_t>(senderSlot), std::move(blob), NowMs());
+    else if (outcome == Ingest::Applied)
+        pk::Erase(eid);   // an older pen entry of this eid must not apply over it
 }
 
 // The verb edge.
@@ -634,6 +636,9 @@ void OnContentsChunk(const coop::net::BlobChunkPayload& p, uint8_t senderSlot) {
         pk::Admit(eid, senderSlot, std::move(blob), NowMs());
         return;
     }
+    // Applied here and now: an older slice of this eid still waiting in the pen must not apply over it at the
+    // next sweep.
+    if (outcome == Ingest::Applied) pk::Erase(eid);
 }
 
 void QueueConnectBroadcastForSlot(int peerSlot) {

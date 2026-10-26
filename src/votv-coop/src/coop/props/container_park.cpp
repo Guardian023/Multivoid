@@ -95,6 +95,8 @@ void NoteJoinBracket(bool open, uint64_t nowMs) {
     }
 }
 
+void Erase(uint32_t eid) { g_parked.erase(eid); }
+
 size_t Size() { return g_parked.size(); }
 
 void Reset() {
@@ -161,6 +163,11 @@ bool RunSelftest() {
     admit(900, 1, 100);
     Sweep(&ReplayAlways, 100);
     check(Size() == 0, "a replay that dealt with an entry retires it");
+    admit(901, 1, 100);
+    admit(902, 1, 100);
+    Erase(901);
+    Erase(903);
+    check(Size() == 1 && g_parked.find(902) != g_parked.end(), "an erase takes its own eid and no other");
 
     Reset();
     g_quiet = false;
