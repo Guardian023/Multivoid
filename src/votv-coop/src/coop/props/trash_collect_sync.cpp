@@ -24,7 +24,7 @@
 #include "coop/props/trash_channel.h"      // NoteClumpBorn, the clump's birth certificate
 #include "coop/props/trash_sweep.h"        // NoteSwept, a broom stroke's clumps
 #include "coop/props/trash_use_intercept.h"
-#include "coop/props/trash_morph_gate.h"  // the client-side refusal of the trash morph verbs
+#include "coop/props/trash_morph_gate.h"  // OnDisconnect: the session the refusals read
 #include "coop/props/prop_wire_parity.h"  // PhysFlagsOf, the one flag builder
 #include "coop/interactables/drive_payload_sync.h"
 #include "ue_wrap/desk/drive_chain.h"
@@ -396,11 +396,6 @@ void Install(coop::net::Session* session) {
     // hard-throw bridge) lives in trash_use_intercept, which caches its own session and retries
     // until mainPlayer_C is loaded.
     coop::trash_use_intercept::Install(session);
-
-    // The morph gate refuses the three verbs the game's own trash actors use to author a
-    // transition, on a client only; it needs the two trash classes rather than mainPlayer_C and so
-    // resolves on its own schedule.
-    coop::trash_morph_gate::Install(session);
 }
 
 void OnDisconnect() {
