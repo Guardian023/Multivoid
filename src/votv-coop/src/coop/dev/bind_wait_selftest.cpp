@@ -23,7 +23,7 @@ namespace BW = coop::element::bind_wait;
 
 // Above kMaxElements (65536) and below kInvalidId: no row of the registry and no wire eid is ever here.
 constexpr uint32_t kBase = 0xFFFE0000u;
-constexpr uint32_t kEids = 26;  // kBase .. kBase+25
+constexpr uint32_t kEids = 27;  // kBase .. kBase+26
 constexpr uint16_t kKinds = 170;  // the kinds the checks use are all below this
 // A pump with real holds in it is not the selftest's to run: it waits this many ticks for them to clear.
 constexpr uint32_t kMaxWaitTicks = 600;
@@ -444,6 +444,23 @@ const char* CheckGreen() {
     if (!g_calls.empty() || BW::GivenUpOf(162) != givenUp162 + 1)
         return "a queued flagged hold of a slot that left was replayed or not counted into GivenUpOf";
     if (const char* b = Balanced(20)) return b;
+    // 21. Three flagged holds of one (kind, slot) for one eid coalesce to one, latest bytes, still flagged: the
+    // give-up replays that one and the two replaced are counted into CoalescedOf, not HeldOf.
+    const uint32_t e27 = kBase + 26;
+    const uint32_t held163 = BW::HeldOf(163), coalesced163 = BW::CoalescedOf(163), replayed163 = BW::ReplayedOf(163);
+    BW::MarkDeferred(e27, "selftest: coalesced flagged holds");
+    HoldFlagged(e27, 163, 1, 'a');
+    HoldFlagged(e27, 163, 1, 'b');
+    HoldFlagged(e27, 163, 1, 'c');
+    if (BW::HeldOf(163) != held163 + 1 || BW::CoalescedOf(163) != coalesced163 + 2)
+        return "three flagged holds of one kind and slot did not coalesce into one";
+    BW::GiveUpReplayHeld(e27, "selftest");
+    BW::Pump();
+    if (!Calls("c")) return "the give-up did not replay exactly the newest flagged hold";
+    if (BW::ReplayedOf(163) != replayed163 + 1) return "the coalesced flagged hold was not counted into ReplayedOf";
+    if (BW::HasHolds()) return "a coalesced flagged hold left bytes held";
+    g_calls.clear();
+    if (const char* b = Balanced(21)) return b;
     return nullptr;
 }
 
@@ -477,7 +494,7 @@ void Run() {
     const char* failed = CheckGreen();
     Cleanup();
     if (failed) UE_LOGE("[BIND-WAIT-SELFTEST] FAIL: %s", failed);
-    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (20 checks)");
+    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (21 checks)");
 }
 
 }  // namespace

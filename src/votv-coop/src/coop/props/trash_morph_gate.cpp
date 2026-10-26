@@ -3,7 +3,6 @@
 #include "coop/props/trash_morph_gate.h"
 
 #include "coop/net/session.h"
-#include "ue_wrap/core/game_thread.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/script_gate.h"
 #include "ue_wrap/facts/function_row.h"
@@ -34,6 +33,10 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 // are registered once, and the flag is set only when all three took: a partial set is retried by the
 // next Install. The role gate below is what turns the refusals on and off.
 std::atomic<bool> g_watched{false};
+
+// Set by Tick, game thread only: the three watches settled (live, or dead for good). Process-wide like
+// the registration, so a reconnect does not repeat the check.
+bool g_live = false;
 
 // The watch tags, distinct so the gate's tables keep them apart.
 constexpr int kTagToClump      = 1;
@@ -102,17 +105,36 @@ void Install(coop::net::Session* session) {
                     "that transition locally", r.row->Class(), r.row->Name());
         }
     }
-    // Install runs on the TimelineThread, where ResolvePendingNames does nothing, so the resolve is posted to
-    // the game thread: it runs at the next outermost ProcessEvent, before the session can be connected, and
-    // MustNotAuthor refuses nothing until then.
-    ue_wrap::game_thread::Post([] { sg::ResolvePendingNames(); });
+    // Install runs on the TimelineThread, where ResolvePendingNames does nothing; WatchName posted one
+    // resolve to the game thread, and Tick drives the rest until all three watches are live.
     if (watched != 3) {
-        UE_LOGW("trash_morph_gate: only %d/3 trash morph verbs watched -- the next session start retries", watched);
+        UE_LOGW("trash_morph_gate: only %d/3 trash morph verbs registered -- the next session start retries", watched);
         return;
     }
     g_watched.store(true, std::memory_order_release);
-    UE_LOGI("trash_morph_gate: 3/3 trash morph verbs watched by class and name -- on a client every "
-            "pile-clump transition is the host's, delivered as PropConvert");
+    UE_LOGI("trash_morph_gate: 3/3 trash morph verbs registered by class and name -- live once their names "
+            "resolve (Tick says when)");
+}
+
+void Tick() {
+    if (g_live || !g_watched.load(std::memory_order_acquire)) return;
+    sg::ResolvePendingNames();
+    const bool live = sg::NameWatchLive(kRowToClump, kTagToClump) &&
+                      sg::NameWatchLive(kRowPlayerGrabbed, kTagPlayerGrab) &&
+                      sg::NameWatchLive(kRowClumpContact, kTagClumpContact);
+    if (!live) {
+        // A watch dead for good (its class declares no such function) never goes live: say so once, stop.
+        if (!(sg::NameWatchSettled(kRowToClump, kTagToClump) && sg::NameWatchSettled(kRowPlayerGrabbed, kTagPlayerGrab) &&
+              sg::NameWatchSettled(kRowClumpContact, kTagClumpContact)))
+            return;
+        UE_LOGW("trash_morph_gate: the three watches settled and not all are live -- a client can still "
+                "author a trash transition locally");
+        g_live = true;
+        return;
+    }
+    g_live = true;
+    UE_LOGI("trash_morph_gate: 3/3 trash morph verbs live -- on a client every pile-clump transition is "
+            "the host's, delivered as PropConvert");
 }
 
 void OnSessionStart() {

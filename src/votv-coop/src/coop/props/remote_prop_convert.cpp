@@ -72,6 +72,10 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
     // longer deferred: the convert carries the host's real pose and form, and standing the mirror up
     // from it is today's unbound path. Before the context gate, so a held convert does not advance
     // E's generation and the replay is judged fresh.
+    // Divergence from MTA: it drops a packet for an element it lacks (CRPCFunctions.cpp:157-165), and
+    // its nearer shape keeps state on the element until it streams in (CClientObject.cpp:451-476).
+    // Ours holds the newest state, because a client adopts its save-loaded twin, which loads after
+    // the row. Each convert carries the full state, so a newer one replaces the held one.
     if (!cur && coop::element::bind_wait::IsDeferred(E)) {
         const bool held = coop::element::bind_wait::HoldReplayOnGiveUp(E, kConvertKind, senderSlot, &ReplayConvert,
                                                                        &payload, sizeof payload);

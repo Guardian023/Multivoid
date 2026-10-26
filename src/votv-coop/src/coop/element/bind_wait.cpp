@@ -195,7 +195,7 @@ bool HoldImpl(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void
             Release(h.slot, h.bytes.size());
             Charge(senderSlot, n);
             h.fn = fn;
-            h.replayOnGiveUp = replayOnGiveUp;
+            h.replayOnGiveUp = h.replayOnGiveUp || replayOnGiveUp;   // a replace never clears the flag
             h.bytes.assign(b, b + n);
             ++g_heldN;
             ++g_kinds[kind].coalesced;
@@ -219,7 +219,7 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
 
 bool HoldReplayOnGiveUp(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n) {
     UE_ASSERT_GAME_THREAD("bind_wait::HoldReplayOnGiveUp");
-    return HoldImpl(eid, kind, senderSlot, fn, bytes, n, /*coalesce=*/false, /*replayOnGiveUp=*/true);
+    return HoldImpl(eid, kind, senderSlot, fn, bytes, n, /*coalesce=*/true, /*replayOnGiveUp=*/true);
 }
 
 void OnBound(uint32_t eid) {

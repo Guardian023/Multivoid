@@ -282,6 +282,7 @@ void Tick(coop::net::Session& session) {
     coop::subsystems::HoldSessionGate();
     coop::prop_key_index::Tick();  // a seed still owed, the births that finished loading: before any inbox read
     coop::subsystems::InstallLoadWatchers(session);
+    coop::trash_morph_gate::Tick();  // drives the gate's name resolve until its three watches are live
 
     // ---- Hitch and source probe (diagnostic, always on, near free) ----
     // [HITCH] times the gap between consecutive game-thread Ticks (the whole frame); [HITCH-SRC],

@@ -95,6 +95,7 @@ void Window(coop::net::Session& session) {
     }
     const uint32_t deferred = static_cast<uint32_t>(g_deferred.size());
     const uint32_t held = BW::HeldOf(kConvertKind), replayed = BW::ReplayedOf(kConvertKind);
+    const uint32_t coalesced = BW::CoalescedOf(kConvertKind);   // converts a newer convert replaced: not in held
     const uint32_t heldGivenUp = BW::GivenUpOf(kConvertKind), neverBound = BW::DropsNeverBound();
     const unsigned orphans = CountOrphans();
 
@@ -126,8 +127,8 @@ void Window(coop::net::Session& session) {
             if (!materialised) fails.Add("eid=%u ends with no mirror bound to it", g_forcedEid);
         }
     }
-    UE_LOGI("[PILE-DEFER] client DONE deferred=%u bound=%u gaveup=%u held=%u replayed=%u heldGivenUp=%u neverBound=%u "
-            "orphans=%u", deferred, bound, gaveUp, held, replayed, heldGivenUp, neverBound, orphans);
+    UE_LOGI("[PILE-DEFER] client DONE deferred=%u bound=%u gaveup=%u held=%u replayed=%u heldGivenUp=%u coalesced=%u "
+            "neverBound=%u orphans=%u", deferred, bound, gaveUp, held, replayed, heldGivenUp, coalesced, neverBound, orphans);
 }
 
 void ClientTick(coop::net::Session& session) {
@@ -148,7 +149,7 @@ void ClientTick(coop::net::Session& session) {
         if (now - g_idleAtMs >= kQuiesceBoundMs) {
             UE_LOGW("[PILE-DEFER] client FAIL: the load tail had not quiesced %llu s after the join",
                     static_cast<unsigned long long>(kQuiesceBoundMs / 1000));
-            UE_LOGI("[PILE-DEFER] client DONE deferred=%zu bound=0 gaveup=0 held=0 replayed=0 heldGivenUp=0 "
+            UE_LOGI("[PILE-DEFER] client DONE deferred=%zu bound=0 gaveup=0 held=0 replayed=0 heldGivenUp=0 coalesced=0 "
                     "neverBound=0 orphans=0", g_deferred.size());
             g_done = true;
         }

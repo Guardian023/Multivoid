@@ -48,8 +48,10 @@ bool Holds(uint32_t eid, uint16_t kind);
 // `coalesce`: an earlier hold of the same `kind` and `senderSlot` for the eid is replaced in place, latest wins.
 bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce);
 
-// Hold, always appending, for a message that is the receiver's own unbound path and carries the host's real
-// state (a convert's pose and form): GiveUpReplayHeld still replays it. Same returns as Hold.
+// Hold, coalescing latest-wins per (kind, senderSlot), for a message that is the receiver's own unbound path
+// and carries the host's full state (a convert's pose and form): GiveUpReplayHeld still replays it. A newer
+// hold replaces the older in place (CoalescedOf) and the replay flag is kept: a replace never clears it.
+// Same returns as Hold.
 bool HoldReplayOnGiveUp(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n);
 
 // A bind took: the eid is no longer deferred and its holds become due.

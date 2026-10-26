@@ -145,9 +145,15 @@ void NoteGaveUp(uint32_t eid, const PendingTwin& p, void* bound) {
                 "(%.1f,%.1f,%.1f) never resolved", eid, p.unresolvedPasses, p.x, p.y, p.z);
         return;
     }
-    UE_LOGW("[PILE-1C] eid=%u GIVEN UP after %d pass(es) with NO actor -- no native ever appeared at "
-            "its save-time key (%.1f,%.1f,%.1f), so this pile is absent on this client until a later "
-            "join re-expresses it", eid, p.unresolvedPasses, p.x, p.y, p.z);
+    if (bind_wait::Holds(eid, static_cast<uint16_t>(coop::net::ReliableKind::PropConvert))) {
+        UE_LOGW("[PILE-1C] eid=%u GIVEN UP after %d pass(es) with NO native at its save-time key "
+                "(%.1f,%.1f,%.1f) -- a held convert replays, and the host's pile lands from it", eid,
+                p.unresolvedPasses, p.x, p.y, p.z);
+    } else {
+        UE_LOGW("[PILE-1C] eid=%u GIVEN UP after %d pass(es) with NO actor -- no native ever appeared at "
+                "its save-time key (%.1f,%.1f,%.1f), so this pile is absent on this client until a later "
+                "join re-expresses it", eid, p.unresolvedPasses, p.x, p.y, p.z);
+    }
     if (coop::dev::pile_key_probe::On())   // [MEASURE sync-order-wp5, temporary]
         coop::dev::pile_key_probe::LogGaveUp(eid, ue_wrap::FVector{p.x, p.y, p.z}, p.wantClump, p.chipType);
     coop::dev::pile_defer_drill::NoteGivenUp(eid);   // [dev] the pile deferral drill's count
