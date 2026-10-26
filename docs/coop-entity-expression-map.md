@@ -49,6 +49,7 @@ are peer-gated. `[V]`
 | a pocket pickup and a place | the destroy seam; the finish-spawning seam | the drop-intent door | the parked key |
 | characters | a deferred spawn | the spawn interceptor; the object scan; the native seam for graph spawns | a host id |
 | the wisp swarm | `EX_CallMath` spawns from the swarm trigger's graph | the native seam, gated by the calling class | a host id |
+| the Geom Octa (`geomOcta_C`) | the host's night roll (an Octa, else a night egg); the dev menu's spawn button; the spawn menu's row | the EX spawn catch's gamemode source row on the host; the spawn interceptor for the dev button | a host id (an NPC element) |
 | event actors | a deferred spawn, or a graph spawn | a second interceptor with a disjoint allowlist; the native seam | a host id |
 | the kerfur | conversion verbs inside the Blueprint | the script-body gate on the verbs: refused on a client, converged at the return on the host; whom it serves, its player-0 reads answered on the host with the puppet of the client whose command it runs (`kerfur_command`, `served_player`) | one host kerfur id across both forms |
 | the plain kerfur (the Kerfus) | a keyed prop with a brain; on and off are a field, not a second form | the prop lanes for identity and the record at birth; while on, the host's prop drive for its pose; KerfusState for on, charging and energy; whom it follows, its player-0 reads answered on the host with the puppet of the client that turned it on (`kerfus_follow`, `served_player`) | its prop key and host eid |
@@ -218,6 +219,39 @@ the destroy are the host's, and nothing is answered. The swinger's liveness is j
 carries (a dead player's pose says 0, and the puppet's `dead` flag is never set by a peer's death): at most 0 refuses
 the swing `dead`. A zombie the host kills this way leaves its ragdoll body on the host alone: the body's class has no
 lane (owed). A ranged tool's hit is not a swing and is refused. `[RD]`
+
+**The Geom Octa.** It is a character of the NPC lane. The host's night roll (an Octa, or else a night egg) is a
+source row of the EX spawn catch, the dev menu's button spawns through the interceptor, and the allowlist gives
+either an element, so its identity, its spawn on every peer, its pose and its destroy (its own rise-away
+despawn included) are the generic ones. A client's roll is refused (`coop/world/spawn_authority`), so a client
+mints neither the Octa nor the egg; an Octa a client's own menu or toolgun spawns stays local, with its blast
+dissolved (GO-3, owed). `[V]` (`octa_drill` births, measure)
+
+*The mirror.* It is marked between the two halves of its spawn (`coop/creatures/npc_mirror_brain`) and runs
+the game's Blueprint for the eye, with the twelve entries that decide refused (the wander, the target, the
+leave, the fire verdict); its actor tick is kept for the turn toward its target. The mirror tick is a table by
+class in `npc_mirror`: the wisp and the Octa keep the actor tick, every other character loses it, and the
+movement tick is always off. `[V]` (the refusals: `octa_drill` measure; the kept tick `[RD]`)
+
+*The attack.* The host's two decisions cross as `GeomOctaEvent` (`coop/creatures/geom_octa_sync`, the bulk lane,
+behind the Octa's `EntitySpawn`): an Aggro (the target as a player slot, an element or none, and the Octa's count
+of fire verdicts) and a FireVerdict (that count, and whether it fires again). The client replays the Aggro as its
+own `minSphere` begin-overlap with the target's counterpart (the host's player is the host's puppet there) and
+answers its own refused fire-finish notify with the newest verdict kept, replaying the notify once with the
+answer written into its overlap read (`coop/creatures/geom_octa_relay`). The look is the client's own Blueprint
+running a few moments behind the host's; every outcome is the host's. `[V]` (`octa_drill` attack)
+
+*Two lasers, one beam.* Each peer's Octa runs its own `fire()`, so the host's laser actor and each client's are
+two actors drawing one beam. The client's blast is dissolved by the explosion lane with no request (the laser is
+none of its request kinds), and the host's arrives as `ExplosionSpawn`: one explosion per shot. `[V]` (`octa_drill`
+measure: the client's applied blasts equal the host's captured ones)
+
+*The join.* The joiner's snapshot carries the Octa and, for one mid-attack on a target the wire can name, one
+Aggro to that slot (the target now, the verdict count now). Its graph starts the attack from the beginning, shows
+the host's freshest decision and runs about one chain (some twelve seconds) behind. An Octa between attacks, or
+attacking nobody, sends nothing; the joiner's next Aggro is the host's next. `[V]` (`octa_drill` join; with
+`octa_red=no_join` a verdict arrives with no Aggro and the arm fails). Named limits: an attack on an ATV is
+relayed as none (an ATV is no element), so the look idles and its blast still arrives; a joiner's look runs behind.
 
 ## Event actors
 
@@ -424,6 +458,8 @@ Every place two seams can express one actor, and what deduplicates it:
 | a client's local sit or grab of an ATV and the host's table | one seat and one syncer: the client acts at once, asks, and yields to the answer or stamp that names another; the host drops a block from any slot that is not the ATV's syncer `[?]` |
 | the host's idle stream and a client syncer's stream of one ATV | the host streams an ATV only while its table names the host; until the hand-back a client syncer's blocks are the ones applied and re-sent `[?]` |
 | a client's plug of a cord and the host's | one link: the client's own verb runs and its outcome is a claim; the host compares, applies the game's rule and answers every claim, and a client copy's stretch break is refused `[V]` (`cord_drill`) |
+| a client's Octa laser and the host's | two actors, one beam: each peer's Octa runs its own `fire()`; the client's blast is dissolved with no request and the host's `ExplosionSpawn` is the one explosion `[V]` (`octa_drill`) |
+| a client's roll of the night Octa and the host's | one Octa: the client's roll body is refused at the script gate and the host's roll is the only source `[V]` (`octa_drill` births) |
 
 ## Needs a probe
 

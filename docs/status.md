@@ -39,6 +39,7 @@ host validates and commits contested writes), `local` (never shared).
 | Owner-entity creatures | a creature whose AI reads the local player is owned per peer and mirrored to the rest | peer | keepalive | built |
 | Roaches | the paged infestation state | host | snapshot | built |
 | Wisp | the killer wisp's hunt, grab, tear | host | none (transient) | works |
+| Geom Octa | the host's night roll or dev spawn (the Octa and, from the same roll, the night egg), a mirror with its decisions parked, and the host's attack relayed into each client's own Blueprint (whom it hunts, each fire's outcome); its blast is the host's explosion, and a client's own roll is refused | host | the snapshot carries the Octa; one mid-attack sends the joiner an Aggro, replayed from the start | tested; a client's own menu or toolgun Octa stays local, an attack on an ATV is not relayed (its blast still arrives), a joiner's look runs about one chain behind |
 | Pyramid | the walking-pyramid choreography | host | world-actor snapshot and replay | works |
 | World actors | the event-spawned non-character actors | host | replay or seed | works |
 | Drone | the delivery drone's flight and state | host | snapshot | built |

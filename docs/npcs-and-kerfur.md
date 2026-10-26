@@ -31,7 +31,9 @@ fossilhound go further: their Blueprint's event graph is refused entry by entry 
 the fossilhound's per-viewer loop (`coop/creatures/npc_mirror_brain`). The Geom Octa is parked the other way
 round: its BeginPlay, tick, timelines and sounds run on a mirror, with its actor tick kept for the turn toward its
 target, and only the twelve entries that decide (the wander, the target, the leave, the fire verdict) are refused
-`[?]`. The host
+`[V]` (`octa_drill`). What the host decides crosses as `GeomOctaEvent` (`coop/creatures/geom_octa_sync` on the
+host, `geom_octa_relay` on a client) and runs in the mirror's own Blueprint; a joiner mid-attack is replayed it
+(`docs/coop-entity-expression-map.md`). The host
 streams a pose batch every tick, rotated fair-share when more characters are tracked than a batch
 holds, and the mirror interpolates it in the same window a remote player uses
 (`coop/creatures/npc_pose_drive`); a landing edge that depends on movement-component state is
