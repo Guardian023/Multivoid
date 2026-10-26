@@ -1162,6 +1162,11 @@ enum class ReliableKind : uint8_t {
     // client at the host's receive edge; never relayed; not pre-world; lost only with the session. Late join:
     // none. PropSyncAnswerPayload.
     PropSyncAnswer = 202,
+    // HOST->CLIENT: developer only, read by the prop syncer drill's load arm (coop/dev/prop_syncer_drill): one of N
+    // messages of a filler the host queues to the kicking client, so a drill can stand a transfer the size of a join
+    // burst on the spawn lane (Bulk, the lane the chunked save blobs ride) ahead of the syncer's messages. Nothing
+    // reads the fill; the receiver counts. Never relayed; not pre-world. DevLoadFillerPayload.
+    DevLoadFiller = 204,
     // HOST->CLIENT: one decision of a Geom Octa, to be replayed into the client's own Blueprint (coop/creatures/
     // geom_octa_relay): op 0, an Aggro, the Octa took a target (the replay runs minSphere's begin-overlap handler with
     // the target's counterpart here), carrying the host's verdict count as the base; op 1, a FireVerdict, the host's
@@ -1774,6 +1779,16 @@ struct PropSyncAnswerPayload {
 static_assert(sizeof(PropSyncAnswerPayload) == 12, "PropSyncAnswerPayload must be 12 bytes");
 static_assert(sizeof(PropSyncAnswerPayload) <= 256 - 20 - 8,
               "PropSyncAnswerPayload must fit in one reliable datagram");
+
+// One message of the drill filler (DevLoadFiller): its place in the run and the run's length; the rest is fill.
+struct DevLoadFillerPayload {
+    uint32_t seq;         // 4 -- 0..total-1
+    uint32_t total;       // 4 -- the messages the host queued
+    uint8_t  fill[220];   // 220 -- any bytes
+};
+static_assert(sizeof(DevLoadFillerPayload) == 228, "DevLoadFillerPayload must be 228 bytes");
+static_assert(sizeof(DevLoadFillerPayload) <= 256 - 20 - 8,
+              "DevLoadFillerPayload must fit in one reliable datagram");
 
 // A prop birth (PropSpawn): the class, the persistent key, the list_props row name that init()
 // resolves the mesh, mass and collision from, the transform and scale, the physics flags, an

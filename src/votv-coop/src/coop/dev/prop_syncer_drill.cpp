@@ -182,6 +182,12 @@ struct ClientState {
     uint32_t                                        eid = 0, maxRows = 0;
 } g_c;
 
+// The host's DevLoadFiller as this client sees it: how many messages arrived and when the first and the last did.
+struct FillerState {
+    uint32_t count = 0, total = 0;
+    uint64_t firstAt = 0, lastAt = 0;
+} g_f;
+
 void WalkCancel() {
     if (g_c.walk && g_c.walk->state.load() == 0) coop::director::CancelBackgroundWalk(*g_c.walk);
     g_c.walk.reset();
@@ -322,6 +328,22 @@ void ClientTick() {
 
 bool IsEnabled() { return ArmOf() != Arm::Off; }
 
+void OnFiller(uint32_t seq, uint32_t total) {
+    if (ArmOf() == Arm::Off) return;
+    FillerState& f = g_f;
+    const uint64_t now = Now();
+    if (f.count == 0) {
+        f.firstAt = now;
+        f.total = total;
+        UE_LOGI("[PROP-SYNC] client load first filler seq=%u total=%u", seq, total);
+    }
+    if (++f.count == f.total) {
+        f.lastAt = now;
+        UE_LOGI("[PROP-SYNC] client load done: %u msgs in %llu ms", f.count,
+                static_cast<unsigned long long>(f.lastAt - f.firstAt));
+    }
+}
+
 void Tick(coop::net::Session* s) {
     const Arm a = ArmOf();
     if (a == Arm::Off || !s) return;
@@ -337,6 +359,7 @@ void OnDisconnect() {
     WalkCancel();
     HostReset();
     g_c = ClientState{};
+    g_f = FillerState{};
     ObserverReset();
 }
 

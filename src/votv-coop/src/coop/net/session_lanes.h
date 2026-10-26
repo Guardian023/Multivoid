@@ -101,6 +101,9 @@ inline Lane LaneForKind(ReliableKind k) {
     // A Geom Octa's decision rides the same lane for the same reason: its replay needs the Octa's mirror, which its
     // EntitySpawn builds, and the host sends none before that spawn. Host-authoritative: not relayable, not pre-world.
     case ReliableKind::GeomOctaEvent: return Lane::Bulk;
+    // The drill filler stands on the spawn lane on purpose: it is the transfer the syncer pair is measured against.
+    // Developer only: not relayable, not pre-world.
+    case ReliableKind::DevLoadFiller: return Lane::Bulk;
     // The world-actor pair shares the spawn lane for the same reason. Host-authoritative: not
     // relayable, not pre-world.
     case ReliableKind::WorldActorSpawn:   return Lane::Bulk;

@@ -1,12 +1,14 @@
 // coop/dispatch/event_dispatch_prop_drive.cpp -- the driven prop's reliable kinds: PropDriveEnd (the
 // close of a prop's stream, the host's to all or a syncing client's to the host) and the prop
-// syncer's pair, PropSyncClaim (client to host) and PropSyncAnswer (host to one client). Each case
+// syncer's pair, PropSyncClaim (client to host) and PropSyncAnswer (host to one client), and the developer
+// filler DevLoadFiller (host to one client). Each case
 // validates at the trust boundary and hands off to its module. The switch below is the family's
 // membership declaration; nothing re-lists it. Family contract per coop/dispatch/event_dispatch.h:
 // returns true iff msg.kind is in this family.
 
 #include "event_dispatch.h"  // co-located private header (src tree, not include/)
 
+#include "coop/dev/prop_syncer_drill.h"    // the drill's filler receiver
 #include "coop/element/registry.h"
 #include "coop/props/prop_drive_stream.h"  // the driven-prop end edge
 #include "coop/props/prop_syncer.h"        // the client's answer receiver
@@ -107,6 +109,23 @@ bool HandlePropDriveEvent(net::Session& session,
             break;
         }
         ::coop::prop_syncer::OnAnswer(p);
+        break;
+    }
+    case net::ReliableKind::DevLoadFiller: {
+        // HOST->CLIENT, developer only: one message of the prop syncer drill's load arm. A client never sends it;
+        // the drill drops it at once when its row is off.
+        if (session.role() == net::Role::Host) {
+            UE_LOGW("event_feed: DevLoadFiller received on the host -- dropping");
+            break;
+        }
+        if (msg.payloadLen < sizeof(net::DevLoadFillerPayload)) {
+            UE_LOGW("event_feed: DevLoadFiller payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::DevLoadFillerPayload));
+            break;
+        }
+        net::DevLoadFillerPayload p{};
+        std::memcpy(&p, msg.payload, sizeof(p));
+        ::coop::dev::prop_syncer_drill::OnFiller(p.seq, p.total);
         break;
     }
     default:

@@ -14,6 +14,8 @@
 
 #pragma once
 
+#include <cstdint>
+
 namespace coop::net { class Session; }
 
 namespace coop::dev::prop_syncer_drill {
@@ -24,6 +26,10 @@ bool IsEnabled();
 
 // Advances this peer's phases; a latched read when off. Game thread.
 void Tick(coop::net::Session* s);
+
+// CLIENT: message `seq` of `total` of the host's DevLoadFiller arrived. Dropped at once when the drill row is off;
+// otherwise counted, with the receive time of the first and of the last logged. Game thread.
+void OnFiller(uint32_t seq, uint32_t total);
 
 // The session ended: the drill starts over, and its walk with it.
 void OnDisconnect();

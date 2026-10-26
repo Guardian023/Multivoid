@@ -227,6 +227,7 @@ constexpr ClientAuthorship AuthorshipOf(ReliableKind k) {
     case ReliableKind::PropSyncAnswer:
     case ReliableKind::SwingerRestPose:
     case ReliableKind::GeomOctaEvent:
+    case ReliableKind::DevLoadFiller:
         return ClientAuthorship::Host;
     }
     return ClientAuthorship::NotAKind;  // a byte value that names no kind: refused like Host
