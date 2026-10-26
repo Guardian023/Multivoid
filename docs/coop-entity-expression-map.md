@@ -400,7 +400,7 @@ registry recycled that id. `[V]`
   performs: a client's own press is cancelled at the gate and goes as a `CoffeeActionIntent` naming the device by its
   key (`coop/interactables/coffee_intent`); the host checks the sender's reach and that the key names exactly one of
   the two classes, then runs the game's own action with the sender's puppet as the player, so the debit crosses by the
-  balance and the cup by the prop spawn lane. The maker's state is its save record, published by the host after a brew
+  balance and the cup by PropSpawn on the Default lane. The maker's state is its save record, published by the host after a brew
   and after a fill (`coop/interactables/coffee_state`) and applied on each client through the record's own `loadData`;
   the fill (a cup or a bag touching the maker) is the host's, a client's own run of the hit handler is cancelled, and
   the cup's destroy crosses by the native destroy seam. A client's record for a maker or a bag is refused, except the

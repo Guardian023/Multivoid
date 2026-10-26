@@ -18,9 +18,10 @@ namespace coop::net {
 //   Default   a kind that names an element or the world. MTA carries every element message on one ordered
 //             channel, PACKET_ORDERING_DEFAULT (reference/mtasa-blue/Server/mods/deathmatch/logic/packets/
 //             CPacket.h:43), so a message that names a prop meets that prop's spawn by FIFO order.
-//   Transfer  a payload that can exceed the blob ceiling, in MTA's latent shape: the whole message goes at a
-//             capped rate on a channel of its own at low priority (Shared/mods/deathmatch/logic/
-//             CLatentTransferManager.cpp:123-150).
+//   Transfer  a payload that can exceed the blob ceiling, in MTA's latent shape: a channel of its own at low
+//             priority and a capped rate (reference/mtasa-blue/Shared/mods/deathmatch/logic/
+//             CLatentSendQueue.cpp:46-81,129-130), the whole message wrapped into one buffer
+//             (CLatentTransferManager.cpp:123-150).
 // connection_tuning's TuneConnection hard-codes the count to 3, and session.cpp pins the two together with a
 // static_assert on Lane::Count.
 enum class Lane : int {
@@ -30,12 +31,15 @@ enum class Lane : int {
     Count = 3,
 };
 
-// The FIFO exceptions: the save stream (a bulk sink takes it before the inbox, and nothing waits on its
-// order) and the admission kinds (SendRawReliableToConn, pinned to lane 0) bypass the send backlog's lanes.
+// The FIFO exceptions: the save stream is taken by a bulk sink on receipt, before the inbox (nothing waits on
+// its order), and the admission kinds are sent raw on lane 0 (SendRawReliableToConn), outside the send backlog.
 //
 // A divergence from MTA, which sends explosions, damage and element RPCs at HIGH priority on its DEFAULT
-// channel: a GNS lane fuses order and priority, so ours are ordered on Default at the middle priority. They
-// wait behind what that peer's Default lane holds, and on a joiner until its join gate closes.
+// channel (reference/mtasa-blue/Server/mods/deathmatch/logic/packets/CExplosionSyncPacket.h:41,
+// CElementRPCPacket.h:23): a GNS lane fuses order and priority, so ours are ordered on Default at the
+// middle priority. Element kinds stay off lane 0 because the link probe and the join beacon must never
+// queue behind the ordered element backlog (the LinkProbe and JoinPhaseNote arms). They wait behind what
+// that peer's Default lane holds, and on a joiner until its join gate closes.
 
 // The three admission kinds appear in none of the three routers below, and that is not an
 // omission: they never travel through a slot send (no slot exists yet; the raw connection send
@@ -85,6 +89,12 @@ inline Lane LaneForKind(ReliableKind k) {
     case ReliableKind::RestoreVitals:  return Lane::High;
     // The save stream and the drill filler: the transfers that can exceed the blob ceiling. The filler's lane is
     // the drill knob's (LoadFillerOnDefault above), so a red arm can stand it on Default.
+    // The lane is built, MTA's latent shape is not: the save stream is paced by save_transfer's pump, and only
+    // the dev filler rides it beside. The first Transfer kind to take that shape owes five properties the lane
+    // does not enforce: dispatch on completion, dropped if its element is gone or not yet added
+    // (CLatentReceiver.cpp:160-186); an owner token cancelled when the peer leaves or the owner is destroyed
+    // (CLatentTransferManager.cpp:85-115,188-210); one transfer in flight per peer (CLatentReceiver.cpp:121-123);
+    // a size bound (:121-126); and its own rate cap (CLatentSendQueue.cpp:62-70).
     case ReliableKind::SaveTransferBegin: return Lane::Transfer;
     case ReliableKind::SaveTransferChunk: return Lane::Transfer;
     case ReliableKind::DevLoadFiller:     return Lane::Transfer;

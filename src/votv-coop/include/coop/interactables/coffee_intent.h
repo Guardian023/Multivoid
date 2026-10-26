@@ -6,7 +6,7 @@
 // refuses a sender whose player is not alive, judges its reach and the device's exact class, and runs the game's own
 // action on its copy with the sender's puppet as the player, where the device's own gates decide it once (the
 // vending machine's processing flag, the maker's cup, coffee and power). The debit crosses by balance_sync, the cup by
-// the prop spawn lane, the maker's state by coffee_state. Every other action of either device runs natively. MTA
+// PropSpawn on the Default lane, the maker's state by coffee_state. Every other action of either device runs natively. MTA
 // precedent: a client's use of a shared element is a request the server checks and runs
 // (reference/mtasa-blue/Server/mods/deathmatch/logic/
 // CGame.cpp:3018, Packet_Vehicle_InOut), as the door lane's press.

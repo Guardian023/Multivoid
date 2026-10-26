@@ -281,7 +281,7 @@ void ClientClaim(void* player, void* prop) {
     PS::Claim(prop, coop::net::PropSyncReason::DevDrill);
     if (ClaimRefused()) return;
     if (PS::dev::EntryOf(g_c.eid).state == PS::dev::EntryState::Syncing) {
-        g_f.atGrant = g_f.count;   // 0 in the bulk probe: the answer waits behind the whole filler (FIFO ahead of it)
+        g_f.atGrant = g_f.count;   // near 0 on the Transfer lane (the answer overtakes the filler), all of it on the Default lane (FIFO ahead of the answer)
         if (!E::TryGetActorLocation(prop, g_c.start)) return ClientFail("the target does not read");
         DC::Say(std::string(kKickedPrefix) + std::to_string(g_c.eid));
         if (!Kick(player, prop)) return ClientFail("the kick did not run");

@@ -162,11 +162,11 @@ bool AtRest_(void* actor) {
 // One keyed prop of the diverged flush, for the keyed scan and for the settle phase alike; true when
 // a correction went out. A prop in a hand is the hand's: its stream is continuous and its release
 // carries the pose, so no correction is read for it now. When a correction for it had already gone
-// out, the prop is noted in g_handSinceSent: a read taken before the grab went out behind the
-// snapshot ahead of the release, and nothing is armed for the release
-// to erase. A read taken after the release rides the same lane, so it lands after that one:
-// the prop stays noted until it is out of the hand and at rest, and every pass sends it its follow-up
-// (deduped to a move past 4 cm of what was last delivered). A driven prop is sent as any other,
+// out, the prop is noted in g_handSinceSent: that correction was read at the pose the hand then
+// took it from, so the client's last word for it is stale once the hand has moved it. The prop stays
+// noted until it is out of the hand and at rest, and every pass sends it a follow-up at its current
+// pose (deduped to a move past 4 cm of what was last delivered), so the last correction the client
+// holds is the resting one. A driven prop is sent as any other,
 // stamped with its drive context, and the client orders it.
 // Divergence from MTA, which stamps a detach with a fresh element context
 // (reference/mtasa-blue/Server/mods/deathmatch/logic/CStaticFunctionDefinitions.cpp:1689-1700, client

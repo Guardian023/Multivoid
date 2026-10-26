@@ -133,7 +133,7 @@ void* WallAttachCompOf(void* actor) {
 // re-derives the settled pose and plays its own glide/VFX. A delay re-opens the
 // release-beats-stick window: the hold breaks 0-100 ms after the commit and that PropRelease must
 // not arrive before the PropStickState. GNS orders reliable delivery WITHIN a lane, so the pair is
-// FIFO only because LaneForKind pins both to Lane::Default (see the note on that pin in
+// FIFO only because both ride the one Default lane (LaneForKind in
 // coop/net/session_lanes.h). Draining next pass makes the order structural as well: TickGameplay
 // runs before local_streams' release edge.
 struct Pending {

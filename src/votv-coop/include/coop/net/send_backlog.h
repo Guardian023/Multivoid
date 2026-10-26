@@ -103,9 +103,14 @@ public:
     // OpenJoinGate to CloseJoinGate, every Default-lane send to the slot is appended to the slot's join
     // queue in send order, except a send made inside a SnapshotSendScope for that slot. CloseJoinGate
     // splices the queue onto the slot's Default lane behind what is already there under the lock (a swap
-    // when the lane is empty, an append otherwise), and lifts the gate; a slot that leaves drops its queue with the rest of its backlog (FreeSlot).
-    // The queue counts toward the slot's byte cap and its stale-connection stamp, and not toward the
-    // no-progress timer, DepthBytes or SlotReliableIdle. OpenJoinGate on an open gate keeps its queue.
+    // when the lane is empty, an append otherwise), and lifts the gate; a slot that leaves drops its queue
+    // with the rest of its backlog (FreeSlot). The queue counts toward the slot's byte cap and its
+    // stale-connection stamp, and not toward the no-progress timer, DepthBytes or SlotReliableIdle.
+    // OpenJoinGate on an open gate keeps its queue.
+    // DIVERGENCE: MTA skips a not-joined player and sends the state inside the one add; ours defers and
+    // replays in send order, since the add spans ticks. MTA's per-element alternative (CPerPlayerEntity.h,
+    // a sent-set per player) was rejected: it needs every Default kind's element id at send. The cost: a
+    // held row can be older than a later spawn, so the handlers are idempotent.
     // Any thread.
     void OpenJoinGate(int slot);
     void CloseJoinGate(int slot);

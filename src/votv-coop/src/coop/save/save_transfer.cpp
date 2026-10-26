@@ -91,7 +91,10 @@ coop::roster_ledger::PerSlotState<bool> g_asked;
 bool g_worldTaken[coop::net::kMaxPeers] = {};
 
 // Chunks per TickHost pass per slot: a ~13 MB/s ceiling at 60 Hz; the send buffer's backpressure
-// (a failed send stops the pass) is the real pacer on a slower link.
+// (a failed send stops the pass) is the real pacer on a slower link. Divergence from MTA, which ships
+// resources over HTTP (reference/mtasa-blue/Client/mods/deathmatch/logic/
+// CResourceFileDownloadManager.cpp:21-31): the world
+// save goes in-band here, on the Transfer lane, paced by this pump.
 constexpr int kChunksPerTick = 4;
 
 // The mode byte the host announces. The header has no "unknown" encoding, so an unreadable mode

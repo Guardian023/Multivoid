@@ -1183,7 +1183,7 @@ enum class ReliableKind : uint8_t {
     // CLIENT->HOST: this client pressed a coffee vending machine or a coffee maker (action 4), which its own copy
     // refused to run. The host resolves the device by its key, judges the sender's reach and that the key is
     // exactly one of the two classes, then runs the game's own action on its copy with the sender's puppet as the
-    // player; the debit crosses by BalanceSync and the cup by the prop spawn lane. Never relayed; not pre-world;
+    // player; the debit crosses by BalanceSync and the cup by PropSpawn, ordered behind it on the Default lane. Never relayed; not pre-world;
     // a press whose sender has no body on the host yet waits in its queue. Late join: none, a press is an act.
     // CoffeeActionIntentPayload.
     CoffeeActionIntent = 194,

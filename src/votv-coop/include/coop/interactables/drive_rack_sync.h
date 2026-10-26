@@ -36,7 +36,7 @@ void OnRackStateChunk(const coop::net::BlobChunkPayload& p, uint8_t senderSlot);
 
 // HOST: queue the rack canonicals for a peer that just reached world-ready.
 // Called right AFTER the drive rows' seed (subsystems source order = the shipped
-// slot lines -> drive rows -> racks byte order on the one pinned lane).
+// slot lines -> drive rows -> racks wire order, all on the Default lane).
 void QueueConnectBroadcastForSlot(int peerSlot);
 
 // The verb-watch forward from drive_sync's OnVerbEntry (putDriveIn rack-ctx
