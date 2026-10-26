@@ -509,6 +509,7 @@ set(VOTVCOOP_SOURCES
     src/coop/player/puppet_drive.cpp
     src/coop/props/registry_reaper.cpp
     src/coop/session/pause_guard.cpp
+    src/coop/session/connect_replay.cpp
     src/coop/session/subsystems.cpp
     src/coop/session/world_ready_answer.cpp
     src/coop/player/local_streams.cpp
