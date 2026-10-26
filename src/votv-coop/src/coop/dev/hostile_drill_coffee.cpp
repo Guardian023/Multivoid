@@ -24,23 +24,28 @@ using F = Field;
 //   reach         a press on a maker whose prop stands 2000 uu from the sender: refused for reach
 //   flood         20 presses on a maker within reach, in one tick: the sender's queue holds 8, which run (the maker's
 //                 own gate declines each, there being no cup), and refuses the other 12
+//   dead_sender   one well-formed press on a maker within reach, sent while the sender's player is dead: refused as
+//                 dead (judged before reach and class)
 //   forged_record the client's record of its copy of the host's maker with hasCup set, sent as an intent: refused by
 //                 the maker's record gate, nothing published
 const Spec kSpecs[] = {
-    {"coffee_malformed",     Arm::Malformed,     Fixture::None,        2,
+    {"coffee_malformed",     Arm::Malformed,     Fixture::None,        Mode::Plain, 2,
      {{F::DropSize, 1}, {F::DropKey, 1}}},
-    {"coffee_wrong_class",   Arm::WrongClass,    Fixture::NearCrowbar, 1,
+    {"coffee_wrong_class",   Arm::WrongClass,    Fixture::NearCrowbar, Mode::Plain, 1,
      {{F::Claims, 1}, {F::WrongClass, 1}}},
-    {"coffee_reach",         Arm::Reach,         Fixture::FarMaker,    1,
+    {"coffee_reach",         Arm::Reach,         Fixture::FarMaker,    Mode::Plain, 1,
      {{F::Claims, 1}, {F::OutOfReach, 1}}},
-    {"coffee_flood",         Arm::Flood,         Fixture::NearMaker,   20,
+    {"coffee_flood",         Arm::Flood,         Fixture::NearMaker,   Mode::Plain, 20,
      {{F::Claims, 20}, {F::Ran, 8}, {F::QueueFull, 12}}},
-    {"coffee_forged_record", Arm::ForgedRecord,  Fixture::NearMaker,   1,
+    {"coffee_forged_record", Arm::ForgedRecord,  Fixture::NearMaker,   Mode::Plain, 1,
      {{F::RecordsRefused, 1}}},
+    {"coffee_dead_sender",   Arm::DeadSender,    Fixture::NearMaker,   Mode::Dead,  1,
+     {{F::Claims, 1}, {F::SenderDead, 1}}},
 };
 
 constexpr const char* kNames[kFields] = {
-    "claims", "ran", "no_device", "wrong_class", "out_of_reach", "not_run", "queue_full", "drop_size", "drop_key",
+    "claims", "ran", "no_device", "wrong_class", "out_of_reach", "not_run", "queue_full", "sender_dead", "drop_size",
+    "drop_key",
     "made_maker", "records_refused",
 };
 
@@ -57,6 +62,7 @@ Tally TallyOf(const coop::coffee_intent::DrillView& v, const coop::coffee_state:
     t[static_cast<size_t>(F::OutOfReach)] = static_cast<uint32_t>(v.outOfReach);
     t[static_cast<size_t>(F::NotRun)] = static_cast<uint32_t>(v.notRun);
     t[static_cast<size_t>(F::QueueFull)] = static_cast<uint32_t>(v.queueFull);
+    t[static_cast<size_t>(F::SenderDead)] = static_cast<uint32_t>(v.senderDead);
     t[static_cast<size_t>(F::DropSize)] = static_cast<uint32_t>(v.dropSize);
     t[static_cast<size_t>(F::DropKey)] = static_cast<uint32_t>(v.dropKey);
     t[static_cast<size_t>(F::MadeMaker)] = static_cast<uint32_t>(st.madeMaker);

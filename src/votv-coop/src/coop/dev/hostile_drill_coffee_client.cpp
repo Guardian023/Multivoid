@@ -9,16 +9,19 @@
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/net/wire_key_util.h"
+#include "coop/player/death_revive.h"
 #include "coop/player/players_registry.h"
 #include "coop/props/prop_save_data.h"
 #include "coop/session/join_progress.h"
 #include "coop/session/net_pump.h"
 
 #include "ue_wrap/actors/prop.h"
+#include "ue_wrap/actors/vitals.h"
 #include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
+#include "ue_wrap/engine/engine_mainplayer.h"
 
 #include <cstdint>
 #include <cstring>
@@ -30,12 +33,13 @@ namespace {
 
 namespace DC = coop::dev::drill_chat;
 namespace R  = ue_wrap::reflection;
+namespace E  = ue_wrap::engine;
 using Kind = coop::net::ReliableKind;
 using Payload = coop::net::CoffeeActionIntentPayload;
 
 enum class CStep : uint8_t { Run, Done };
 CStep    g_step = CStep::Run;
-bool     g_idleSaid = false, g_started = false, g_ready = false;
+bool     g_idleSaid = false, g_started = false, g_ready = false, g_hit = false, g_killed = false;
 Clock::time_point g_since{};
 const char* g_waiting = nullptr;
 // The props of the arm's class this world held when the client's join ended: the host's is the one outside it.
@@ -94,7 +98,8 @@ void SendArm(Out& o, const Spec& sp, const coop::net::WireKey& prop) {
         break;
     }
     case Arm::WrongClass:
-    case Arm::Reach: {
+    case Arm::Reach:
+    case Arm::DeadSender: {
         Payload p{};
         p.key = prop;
         o.Send(p);
@@ -158,6 +163,67 @@ void Observe(const Spec& sp) {
     g_ready = DC::ChatHasLive(ReadyLine(sp.arm));
 }
 
+// ---- the death window (Mode::Dead) ----
+
+// A lethal hit lands and the revive answers it only once the world has settled, the revive is armed and the spawn
+// protection is over (the gate coop/dev/burn_revive_drill.cpp waits on); a death before that ends the run.
+bool DeathArmed(void* local) {
+    if (!coop::net_pump::IsWorldSettled() || coop::death_revive::ArmReadyAfterPawnMs() < 0) return false;
+    bool invinc = true;
+    return E::ReadMainPlayerStartInvinc(local, invinc) && !invinc;
+}
+
+bool IsDead(void* local) {
+    bool ragdoll = false, dead = false;
+    return E::ReadMainPlayerRagdollState(local, ragdoll, dead) && dead;
+}
+
+// The client's own player takes the lethal hit once the host's prop stands (the host spawns it beside a living
+// puppet), the hit coop/dev/burn_revive_drill.cpp deals. The death is read by AwaitOwnDeath.
+void DealLethalHit(const Spec& sp, void* local) {
+    coop::net::WireKey unused{};
+    void* unusedActor = nullptr;
+    switch (FindProp(sp, unused, unusedActor)) {
+    case Found::Wait:
+        if (Late("the host's prop")) Inconclusive(sp, "the host's prop never appeared, with its key");
+        return;
+    case Found::Bad:
+        Inconclusive(sp, "more props of the arm's class stand outside the start set than the host spawned");
+        return;
+    case Found::Ok:
+        break;
+    }
+    if (!DeathArmed(local)) {
+        if (Late("the revive to arm")) Inconclusive(sp, "the revive never armed, so a death would end the run");
+        return;
+    }
+    float maxHealth = 0.f;
+    if (!ue_wrap::vitals::Read(ue_wrap::vitals::Field::MaxHealth, &maxHealth) || maxHealth <= 0.f) {
+        Inconclusive(sp, "max health unread");
+        return;
+    }
+    if (!E::InvokeAddPlayerDamage(local, 2.f * maxHealth, /*blood=*/true)) {
+        Inconclusive(sp, "the lethal hit did not run");
+        return;
+    }
+    UE_LOGI("[HOSTILE-DRILL] %s client dealt the lethal hit", sp.name);
+    g_hit = true;
+    g_waiting = nullptr;
+}
+
+// After the hit, the player's own death state is read each frame (the ragdoll state's dead flag); the press waits for
+// it. True once the death reads; false while waiting, or after an INCONCLUSIVE.
+bool AwaitOwnDeath(const Spec& sp, void* local) {
+    if (!IsDead(local)) {
+        if (Late("the player's death to read")) Inconclusive(sp, "the client's death never registered");
+        return false;
+    }
+    UE_LOGI("[HOSTILE-DRILL] %s client reads its player dead", sp.name);
+    g_killed = true;
+    g_waiting = nullptr;
+    return true;
+}
+
 // ---- the forged record ----
 
 // This client's copy of the host's maker takes hasCup, and its record goes to the host as any author's would. False
@@ -193,8 +259,21 @@ void ClientTick(coop::net::Session* s, const Spec& sp) {
         // The host spawns the prop only after this line: one born before the set is recorded would sit in it.
         DC::Say(ClientReadyLine(sp.arm));
     }
+    void* const local = coop::players::Registry::Get().Local();
+    if (sp.mode == Mode::Dead && !g_hit) {
+        DealLethalHit(sp, local);
+        return;
+    }
+    if (sp.mode == Mode::Dead && !g_killed && !AwaitOwnDeath(sp, local)) return;
+    // The press goes out only when this player reads dead and the host has said it saw the sender dead.
     if (!g_ready) {
-        if (Late("the host's ready line")) Inconclusive(sp, "the host never said it was ready");
+        if (Late("the host's ready line"))
+            Inconclusive(sp, sp.mode == Mode::Dead ? "the host never saw the sender dead" : "the host never said it was ready");
+        return;
+    }
+    // The press must land in the death: the host judges it refused as dead, and an alive sender is another outcome.
+    if (sp.mode == Mode::Dead && !IsDead(local)) {
+        Inconclusive(sp, "the death window closed before the press was sent");
         return;
     }
     coop::net::WireKey prop{};
@@ -234,7 +313,7 @@ void ClientTick(coop::net::Session* s, const Spec& sp) {
 
 void ClientReset() {
     g_step = CStep::Run;
-    g_idleSaid = g_started = g_ready = false;
+    g_idleSaid = g_started = g_ready = g_hit = g_killed = false;
     g_since = {};
     g_waiting = nullptr;
     g_start.clear();

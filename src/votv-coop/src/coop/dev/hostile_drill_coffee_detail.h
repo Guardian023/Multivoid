@@ -29,12 +29,17 @@ constexpr const wchar_t* kCrowbarCls = L"prop_crowbar_C";
 constexpr float kNearCm = 120.f;
 constexpr float kFarCm = 2000.f;
 
+// How the arm runs: Plain sends once the host is ready; Dead has the client kill its own player first, and the host
+// says ready only while that player's puppet reads dead.
+enum class Mode : uint8_t { Plain, Dead };
+
 // The one prop an arm needs, and where it stands from the sender.
 enum class Fixture : uint8_t { None, NearMaker, FarMaker, NearCrowbar };
 
 // The lane's counters the host judges. Every field not named in an arm's table must stay at 0.
 enum class Field : uint8_t {
-    Claims, Ran, NoDevice, WrongClass, OutOfReach, NotRun, QueueFull, DropSize, DropKey, MadeMaker, RecordsRefused,
+    Claims, Ran, NoDevice, WrongClass, OutOfReach, NotRun, QueueFull, SenderDead, DropSize, DropKey, MadeMaker,
+    RecordsRefused,
     Count
 };
 constexpr size_t kFields = static_cast<size_t>(Field::Count);
@@ -53,6 +58,7 @@ struct Spec {
     const char* name;
     Arm         arm;
     Fixture     fixture;
+    Mode        mode;
     uint32_t    sent;
     Entry       want[5];
 };

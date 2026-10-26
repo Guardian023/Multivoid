@@ -131,6 +131,11 @@ void WaitReady(coop::net::Session* s, const Spec& sp) {
         g_waiting = "the client's ready line";
         return;
     }
+    // The client kills its player once it has found the prop; ready is said inside that death.
+    if (sp.mode == Mode::Dead && coop::players::Registry::Get().LifeOf(kSlot) != coop::players::PuppetLife::Dead) {
+        g_waiting = "slot 1's puppet to read dead";
+        return;
+    }
     if (sp.arm == Arm::ForgedRecord && !CF::ReadMakerFlags(g_prop.Get(), g_flagsAtReady)) {
         Finish(sp, "INCONCLUSIVE", "the host's maker flags did not read");
         return;
@@ -157,7 +162,8 @@ Tally Diff(const Tally& now) {
 uint64_t Outcomes(const Tally& d) {
     uint64_t n = 0;
     for (const Field f : {Field::Ran, Field::NoDevice, Field::WrongClass, Field::OutOfReach, Field::NotRun,
-                          Field::QueueFull, Field::DropSize, Field::DropKey, Field::RecordsRefused})
+                          Field::QueueFull, Field::SenderDead, Field::DropSize, Field::DropKey,
+                          Field::RecordsRefused})
         n += d[static_cast<size_t>(f)];
     return n;
 }

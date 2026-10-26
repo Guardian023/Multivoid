@@ -6,7 +6,7 @@
 // the HOST judges by accounting: every message is exactly one claim that ends in one outcome or one dispatcher drop,
 // so the sum of the lane's counter deltas since its baseline equals the messages sent and each counter's delta matches
 // the arm's table. A press has no answer packet, so the host alone judges.
-// The five arms, and what each forges, are the table in hostile_drill_coffee.cpp.
+// The six arms, and what each forges, are the table in hostile_drill_coffee.cpp.
 // The client records the coffee makers (or crowbars) it already holds and says so in the lobby chat; the host then
 // spawns the one prop the arm needs before the client's puppet (a near one, or one 2000 uu out) and says it is ready in
 // the lobby chat. The family acts on slot 1 only; another slot idles.
@@ -19,7 +19,7 @@ namespace coop::net { class Session; }
 
 namespace coop::dev::hostile_drill::coffee {
 
-enum class Arm { None, Malformed, WrongClass, Reach, Flood, ForgedRecord };
+enum class Arm { None, Malformed, WrongClass, Reach, Flood, ForgedRecord, DeadSender };
 
 // The arm a config value names; None for a value that is not one of ours.
 Arm ArmOf(const std::string& value);
