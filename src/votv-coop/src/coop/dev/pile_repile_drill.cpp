@@ -34,7 +34,7 @@ namespace EL = coop::element;
 namespace TC = coop::trash_channel;
 
 constexpr float    kPickMinCm     = 250.f;    // the director's own pile band
-constexpr float    kPickMaxCm     = 5000.f;
+constexpr float    kPickMaxCm     = 1.0e7f;   // the nearest pile, however far: a fresh world has none within 300 m
 constexpr float    kReachCm       = 150.f;    // the use key's trace takes it from here
 constexpr int      kWalkDeadlineS = 60;
 constexpr float    kWalkFloorCmS  = 200.f;    // a walk's deadline grows by its straight length at under half the pace
@@ -168,6 +168,7 @@ void TickHost(coop::net::Session* s, uint64_t ms) {
         if (eid == EL::kInvalidId || eid == 0u) { Fail("the picked pile has no eid"); return; }
         g_eid = static_cast<uint32_t>(eid);
         g_grabbedAt = goal.targetPos;
+        { ue_wrap::FVector me{}; E::TryGetActorLocation(player, me); UE_LOGI("[PILE-REPILE] host walks to eid=%u, %.0f m away", g_eid, Dist(me, goal.targetPos) / 100.f); }
         ue_wrap::FVector from{};
         E::TryGetActorLocation(player, from);
         g_walk = D::StartBackgroundWalk(goal.targetPos, kReachCm,
