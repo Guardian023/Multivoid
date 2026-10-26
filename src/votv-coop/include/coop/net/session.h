@@ -193,6 +193,10 @@ public:
     // (client). False on an oversize payload or no peer. `skipSlot` skips one slot (-1: none): MTA pSkip.
     bool SendReliable(ReliableKind kind, const void* payload, int len, int skipSlot = -1);
 
+    // `count` equal-sized payloads as one run no join gate splits (SendBacklog::SendOrQueueBatch); the blob chunker's.
+    bool SendReliableBatch(ReliableKind kind, const void* payloads, int payloadLen, int count);
+    bool SendReliableBatchToSlot(int peerSlot, ReliableKind kind, const void* payloads, int payloadLen, int count);
+
     // Single-target reliable send; false if peerSlot is out of range, not connected, or the payload
     // does not fit. `senderSlot` is the header's origin (0 = self; the late-join replay passes the
     // replayed peer's slot). True means delivered, from the GNS stream or the backlog the net

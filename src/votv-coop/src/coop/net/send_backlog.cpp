@@ -73,6 +73,34 @@ SendOutcome SendBacklog::SendOrQueue(int slot, int lane, uint32_t hConn,
         return SendOutcome::Dropped;
     SlotQ& s = slots_[slot];
     std::lock_guard<std::mutex> lk(s.mu);
+    return SendLocked_(s, slot, lane, hConn, wire, len, adm);
+}
+
+SendOutcome SendBacklog::SendOrQueueBatch(int slot, int lane, uint32_t hConn, const uint8_t* wire,
+                                          int len, int count, SendAdmission& adm, int& streamed) {
+    streamed = 0;
+    if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers))
+        return SendOutcome::Dropped;
+    if (lane < 0 || lane >= kLaneCount || !wire || len <= 0 || count <= 0 || hConn == 0)
+        return SendOutcome::Dropped;
+    SlotQ& s = slots_[slot];
+    // One acquisition for every packet: the join gate and the lane's queue state cannot change
+    // between two packets of the batch, so all of them go straight or all of them queue behind
+    // the same head. The first Dropped ends the batch, as it ends a chunk loop.
+    std::lock_guard<std::mutex> lk(s.mu);
+    SendOutcome worst = SendOutcome::Streamed;
+    for (int i = 0; i < count; ++i) {
+        const SendOutcome rc = SendLocked_(s, slot, lane, hConn, wire + static_cast<size_t>(i) * len,
+                                           len, adm);
+        if (rc == SendOutcome::Dropped) return rc;
+        if (rc == SendOutcome::Streamed) ++streamed;
+        else worst = SendOutcome::Queued;
+    }
+    return worst;
+}
+
+SendOutcome SendBacklog::SendLocked_(SlotQ& s, int slot, int lane, uint32_t hConn,
+                                     const uint8_t* wire, int len, SendAdmission& adm) {
     // A backlog stamped for a PREVIOUS connection is dead state -- discard it
     // before this (new-connection) send, never deliver it (slot recycling).
     if ((s.totalBytes > 0 || s.joinBytes > 0) && s.hConn != hConn) {

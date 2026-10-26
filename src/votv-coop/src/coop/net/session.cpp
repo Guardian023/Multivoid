@@ -77,6 +77,23 @@ int BuildReliableWire_(uint8_t* buf, ReliableKind kind, const void* payload, int
     }
     return static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader)) + len;
 }
+
+// `count` equal-sized payloads (contiguous at `payloads`) as `count` consecutive wire packets in
+// `wire` (a buffer the calling thread reuses, so a blob costs no allocation per chunk), each with its
+// own seq as one-at-a-time sends would take. Returns the length of one packet.
+int BuildReliableBatch_(std::vector<uint8_t>& wire, ReliableKind kind, const void* payloads,
+                        int payloadLen, int count, std::atomic<uint32_t>& sendSeq,
+                        uint32_t ownEpoch) {
+    const int total = static_cast<int>(sizeof(PacketHeader) + sizeof(ReliableHeader)) + payloadLen;
+    wire.resize(static_cast<size_t>(total) * count);
+    for (int i = 0; i < count; ++i) {
+        BuildReliableWire_(wire.data() + static_cast<size_t>(i) * total, kind,
+                           static_cast<const uint8_t*>(payloads) + static_cast<size_t>(i) * payloadLen,
+                           payloadLen, sendSeq.fetch_add(1), ownEpoch, /*senderSlot*/0);
+    }
+    return total;
+}
+thread_local std::vector<uint8_t> t_batchWire;
 }  // namespace
 
 bool Session::SendReliableToSlot(int peerSlot, ReliableKind kind, const void* payload,
@@ -237,6 +254,53 @@ bool Session::SendReliable(ReliableKind kind, const void* payload, int len, int 
         // Delivery per slot: the stream or the backlog counts as sent.
         const SendOutcome rc = backlog_.SendOrQueue(i, laneIdx, hConn, wire, total, admission_);
         if (rc == SendOutcome::Streamed) rateControl_.NoteReliableQueued(i, total);
+        if (rc != SendOutcome::Dropped) anySuccess = true;
+    }
+    return anySuccess;
+}
+
+bool Session::SendReliableBatchToSlot(int peerSlot, ReliableKind kind, const void* payloads,
+                                      int payloadLen, int count) {
+    if (peerSlot < 0 || peerSlot >= kMaxPeers) return false;
+    if (payloadLen < 0 || payloadLen > kMaxReliablePayload || count <= 0 || !payloads) {
+        UE_LOGW("net: SendReliableBatchToSlot rejected (slot=%d len=%d count=%d)",
+                peerSlot, payloadLen, count);
+        return false;
+    }
+    // SendReliableToSlot's pre-world gate and dead-slot rule, once for the whole batch.
+    if (!IsSlotWorldReady(peerSlot) && !IsPreWorldSendableKind(kind)) return false;
+    const uint32_t hConn = peerConns_[peerSlot].load();
+    if (hConn == 0) return false;
+
+    const int total = BuildReliableBatch_(t_batchWire, kind, payloads, payloadLen, count,
+                                          sendSeq_, ownEpoch_);
+    int streamed = 0;
+    const SendOutcome rc = backlog_.SendOrQueueBatch(
+        peerSlot, static_cast<int>(LaneForKind(kind)), hConn, t_batchWire.data(), total, count,
+        admission_, streamed);
+    if (streamed > 0) rateControl_.NoteReliableQueued(peerSlot, streamed * total);
+    return rc != SendOutcome::Dropped;
+}
+
+bool Session::SendReliableBatch(ReliableKind kind, const void* payloads, int payloadLen, int count) {
+    if (payloadLen < 0 || payloadLen > kMaxReliablePayload || count <= 0 || !payloads) {
+        UE_LOGW("net: SendReliableBatch rejected (len=%d count=%d)", payloadLen, count);
+        return false;
+    }
+    // One wire build and one seq run for the whole fan-out, as SendReliable's.
+    const int total = BuildReliableBatch_(t_batchWire, kind, payloads, payloadLen, count,
+                                          sendSeq_, ownEpoch_);
+    const int laneIdx = static_cast<int>(LaneForKind(kind));
+
+    bool anySuccess = false;
+    for (int i = 0; i < kMaxPeers; ++i) {
+        const uint32_t hConn = peerConns_[i].load();
+        if (hConn == 0) continue;
+        if (!IsSlotWorldReady(i) && !IsPreWorldSendableKind(kind)) continue;
+        int streamed = 0;
+        const SendOutcome rc = backlog_.SendOrQueueBatch(i, laneIdx, hConn, t_batchWire.data(), total,
+                                                         count, admission_, streamed);
+        if (streamed > 0) rateControl_.NoteReliableQueued(i, streamed * total);
         if (rc != SendOutcome::Dropped) anySuccess = true;
     }
     return anySuccess;

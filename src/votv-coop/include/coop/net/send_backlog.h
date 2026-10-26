@@ -69,6 +69,14 @@ public:
     SendOutcome SendOrQueue(int slot, int lane, uint32_t hConn, const uint8_t* wire, int len,
                             SendAdmission& adm);
 
+    // `count` equal-length packets (`len` bytes each, contiguous in `wire`) sent to one (slot,lane)
+    // under ONE acquisition of the slot's lock, in order: a join gate opened on the net thread cannot
+    // split them, so they go straight or are held together. Each packet follows SendOrQueue's rules;
+    // the first Dropped ends the batch. Returns Dropped if one was, else Queued if any was held, else
+    // Streamed; `streamed` is how many entered GNS. Any thread.
+    SendOutcome SendOrQueueBatch(int slot, int lane, uint32_t hConn, const uint8_t* wire, int len,
+                                 int count, SendAdmission& adm, int& streamed);
+
     // One drain pass for a slot (net-thread tick). Re-attempts queued heads in lane-priority
     // order (High -> Default -> Transfer); the GNS rc is the correctness backstop, so a refusal ends
     // the pass. The refill stops at the same headroom rule every send path obeys, so the
@@ -141,6 +149,9 @@ private:
     // Reset q to a fresh state under mu (caller holds mu). Drops the join gate and its queue too: the
     // slot's leave and a stale connection both come through here.
     void ResetLocked_(SlotQ& s);
+    // SendOrQueue's body; the caller holds s.mu.
+    SendOutcome SendLocked_(SlotQ& s, int slot, int lane, uint32_t hConn, const uint8_t* wire,
+                            int len, SendAdmission& adm);
 
     SlotQ slots_[coop::players::kMaxPeers];
 };
