@@ -111,6 +111,7 @@
 #include "coop/dev/order_probe.h"  // who writes the order queue, and what the drone delivers, per peer
 #include "coop/dev/bind_wait_selftest.h"  // [dev] the bind wait's rules on stated inputs
 #include "coop/dev/pile_key_probe.h"  // [dev] [MEASURE sync-order-wp5, temporary] the pile key against its native
+#include "coop/dev/pile_repile_drill.h"  // [dev] [MEASURE sync-order-wp5, temporary] the host re-piles a pile, its client rejoins
 #include "coop/dev/order_selftest.h"  // exercise host-side order pricing end to end
 #include "coop/dev/physmods_drill.h"  // [dev] a module plug and unplug are sent at their verbs, and a rejoin's load sends none
 #include "coop/dev/pinecone_probe.h"
@@ -157,6 +158,7 @@ void Install(coop::net::Session& session) {
     coop::dev::kerfur_convert_drill::Install(&session);  // [dev] the kerfur conversion drill (no-op unless kerfur_convert_drill=1)
     coop::dev::kerfus_drill::Install(&session);  // [dev] the Kerfus drill (no-op unless kerfus_drill=1)
     coop::dev::kerfus_throw_drill::Install(&session);  // [dev] the Kerfus throw drill (kerfus_throw_drill=1)
+    coop::dev::pile_repile_drill::Install(&session);  // [dev] [MEASURE sync-order-wp5, temporary] the re-pile drill (pile_repile_drill=1)
     coop::dev::kerfur_serve_drill::Install(&session);  // [dev] the Omega serve drill (kerfur_serve_drill=1)
     coop::dev::container_selftest::Install(&session);  // [dev] the container-lane e2e circle (no-op unless container_selftest=1)
     coop::dev::drive_selftest::Install(&session);  // [dev] rack-lane e2e circles (no-op unless drive_selftest=1)
@@ -190,6 +192,7 @@ void EndSession() {
     coop::dev::kerfur_convert_drill::OnDisconnect();  // [dev] back to the first phase
     coop::dev::kerfus_drill::OnDisconnect();  // [dev] back to the first phase
     coop::dev::kerfus_throw_drill::OnDisconnect();  // [dev] back to the first phase
+    coop::dev::pile_repile_drill::OnDisconnect();  // [dev] [MEASURE sync-order-wp5, temporary] back to the first phase
     coop::dev::kerfur_serve_drill::OnDisconnect();  // [dev] back to the first phase
     coop::dev::door_drill::OnDisconnect();  // [dev] the door list and readings belong to one world
     coop::dev::toggle_drill::OnDisconnect();  // [dev] the device and its phase belong to one world
@@ -295,6 +298,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::kerfur_convert_drill::Tick();  // [dev] the kerfur conversion drill's phases (a single bool read when off)
     coop::dev::kerfus_drill::Tick();  // [dev] the Kerfus drill's phases (a single bool read when off)
     coop::dev::kerfus_throw_drill::Tick();  // [dev] the Kerfus throw drill's phases (a single bool read when off)
+    coop::dev::pile_repile_drill::Tick();  // [dev] [MEASURE sync-order-wp5, temporary] the re-pile drill (a single bool read when off)
     coop::dev::kerfur_serve_drill::Tick();  // [dev] the Omega serve drill's phases (a single bool read when off)
     coop::dev::prop_birth_key_probe::Tick();  // [dev] periodic seam totals (a single bool read when off)
     coop::dev::food_clock_probe::Tick();  // [dev] the food catch-up's clock reading (a single bool read when off)

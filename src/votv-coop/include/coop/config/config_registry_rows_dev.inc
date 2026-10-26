@@ -450,6 +450,12 @@ CFG_FLAG(kerfus_throw_drill, "kerfus_throw_drill", "dev", false, "VOTVCOOP_KERFU
     "stayed one body: the copy where the host's hand has it, its centre of mass on the body, its welded "
     "navigation pawn where the body carries it. The rig client joins at the base. '[KERFUS-THROW] host DONE "
     "PASS|FAIL' ends it; '[KERFUS-THROW] INVALID' is a step that could not run.")
+CFG_INT(pile_repile_drill, "pile_repile_drill", "dev", 0, 0, 1, "VOTVCOOP_PILE_REPILE_DRILL",
+    "Drill (HOST, with one client): once the client's join is over the host's director grabs a reachable chipPile, "
+    "lets it go and waits for the land to commit, then reads the re-piled pile's speed once a second for up to "
+    "20 s. '[PILE-REPILE] host re-piled' is the rig's rejoin marker: the client joins again, which is the "
+    "measurement (with pile_key_probe=1 on both peers). '[PILE-REPILE] host DONE' ends it, 30 s after the second "
+    "join; '[PILE-REPILE] FAIL: <step>' is a step that could not run.")
 CFG_FLAG(kerfur_serve_drill, "kerfur_serve_drill", "dev", false, "VOTVCOOP_KERFUR_SERVE_DRILL",
     "Drill (BOTH peers): the host spawns a kerfur Omega, takes a red disc in hand and stays put; the client's "
     "first command is get_reports, and the host's disc must stay in its hand with the Omega holding none, back "
