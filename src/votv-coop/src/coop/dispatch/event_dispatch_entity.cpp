@@ -225,7 +225,7 @@ bool HandleEntityEvent(net::Session& session,
             }
         }
         // The host saying an identity is alive now retires that identity's deferred destroy. PropSpawn
-        // and PropDestroy share the Bulk lane in order, and the host's snapshot drain re-validates
+        // and PropDestroy share the Default lane in order, and the host's snapshot drain re-validates
         // liveness per row, so a spawn received after a destroy is newer: applying the older destroy at
         // quiescence would kill the re-creation. Taken here, at the wire edge, since OnSpawn is also
         // replayed with an older arrival's payload (kerfur adoption), which proves nothing about order.
@@ -370,7 +370,7 @@ bool HandleEntityEvent(net::Session& session,
         // pose (MTA: the context is
         // reference/mtasa-blue/Server/mods/deathmatch/logic/CElement.h:220-221, and the check is
         // CanUpdateSync at reference/mtasa-blue/Server/mods/deathmatch/logic/CElement.cpp:1300), so a
-        // sample that crossed a drive's end edge on another lane is judged by what it read, never by
+        // sample that crossed a drive's end edge is judged by what it read, never by
         // when it arrived.
         if (coop::prop_drive_stream::IsCorrectionStale(p.eid, p.driveGen, p.driveOpen != 0)) {
             UE_LOGI("[PILE-B3] CLIENT pos-correction eid=%u gen=%u open=%u dropped on arrival -- older than a "

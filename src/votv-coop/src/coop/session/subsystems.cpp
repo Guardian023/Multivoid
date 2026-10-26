@@ -352,14 +352,14 @@ void ConnectReplayForSlot(int slot) {
     coop::rig_ready::Say("peer-world-ready", slot);
     // Before the snapshot, explicit per-key destroys for props this joiner's blob had that the
     // host's live world no longer has (grabbed or destroyed during the download and load), so the
-    // client drops exactly those rather than the divergence sweep inferring the deletes. On the
-    // bulk lane ahead of the snapshot, so the removes land before the adds. A no-op for a joiner
+    // client drops exactly those rather than the divergence sweep inferring the deletes. Sent inside the
+    // snapshot scope (its sends skip the join gate), so the removes land before the adds. A no-op for a joiner
     // with no blob baseline, which the sweep still owns.
     {
         coop::net::SnapshotSendScope scope(slot);  // the removes are the snapshot's, so the join gate passes them
         coop::join_window_baseline::SendDivergenceDeletes(slot);
     }
-    // Every dish code, sent here on the bracket's lane ahead of its Begin, so a set that goes whole lands
+    // Every dish code, sent here and held by the join gate until the snapshot completes, so a set that goes whole lands
     // before its Complete and a joined client holds the host's codes, a midnight since the capture
     // included; a set not taken whole is retried from the lane's tick and can land after it.
     coop::dish_hashcode_sync::QueueConnectBroadcastForSlot(slot);
@@ -369,7 +369,7 @@ void ConnectReplayForSlot(int slot) {
     coop::sat_console_sync::OnPeerWorldReady(slot);  // a SAT console typist back at a terminal still running finds it
     // Deliver the current position of any save-authoritative chipPile the host moved in this
     // joiner's connect window (the move's convert was dropped pre-world, and chipPiles carry no
-    // position in the snapshot). After the snapshot, so it rides the bulk lane behind it; the
+    // position in the snapshot). After the snapshot, so the join gate holds it behind the snapshot's spawns; the
     // client snaps the bound native at quiescence.
     coop::join_window_baseline::FlushDivergedPositions(slot);
     coop::item_activate::QueueConnectBroadcastForSlot(slot);

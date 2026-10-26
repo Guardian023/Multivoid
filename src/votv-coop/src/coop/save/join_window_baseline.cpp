@@ -85,8 +85,8 @@ std::chrono::steady_clock::time_point g_flushArmUntil[coop::net::kMaxPeers]{};
 std::chrono::steady_clock::time_point g_flushLastRun[coop::net::kMaxPeers]{};
 constexpr auto kFlushLateWindow = std::chrono::seconds(25);       // cover a long load tail + late clusters
 constexpr auto kFlushCadence    = std::chrono::milliseconds(500); // 2 Hz re-flush (cold; deduped to changes)
-// The keyed props a hand held after their correction had gone out: the first correction rides Bulk
-// and can land after the hand's release (Normal), so each is sent a follow-up once it is out of the
+// The keyed props a hand held after their correction had gone out: the first correction was read before the grab,
+// so each is sent a follow-up once it is out of the
 // hand and at rest. After the late window only these stay watched, until the set empties or
 // g_settleUntil passes.
 std::unordered_set<coop::element::ElementId> g_handSinceSent[coop::net::kMaxPeers];
@@ -162,9 +162,9 @@ bool AtRest_(void* actor) {
 // One keyed prop of the diverged flush, for the keyed scan and for the settle phase alike; true when
 // a correction went out. A prop in a hand is the hand's: its stream is continuous and its release
 // carries the pose, so no correction is read for it now. When a correction for it had already gone
-// out, the prop is noted in g_handSinceSent: a read taken before the grab rides Bulk behind the
-// snapshot and can land after the release, which rides Normal, and nothing is armed for the release
-// to erase. A read taken after the release rides the same Bulk lane, so it lands after that one:
+// out, the prop is noted in g_handSinceSent: a read taken before the grab went out behind the
+// snapshot ahead of the release, and nothing is armed for the release
+// to erase. A read taken after the release rides the same lane, so it lands after that one:
 // the prop stays noted until it is out of the hand and at rest, and every pass sends it its follow-up
 // (deduped to a move past 4 cm of what was last delivered). A driven prop is sent as any other,
 // stamped with its drive context, and the client orders it.
@@ -172,7 +172,7 @@ bool AtRest_(void* actor) {
 // (reference/mtasa-blue/Server/mods/deathmatch/logic/CStaticFunctionDefinitions.cpp:1689-1700, client
 // reference/mtasa-blue/Client/mods/deathmatch/logic/rpc/CElementRPCs.cpp:389) because its server
 // authors the detach: a keyed prop's release here is authored by its holder, which holds no host-side
-// per-eid context to stamp, so the order comes from the Bulk lane (the follow-up lands behind any
+// per-eid context to stamp, so the order comes from the Default lane (the follow-up lands behind any
 // stale sample).
 bool FlushKeyedProp_(int peerSlot, const char* phase, coop::element::ElementId eid,
                      const ue_wrap::FVector& savePos) {
@@ -348,7 +348,7 @@ void SendDivergenceDeletes(int peerSlot) {
         for (size_t i = 0; i < k.size() && i < 31; ++i)
             dp.key.data[dp.key.len++] = static_cast<char>(k[i]);
         dp.elementId = 0;  // resolve by key: the eid is host-range-unstable across a transfer
-        // Per slot: the divergence is this joiner's blob's. On the bulk lane ahead of the snapshot
+        // Per slot: the divergence is this joiner's blob's. Inside the snapshot scope, ahead of the snapshot
         // bracket, so the removes land before the adds.
         g_session->SendReliableToSlot(peerSlot, coop::net::ReliableKind::PropDestroy,
                                       &dp, sizeof(dp));
@@ -395,7 +395,7 @@ void TickLateArm() {
             // SettleTick_ retires them. Otherwise the keyed half retires here with the rest.
             // A last word for every prop corrected this join, read now: one moved since its last
             // delivery (a grab and release inside the last scan interval among them) is sent its
-            // follow-up on the same Bulk lane, behind anything still queued; one in a hand now is
+            // follow-up on the same lane, behind anything still queued; one in a hand now is
             // watched. Cold: the dedupe holds only the props corrected this join.
             std::vector<coop::element::ElementId> corrected;
             corrected.reserve(g_lastFlushedKeyedPos[slot].size());

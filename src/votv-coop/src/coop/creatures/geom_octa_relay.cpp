@@ -510,7 +510,7 @@ void OnEvent(const N::GeomOctaEventPayload& p) {
         }
     }
     if (st->keptCount == kMaxKept) {
-        // The kept verdict nearest the base goes (the Bulk lane is ordered, so it is also the oldest: this is defensive).
+        // The kept verdict nearest the base goes (the Default lane is ordered, so it is also the oldest: this is defensive).
         size_t ev = 0;
         for (size_t i = 1; i < st->keptCount; ++i)
             if (st->kept[i].n - st->base < st->kept[ev].n - st->base) ev = i;

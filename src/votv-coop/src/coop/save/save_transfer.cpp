@@ -1,6 +1,6 @@
 // coop/save/save_transfer.cpp -- the host's world to a joining client: a live capture of the host's
 // world into a scratch slot (or the on-disk slot behind a torn-read guard), chunked over the
-// bulk lane behind a Begin, CRC-checked and written to the client's coop slot. The photograph
+// Transfer lane behind a Begin, CRC-checked and written to the client's coop slot. The photograph
 // only; what the world did while it travelled is coop/save/join_window_baseline, captured in the
 // same breath here and flushed from this tick. See coop/save/save_transfer.h.
 

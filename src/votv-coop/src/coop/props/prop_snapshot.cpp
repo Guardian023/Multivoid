@@ -194,7 +194,7 @@ void StartEnumerationFor(int peerSlot) {
 
     g_snapshotSentTotal = 0;
     g_snapshotUnreadTotal = 0;
-    // SnapshotBegin carries the candidate count (the progress denominator) on the bulk lane ahead
+    // SnapshotBegin carries the candidate count (the progress denominator) on the Default lane ahead
     // of the first PropSpawn; in-lane ordering keeps it first. Host only.
     if (auto* s = g_session_ptr.load(std::memory_order_acquire)) {
         coop::net::SnapshotBeginPayload b{};
@@ -254,7 +254,7 @@ void CompleteDrainForCurrentSlot(coop::net::Session* s) {
     if (s && g_currentTargetSlot >= 1) {
         coop::net::SnapshotEndPayload e{};
         e.propSent = g_snapshotSentTotal;
-        // SnapshotComplete closes the bracket as the last bulk-lane message, so the joiner lifts
+        // SnapshotComplete closes the bracket as the last message of the snapshot, so the joiner lifts
         // its cover only once the whole stream landed. Its tail is the per-class completeness
         // census, an independent GUObjectArray count of live chipPiles (not the registry
         // enumeration); the joiner's sweep keeps a class it claimed fewer of than the host
@@ -411,7 +411,7 @@ void TriggerForSlot(int peerSlot) {
     OpenBracket_(peerSlot);
     // IsSlotReady, not IsSlotConnected: the connection handle exists a few ms before the lanes are
     // configured, and a drain triggered in that window queues ~1,700 PropSpawns on the
-    // high-priority lane instead of the bulk lane.
+    // lane 0 instead of the Default lane.
     if (!s->IsSlotReady(peerSlot)) {
         DeferSlot_(peerSlot, DeferReason::LanesNotReady, "its lanes are not configured yet");
         return;

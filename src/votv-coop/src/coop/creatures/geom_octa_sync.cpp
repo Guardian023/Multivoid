@@ -174,7 +174,7 @@ void TargetText(const WireTarget& t, char (&out)[40]) {
 
 // ---- what the host knows of each Octa's EntitySpawn, and the one Aggro it keeps ----
 //
-// The host never sends a GeomOctaEvent before that Octa's EntitySpawn has been sent: the event rides the spawn's lane
+// The host never sends a GeomOctaEvent before that Octa's EntitySpawn has been sent: the event rides Default behind the spawn
 // and the client's mirror must exist. The Octa's first aggro runs inside its own spawn's finish, on both spawn routes,
 // before the NPC lane's send (the dev route sends at the interceptor's PRE, the gamemode's at the drain), so an Aggro
 // that finds no sent spawn is kept, one per Octa, and goes out from OnNpcSpawnSent.

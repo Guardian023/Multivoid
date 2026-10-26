@@ -45,7 +45,7 @@ static_assert(coop::net::kMaxPeers <= 4, "CoordTowerPayload's acknowledgements h
 
 // A slot's ops wait, in arrival order, while the towers have not resolved, their sender has no body here yet (a
 // joiner's first pose follows its world-ready by seconds) or an insert's spend has not arrived (its destroy rides
-// the bulk lane); each is taken as refused once it has waited this long (coop/world/power_grid's bound).
+// the Default lane); each is taken as refused once it has waited this long (coop/world/power_grid's bound).
 constexpr uint64_t kWaitMs = 10000;
 constexpr size_t   kMaxQueued = 32;
 // A lights-out puzzle is pressed a few times a second; a sender's ops run at this rate, the rest waiting their turn.

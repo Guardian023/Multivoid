@@ -233,11 +233,11 @@ enum class ReliableKind : uint8_t {
     KeypadState = 25,
 
     // Host to one client: the connect snapshot starts, with the prop count as the progress
-    // denominator. Rides the Bulk lane ahead of every PropSpawn it introduces. SnapshotBeginPayload.
+    // denominator. Rides the Default lane ahead of every PropSpawn it introduces. SnapshotBeginPayload.
     SnapshotBegin = 27,
 
     // Host to one client: the last PropSpawn of the snapshot has been sent; the client lifts its
-    // loading cover. Same lane, so it lands after the props. SnapshotEndPayload.
+    // loading cover. Same lane, so it lands after the props and the sends the join gate held. SnapshotEndPayload.
     SnapshotComplete = 28,
 
     // Any peer, relayed by the host: a base window's dirt scalar decreased (a wipe), keyed by the
@@ -300,7 +300,7 @@ enum class ReliableKind : uint8_t {
     SaveTransferRequest = 42,
 
     // Host to one client: the save transfer header (size, chunk count, CRC, game mode, sidecar
-    // size). Bulk lane, ahead of its chunks. SaveTransferBeginPayload.
+    // size). Transfer lane, ahead of its chunks. SaveTransferBeginPayload.
     SaveTransferBegin = 43,
 
     // Host to one client: one chunk of the save blob, a u32 index plus up to kSaveChunkBytes.
@@ -555,7 +555,7 @@ enum class ReliableKind : uint8_t {
     TaskNewState = 103,
 
     // Client to host: my eject birthed this prop in my hands; author it. PropDropIntentPayload;
-    // class-whitelisted to the fresh-birth lineages; Bulk lane, so a pocket destroy cannot overtake
+    // class-whitelisted to the fresh-birth lineages; Default lane, so a pocket destroy cannot overtake
     // it. The prop's own state follows on PropSaveDataIntent, in the same FIFO.
     ReelEjectIntent = 104,
 
@@ -600,7 +600,7 @@ enum class ReliableKind : uint8_t {
 
     // Client to host: an edit-script batch over the laptop's file buffers; host to all: the
     // canonical quad, which is also the acknowledgement. Both carry the laptop's slot generation
-    // (FloppySlotState's) and ride its lane. Chunked blob.
+    // (FloppySlotState's) and ride the Default lane behind it. Chunked blob.
     LaptopQuad = 116,
 
     // Client to host: push or pop on a disc crate; host to all: the canonical arrays; host to one
@@ -640,8 +640,8 @@ enum class ReliableKind : uint8_t {
     CoinGunResult = 123,
 
     // Client to host, the first message on a connection: the client's nonce. AuthHelloPayload.
-    // The three admission kinds are the only ones an unadmitted connection may carry; they ride no
-    // lane and no world gate, since the peer holds no seat yet. Neither side's public key is on the
+    // The three admission kinds are the only ones an unadmitted connection may carry; they ride lane 0 outside
+    // the send backlog, with no world gate, since the peer holds no seat yet. Neither side's public key is on the
     // wire: each end reads the other's identity off its own connection, and the signature is what a
     // peer presenting a stolen identity cannot produce.
     AuthHello = 125,
@@ -663,8 +663,8 @@ enum class ReliableKind : uint8_t {
     LightGroupState = 129,
 
     // Host to all: one prop's OWN save record, the bytes its getData produced, addressed by the
-    // prop's Key inside the blob body (a chunk header carries no key). Chunked; rides PropSpawn's
-    // lane so a record can never overtake the birth it belongs to. A record for a prop this peer
+    // prop's Key inside the blob body (a chunk header carries no key). Chunked; rides the Default lane
+    // behind PropSpawn, so a record can never overtake the birth it belongs to. A record for a prop this peer
     // has not got yet is parked BY KEY and applied when that prop appears -- an identity, unlike an
     // element id, is still the same identity after the actor it named has been destroyed and
     // remade.
@@ -679,7 +679,7 @@ enum class ReliableKind : uint8_t {
     // A disc-holding device's slot, addressed by the device's index in its own kind's list. Host
     // to all with the canonical set; a peer to the host with the outcome of a slot its own game
     // changed, which the host validates and answers with that canonical. Chunked blob; on
-    // PropSpawn's lane, so a claim cannot overtake the destroy of the disc it absorbed.
+    // the Default lane with PropDestroy, so a claim cannot overtake the destroy of the disc it absorbed.
     FloppySlotState = 132,
 
     // A deployed grappling hook that still belongs to the player who fired it, keyed by (sender
@@ -705,8 +705,8 @@ enum class ReliableKind : uint8_t {
     // Host to all: an anchored hook exists, as the same getData record. A receiver spawns it and
     // lets the game's own loadData re-resolve both attach keys in its own world, so the mirror is
     // parented to its copy of what the original was tied to and needs no pose stream at all -- a
-    // hook tied to the ATV rides that peer's ATV by itself. Chunked blob, on HookAnchorCommit's
-    // lane so the answer cannot overtake the commit.
+    // hook tied to the ATV rides that peer's ATV by itself. Chunked blob, on the Default lane,
+    // so the answer cannot overtake the commit.
     HookAnchored = 136,
 
     // Host to all: the driven prop at eid has come to rest, or a hand took it -- its final pose and
@@ -1024,7 +1024,7 @@ enum class ReliableKind : uint8_t {
     // with a reason. Never relayed.
     PropActReply = 179,
 
-    // CLIENT->HOST: the client's verb ran (committed: the prop is gone on the client) or did not (aborted). Rides Bulk
+    // CLIENT->HOST: the client's verb ran (committed: the prop is gone on the client) or did not (aborted). Rides Default
     // with PropDestroy and PropDropIntent, so a later drop of the item cannot overtake it. Never relayed.
     PropActCommit = 180,
 
@@ -1057,8 +1057,8 @@ enum class ReliableKind : uint8_t {
     // device claim, at the POST of the widget's switcherSwitched and of its floppy and sub-game tab clicks, when the
     // index differs from the last one this peer reported. The host drops a report from a peer that is not the holder
     // and an index past its own switcher's tab count, applies the rest to its own widget's switcher and sends
-    // LaptopTabState to every client but the sender. Not relayed (the host validates first). Rides the lane of
-    // DeviceClaim (Normal), so a claim, its tabs and its release arrive in the order they were made; a leaving
+    // LaptopTabState to every client but the sender. Not relayed (the host validates first). Rides the Default lane with
+    // DeviceClaim, so a claim, its tabs and its release arrive in the order they were made; a leaving
     // holder's last tab is sent before its release. Late join: LaptopTabState. LaptopTabPayload.
     LaptopTabReport = 185,
 
@@ -1146,7 +1146,7 @@ enum class ReliableKind : uint8_t {
     // One corded prop's cord-to-socket link, decided by the host. A client claims the outcome of its own player's
     // plug or unplug (op 0, client to host, never relayed); the host answers every claim with the cord's link as it
     // now stands (op 1, seq = the claim's, to the sender) and broadcasts every change of a link (op 1, seq 0); at a
-    // joiner's world-ready it sends every corded prop's link, then op 2 (the seed's end). Rides PropSpawn's lane, so
+    // joiner's world-ready it sends every corded prop's link, then op 2 (the seed's end). Rides the Default lane behind PropSpawn, so
     // a link never passes the birth of the prop it names. Not pre-world. CordLinkPayload.
     CordLinkState = 195,
 
@@ -1164,14 +1164,14 @@ enum class ReliableKind : uint8_t {
     PropSyncAnswer = 202,
     // HOST->CLIENT: developer only, read by the prop syncer drill's load arm (coop/dev/prop_syncer_drill): one of N
     // messages of a filler the host queues to the kicking client, so a drill can stand a transfer the size of a join
-    // burst on the spawn lane (Bulk, the lane the chunked save blobs ride) ahead of the syncer's messages. Nothing
+    // burst on the Transfer lane (the save stream's) ahead of the syncer's messages. Nothing
     // reads the fill; the receiver counts. Never relayed; not pre-world. DevLoadFillerPayload.
     DevLoadFiller = 204,
     // HOST->CLIENT: one decision of a Geom Octa, to be replayed into the client's own Blueprint (coop/creatures/
     // geom_octa_relay): op 0, an Aggro, the Octa took a target (the replay runs minSphere's begin-overlap handler with
     // the target's counterpart here), carrying the host's verdict count as the base; op 1, a FireVerdict, the host's
     // number n for one fire-finish and whether the Octa fires again. The Octa is the NPC element `octaEid`. Rides the
-    // spawn lane (Bulk), so an event is ordered behind its Octa's EntitySpawn; the host sends none for an Octa whose
+    // Default lane, so an event is ordered behind its Octa's EntitySpawn; the host sends none for an Octa whose
     // EntitySpawn it has not sent. Host-authoritative: a client's copy is refused at the host's receive edge; never
     // relayed; not pre-world. Late join: a joiner's snapshot of an Octa mid-attack carries one Aggro to that
     // slot alone, the target now and the host's verdict count as its base. Divergence from MTA, whose
@@ -1888,7 +1888,7 @@ static_assert(sizeof(PropDropIntentPayload) <= 256 - 20 - 8, "PropDropIntentPayl
 // Data bytes per SaveTransferChunk message (plus a 4-byte index prefix). Far above
 // kMaxReliablePayload by design: the session diverts the kind to the bulk sink and the transport
 // fragments the message; the 16-bit payload length caps the whole payload at 65535, so 56K plus
-// the index fits with headroom. A 17 MB save is about 308 messages on the Bulk lane.
+// the index fits with headroom. A 17 MB save is about 308 messages on the Transfer lane.
 inline constexpr uint32_t kSaveChunkBytes = 56u * 1024u;
 
 // SaveTransferBegin: the blob header. totalBytes==0 == "host has no save file"

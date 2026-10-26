@@ -1,6 +1,6 @@
 // coop/props/container_park.h -- the inbound holding pen for a container slice whose container is
-// not resolvable on this peer yet: a birth skew, or a mid-activity join where the contents ride the
-// normal lane while the PropSpawn rides bulk. One entry per eid, latest wins; the lane beside it
+// not resolvable on this peer yet: a birth skew, or a mid-activity join where a slice precedes its PropSpawn.
+// One entry per eid, latest wins; the lane beside it
 // (container_contents_sync) owns the parse and the apply and hands them back through the replay
 // callback, so nothing here knows the blob's grammar. Game thread throughout.
 

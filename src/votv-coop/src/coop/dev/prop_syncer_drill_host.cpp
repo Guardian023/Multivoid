@@ -100,7 +100,7 @@ void HostReset() { g_h = HostState{}; }
 
 namespace coop::dev::prop_syncer_drill {
 
-// The load arm: the filler goes to the claiming client, on the spawn lane, as the host answers its claim, so the
+// The load arm: the filler goes to the claiming client, on the Transfer lane, as the host answers its claim, so the
 // answer leaves behind a filler that has just been queued, whatever the walk or the rate. The backlog takes what the
 // transport refuses, so a send that returns false is a failed arm.
 void BeforeGrant(coop::net::Session& s, uint8_t slot) {

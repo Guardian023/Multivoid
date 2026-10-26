@@ -60,7 +60,7 @@ void OpenVerdictWindow(uint32_t n, void* octa);
 // snapshot, per slot, on a success only): `className` and `classLen` are the spawned class (bytes, no terminator needed),
 // `actor` the spawned actor or null where it does not exist yet (the interceptor sends before the spawn), `sent` whether
 // any peer was sent it. Only the Octa matters. The host sends a GeomOctaEvent only for an Octa whose spawn it has sent,
-// since the event rides the spawn's lane and the client's mirror is built by it. A kept Aggro (the first aggro runs
+// since the event rides Default behind the spawn and the client's mirror is built by it. A kept Aggro (the first aggro runs
 // inside the spawn's finish, before this) goes out here if its attack still stands, and is dropped when nothing was
 // sent. `slot` is the one peer the send reached (the join snapshot's), -1 for the live sends, which reach every
 // world-ready peer: the kept Aggro goes to that same audience. A snapshot's send of an Octa mid-attack on a target the

@@ -368,7 +368,7 @@ void ApplyBlob(const std::vector<uint8_t>& blob, uint8_t senderSlot, bool fromPa
 }
 
 // Parked rows wait for their drive. A joiner's wait starts once its join is over: its drives arrive with the world's
-// snapshot, on another lane.
+// snapshot.
 void RetryParked() {
     const auto now = Clock::now();
     const bool joining = coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle;

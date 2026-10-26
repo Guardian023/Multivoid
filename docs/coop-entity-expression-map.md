@@ -233,7 +233,7 @@ leave, the fire verdict); its actor tick is kept for the turn toward its target.
 class in `npc_mirror`: the wisp and the Octa keep the actor tick, every other character loses it, and the
 movement tick is always off. `[V]` (the refusals: `octa_drill` measure; the kept tick `[RD]`)
 
-*The attack.* The host's two decisions cross as `GeomOctaEvent` (`coop/creatures/geom_octa_sync`, the bulk lane,
+*The attack.* The host's two decisions cross as `GeomOctaEvent` (`coop/creatures/geom_octa_sync`, the default lane,
 behind the Octa's `EntitySpawn`): an Aggro (the target as a player slot, an element or none, and the Octa's count
 of fire verdicts) and a FireVerdict (that count, and whether it fires again). The client replays the Aggro as its
 own `minSphere` begin-overlap with the target's counterpart (the host's player is the host's puppet there) and

@@ -116,8 +116,8 @@ One connection carries two kinds of traffic, split by reliability rather than by
   and vehicle lanes). Routing is `coop/dispatch/`: one drain and seven family routers, each owning
   its kinds.
 
-Reliable traffic rides three lanes (high, normal, bulk) so a join's bulk stream never delays a
-teleport. A reliable send either enters the stream, enters a per-lane backlog, or the connection
+Reliable traffic rides three lanes (high, default, transfer). Every kind that names an element or the world rides the one ordered default lane, the save stream rides the lowest, so a join's bulk stream never delays a teleport. A joiner's default-lane sends are held behind its snapshot until it completes. `[?]`
+A reliable send either enters the stream, enters a per-lane backlog, or the connection
 dies; it is never warned about and dropped (`coop/net/send_backlog`). The wire format is
 semantic: names, keys and positions, never engine addresses. Every message kind and the build
 number live in `coop/net/protocol.h`; a change to any wire format bumps the build number in the
@@ -162,7 +162,7 @@ explicitly:
 
 1. **Admission.** The mutual challenge, the password proof, then the slot assignment, which is
    also the client's signal to begin. The version pair is checked here.
-2. **Save transfer.** The host serializes its live world and streams it on the bulk lane
+2. **Save transfer.** The host serializes its live world and streams it on the transfer lane
    (`coop/save/save_transfer`); the client writes it as a session-scoped slot the game's own menu
    never lists and loads it through the game's own loader, so every prop is placed by the engine,
    at rest, with the host's keys. Clients never save; the host is the only peer that writes one.

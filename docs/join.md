@@ -80,7 +80,7 @@ inheritance: of the 87 classes that register an event, 21 implement it, eleven t
 `actor_save_C`, seven through `prop_C`, and `ATV`, `kerfurOmega` and `firetank` directly. A mirror
 lane that owns such a class already refuses its local spawn on a client; for the rest the joiner
 runs the event's own actor from its saved state. Neither has been measured per class.
-The host then streams the file on the bulk lane in chunks paced by send-buffer backpressure (`coop/save/save_transfer`). The game
+The host then streams the file on the transfer lane in chunks paced by send-buffer backpressure (`coop/save/save_transfer`). The game
 writes a save in place, with no rename, so the file is trusted only when its size and timestamp
 hold across two polls and two full reads agree. A joiner that asks while the host is still loading its
 world -- a quick rejoin after a rehost lands seconds after the host is up -- waits for that world, the
@@ -173,6 +173,10 @@ On the ready announce the host runs the replay for that slot, in this order
    lane's content is captured at the blob instant, and at the ready edge the delta against the
    live state is sent as appends and hash-keyed deletes (`coop/session/join_seed` for saved
    signals and emails; the meadow database has its own).
+
+Steps 3 to 5, and every other default-lane send to the slot while its snapshot runs, are held by the
+slot's join gate and reach the wire after the spawns and before the end marker, so a seed never
+precedes the prop it names `[?]`.
 
 ### 6. Reconcile and reveal
 

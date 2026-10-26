@@ -59,8 +59,8 @@ coop::blob_chunks::Assembler g_rackAsm;
 // Replay predicate = resolve-only (canonicals are absolute states; two queued
 // blobs replay in insertion order, newest wins).
 // MTA drops an RPC whose element is not there yet (reference/mtasa-blue/Client/mods/deathmatch/logic/rpc/
-// CRPCFunctions.cpp); its one ordered stream makes that safe. A canonical here rides another lane than its rack's
-// spawn, so it parks.
+// CRPCFunctions.cpp); its one ordered stream makes that safe. A canonical here can still reach a rack whose
+// spawn has not bound, so it parks.
 struct Pending {
     std::vector<uint8_t> blob;
     Clock::time_point until{};
@@ -447,8 +447,8 @@ void ClientApplyRackBlob(const coop::net::RackStateHead& h, const std::vector<ui
 void RetryPendingTick() {
     if (g_pending.empty()) return;
     const auto now = Clock::now();
-    // A joiner's wait starts once its join is over: its racks arrive with the world's snapshot, on
-    // another lane (same rule as drive_payload_sync::RetryParked).
+    // A joiner's wait starts once its join is over: its racks arrive with the world's snapshot
+    // (same rule as drive_payload_sync::RetryParked).
     const bool joining = coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle;
     std::vector<Pending> keep;
     for (auto& pd : g_pending) {

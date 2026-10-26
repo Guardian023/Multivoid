@@ -342,7 +342,7 @@ void Update(net::Session& session, void* localPlayer) {
             // live one). The sweep's over-50% valve, not a skip, guards against a world wipe.
             coop::join_membership_sweep::BeginClaimTracking();
             // While the bracket is open, container-contents parks do not age: their PropSpawns are
-            // still in the Bulk stream behind us.
+            // still in the Default stream behind us.
             coop::props::container_contents_sync::NoteJoinSnapshotBracket(true);
             // The bracket's apply window opens: the reconcile window is raised or refreshed (see
             // world_load_episode.h).
@@ -383,7 +383,7 @@ void Update(net::Session& session, void* localPlayer) {
             break;
         }
         case net::ReliableKind::SnapshotComplete: {
-            // The host finished the world snapshot (the last Bulk-lane message after every
+            // The host finished the world snapshot (the last Default-lane message after every
             // PropSpawn): the loading screen lifts.
             if (msg.payloadLen < sizeof(net::SnapshotEndPayload)) {
                 UE_LOGW("event_feed: SnapshotComplete payload too short (%zu < %zu)",
