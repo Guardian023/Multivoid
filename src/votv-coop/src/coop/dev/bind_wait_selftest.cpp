@@ -23,7 +23,7 @@ namespace BW = coop::element::bind_wait;
 
 // Above kMaxElements (65536) and below kInvalidId: no row of the registry and no wire eid is ever here.
 constexpr uint32_t kBase = 0xFFFE0000u;
-constexpr uint32_t kEids = 24;  // kBase .. kBase+23
+constexpr uint32_t kEids = 26;  // kBase .. kBase+25
 constexpr uint16_t kKinds = 170;  // the kinds the checks use are all below this
 // A pump with real holds in it is not the selftest's to run: it waits this many ticks for them to clear.
 constexpr uint32_t kMaxWaitTicks = 600;
@@ -64,6 +64,10 @@ void Record(const uint8_t* bytes, size_t n, int slot) {
 
 bool HoldTag(uint32_t eid, uint16_t kind, int slot, uint8_t tag, bool coalesce) {
     return BW::Hold(eid, kind, slot, &Record, &tag, 1, coalesce);
+}
+
+bool HoldFlagged(uint32_t eid, uint16_t kind, int slot, uint8_t tag) {
+    return BW::HoldReplayOnGiveUp(eid, kind, slot, &Record, &tag, 1);
 }
 
 bool Calls(const char* tags) {
@@ -165,7 +169,9 @@ const char* CheckSlotShare(uint32_t eid) {
 // 16: so does a pump's skip of an eid a replay gave up; 17: a client slot keeps at most 256 KiB of the pool,
 // slot 0 and another slot are not limited by it, and a replay and a give-up release the bytes; 18: coalescing
 // holds of one kind from two slots are both kept; 19: a Clear made by a replay ends the pass and counts the
-// rest into GivenUpOf (last, since a Clear ends the marks of the whole session).
+// rest into GivenUpOf (a Clear ends the marks of the whole session, so only the checks that mark their own eids
+// follow it); 20: a twin's give-up queues its flagged holds for the next Pump (ReplayedOf, bytes released) and drops
+// the rest into GivenUpOf; 14, 15 and 16 also cover a flagged hold on the GiveUp, slot-left and pump-skip paths.
 // The first failing check's name, or null.
 const char* CheckGreen() {
     g_calls.clear();
@@ -321,14 +327,15 @@ const char* CheckGreen() {
     if (!Calls("C") || BW::ReplayedOf(94) != replayed94 + 1) return "a coalesced hold did not replay once, latest bytes";
     g_calls.clear();
     if (const char* b = Balanced(13)) return b;
-    // 14. A GiveUp of an eid with two holds of one kind counts both into GivenUpOf.
+    // 14. A GiveUp of an eid with two holds of one kind, and a flagged one, counts all into GivenUpOf.
     const uint32_t e16 = kBase + 1;
     const uint32_t givenUp95 = BW::GivenUpOf(95);
     BW::MarkDeferred(e16, "selftest: given-up tally");
     HoldTag(e16, 95, 1, 'g', false);
     HoldTag(e16, 95, 1, 'h', false);
+    HoldFlagged(e16, 95, 1, 'i');
     BW::GiveUp(e16, "selftest");
-    if (BW::GivenUpOf(95) != givenUp95 + 2) return "a GiveUp of two holds of one kind was not counted into GivenUpOf";
+    if (BW::GivenUpOf(95) != givenUp95 + 3) return "a GiveUp of three holds of one kind was not counted into GivenUpOf";
     if (const char* b = Balanced(14)) return b;
     // 15. A slot that left takes its holds into GivenUpOf, kind by kind; the other slot's hold replays.
     const uint32_t e17 = kBase + 16;
@@ -336,7 +343,7 @@ const char* CheckGreen() {
     BW::MarkDeferred(e17, "selftest: slot left tally");
     HoldTag(e17, 96, 1, 'a', false);
     HoldTag(e17, 96, 2, 'b', false);
-    HoldTag(e17, 97, 1, 'c', false);
+    HoldFlagged(e17, 97, 1, 'c');
     BW::OnSlotLeft(1);
     if (BW::GivenUpOf(96) != givenUp96 + 1 || BW::GivenUpOf(97) != givenUp97 + 1)
         return "a slot that left did not count its holds into GivenUpOf";
@@ -353,7 +360,7 @@ const char* CheckGreen() {
     BW::MarkDeferred(e19, "selftest: given up in flight tally");
     HoldTag(e18, 98, 1, 'K', false);
     HoldTag(e19, 99, 1, 'Y', false);
-    HoldTag(e19, 99, 1, 'y', false);
+    HoldFlagged(e19, 99, 1, 'y');
     BW::OnBound(e18);
     BW::OnBound(e19);
     BW::Pump();
@@ -403,6 +410,40 @@ const char* CheckGreen() {
     if (BW::HasHolds() || BW::IsDeferred(e22)) return "a Clear made by a replay left holds or marks";
     g_calls.clear();
     if (const char* b = Balanced(19)) return b;
+    // 20. A twin's give-up queues a flagged hold for the next Pump, unmarked, and drops the unflagged one into
+    // GivenUpOf; a GiveUp drops a flagged one; a slot that leaves before the Pump takes a queued flagged hold; a
+    // replayed flagged hold counts into ReplayedOf and releases its bytes.
+    const uint32_t e24 = kBase + 23, e25 = kBase + 24, e26 = kBase + 25;
+    const uint32_t replayed160 = BW::ReplayedOf(160), givenUp160 = BW::GivenUpOf(160), givenUp161 = BW::GivenUpOf(161);
+    BW::MarkDeferred(e24, "selftest: twin gave up");
+    BW::MarkDeferred(e25, "selftest: destroyed");
+    if (!HoldFlagged(e24, 160, 1, 'f')) return "a replay-on-give-up hold was refused";
+    HoldTag(e24, 161, 1, 'u', false);
+    HoldFlagged(e25, 160, 1, 'f');
+    BW::GiveUpReplayHeld(e24, "selftest");
+    BW::GiveUp(e25, "selftest");
+    if (BW::IsDeferred(e24)) return "a given-up eid still reads as deferred";
+    if (!g_calls.empty()) return "a flagged hold was replayed inside the give-up";
+    if (BW::GivenUpOf(161) != givenUp161 + 1 || BW::GivenUpOf(160) != givenUp160 + 1)
+        return "the holds a give-up dropped were not counted into GivenUpOf, or the flagged one was";
+    if (!BW::Holds(e24, 160) || BW::Holds(e24, 161)) return "the give-up did not queue exactly its flagged hold";
+    BW::Pump();
+    if (!Calls("f")) return "the give-up did not replay exactly its flagged hold";
+    if (BW::ReplayedOf(160) != replayed160 + 1) return "a replayed flagged hold was not counted into ReplayedOf";
+    if (BW::GivenUpOf(160) != givenUp160 + 1) return "a replayed flagged hold was counted into GivenUpOf";
+    if (BW::HasHolds()) return "a give-up left bytes held";
+    g_calls.clear();
+    if (const char* b = Balanced(20)) return b;
+    // A queued flagged hold whose sender leaves before the Pump is dropped, not replayed.
+    const uint32_t givenUp162 = BW::GivenUpOf(162);
+    BW::MarkDeferred(e26, "selftest: sender left");
+    HoldFlagged(e26, 162, 1, 'f');
+    BW::GiveUpReplayHeld(e26, "selftest");
+    BW::OnSlotLeft(1);
+    BW::Pump();
+    if (!g_calls.empty() || BW::GivenUpOf(162) != givenUp162 + 1)
+        return "a queued flagged hold of a slot that left was replayed or not counted into GivenUpOf";
+    if (const char* b = Balanced(20)) return b;
     return nullptr;
 }
 
@@ -436,7 +477,7 @@ void Run() {
     const char* failed = CheckGreen();
     Cleanup();
     if (failed) UE_LOGE("[BIND-WAIT-SELFTEST] FAIL: %s", failed);
-    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (19 checks)");
+    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (20 checks)");
 }
 
 }  // namespace

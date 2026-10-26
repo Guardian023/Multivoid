@@ -543,10 +543,12 @@ void DrainChunk() {
         // became a clump) is the same candidate in its new form, and its row is built from the
         // actor as it is now. Liveness is re-validated by the element's cached index (a purge since
         // enumeration); once it passes, the UFunction reads below are safe, since the GC purge runs
-        // on the game thread and cannot interleave mid-tick.
+        // on the game thread and cannot interleave mid-tick. Ids recycle: an eid freed since the
+        // enumeration can name an element of another type now, and that is gone too, as the old
+        // enumeration by type guaranteed.
         const coop::element::Element* el = coop::element::Registry::Get().Get(eid);
-        void* obj = el ? el->GetActor() : nullptr;
-        if (!obj || !R::IsLiveByIndex(obj, el->GetInternalIdx())) {
+        void* obj = (el && el->GetType() == coop::element::ElementType::Prop) ? el->LiveActor() : nullptr;
+        if (!obj) {
             // The one expected drop: the entity is gone, not replaced.
             if (++g_snapshotDropped == 1 || g_snapshotDropped % 100 == 0)
                 UE_LOGI("snapshot: eid=%u gone at its turn -- dropped (#%u)", static_cast<unsigned>(eid),

@@ -50,10 +50,6 @@ void ArmPendingSaveTimeTwin(coop::element::ElementId eid, const ue_wrap::FVector
 // only inferred.
 void ArmHostVacateTwin(coop::element::ElementId eid, const ue_wrap::FVector& oldPos);
 
-// Is a save-time key pending for `eid` that will BIND a native of this client's own (not a
-// host-vacate twin, which only retires one)? Game thread.
-bool HasPendingSaveTimeTwin(coop::element::ElementId eid);
-
 // A join-window position correction for a save-authoritative entity (a chip pile, a keyed prop)
 // the host moved while the joiner's reliable channel was not ready. Armed on receipt; the latest
 // wins. Applied at quiescence, or immediately by the caller via ApplyPendingPosCorrections if

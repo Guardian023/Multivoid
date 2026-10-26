@@ -12,7 +12,6 @@
 #include "remote_prop_internal.h"  // ResolveLiveActorByEid + DestroyEchoSuppressed (impl-private seam)
 
 #include "coop/element/bind_wait.h"           // Hold: a convert for an eid whose twin is pending
-#include "coop/element/quiescence_drain.h"   // HasPendingSaveTimeTwin
 #include "coop/props/trash_mirror.h"         // Materialize / RepositionBoundNative
 #include "coop/props/pile_look.h"
 #include "coop/props/prop_element_tracker.h"
@@ -68,11 +67,13 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
     // The row precedes its converts in send order (the join gate), but the row's native can load
     // later than the convert: a pile whose twin is still pending has no actor here, and a mirror
     // materialised now would double it when the native arrives. The convert waits for the bind and
-    // replays through OnConvert, in arrival order; a give-up drops it. Before the context gate, so
-    // a held convert does not advance E's generation and the replay is judged fresh.
+    // replays through OnConvert, in arrival order. A twin that gives up replays it too, with E no
+    // longer deferred: the convert carries the host's real pose and form, and standing the mirror up
+    // from it is today's unbound path. Before the context gate, so a held convert does not advance
+    // E's generation and the replay is judged fresh.
     if (!cur && coop::element::bind_wait::IsDeferred(E) &&
-        coop::element::bind_wait::Hold(E, kConvertKind, senderSlot, &ReplayConvert, &payload, sizeof payload,
-                                       /*coalesce=*/false)) {
+        coop::element::bind_wait::HoldReplayOnGiveUp(E, kConvertKind, senderSlot, &ReplayConvert, &payload,
+                                                     sizeof payload)) {
         UE_LOGI("[PILE] CLIENT convert %s eid=%u ctx=%u -- the eid's twin is pending; held in bind_wait",
                 edge, E, static_cast<unsigned>(payload.ctx));
         return nullptr;
@@ -115,18 +116,6 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
         coop::prop_sound::PlayLandSound(cur);
         coop::trash_channel::NoteClientConvertObserved(E, false);
         return cur;
-    }
-
-    // A to-clump for an eid with NO actor here and a pending bind: the clump's row missed this
-    // client's own copy (the async load tail had not spawned it yet) and armed the late bind, and
-    // this convert is the generation that rides behind every clump row. Standing a mirror up now
-    // would put a second clump beside the copy the load is about to bring, and the late bind, finding
-    // the eid bound at its key, would never claim that copy. The generation is adopted above; the
-    // late bind owns the actor.
-    if (wantClump && !cur && coop::element::quiescence_drain::HasPendingSaveTimeTwin(E)) {
-        UE_LOGI("[PILE] CLIENT convert %s eid=%u ctx=%u -- generation adopted; the actor is the pending own-native "
-                "bind's (no mirror spawned beside it)", edge, E, static_cast<unsigned>(payload.ctx));
-        return nullptr;
     }
 
     // The form changes. The payload's class is the successor's own class on both edges, so it

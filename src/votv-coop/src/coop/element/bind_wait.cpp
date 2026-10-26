@@ -28,6 +28,7 @@ struct Held {
     int slot;
     Replay fn;
     std::vector<uint8_t> bytes;
+    bool replayOnGiveUp;   // GiveUpReplayHeld queues it for the next Pump instead of dropping it
 };
 struct Due {
     uint32_t eid;
@@ -156,8 +157,9 @@ bool Holds(uint32_t eid, uint16_t kind) {
     return false;
 }
 
-bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce) {
-    UE_ASSERT_GAME_THREAD("bind_wait::Hold");
+namespace {
+bool HoldImpl(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce,
+              bool replayOnGiveUp) {
     if (Red() || !fn) return false;
     if (MarkUnknown() && !coop::element::Registry::Get().Get(eid))
         MarkDeferred(eid, "drill: an eid this peer has no row for");
@@ -193,6 +195,7 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
             Release(h.slot, h.bytes.size());
             Charge(senderSlot, n);
             h.fn = fn;
+            h.replayOnGiveUp = replayOnGiveUp;
             h.bytes.assign(b, b + n);
             ++g_heldN;
             ++g_kinds[kind].coalesced;
@@ -201,11 +204,22 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
     }
     if (v.size() >= kMaxHoldsPerEid || g_heldBytes + n > kMaxHeldBytes) return refuse();
     if (overShare(0)) return true;
-    v.push_back(Held{kind, senderSlot, fn, std::vector<uint8_t>(b, b + n)});
+    v.push_back(Held{kind, senderSlot, fn, std::vector<uint8_t>(b, b + n), replayOnGiveUp});
     Charge(senderSlot, n);
     ++g_heldN;
     ++g_kinds[kind].held;
     return true;
+}
+}  // namespace
+
+bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce) {
+    UE_ASSERT_GAME_THREAD("bind_wait::Hold");
+    return HoldImpl(eid, kind, senderSlot, fn, bytes, n, coalesce, /*replayOnGiveUp=*/false);
+}
+
+bool HoldReplayOnGiveUp(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n) {
+    UE_ASSERT_GAME_THREAD("bind_wait::HoldReplayOnGiveUp");
+    return HoldImpl(eid, kind, senderSlot, fn, bytes, n, /*coalesce=*/false, /*replayOnGiveUp=*/true);
 }
 
 void OnBound(uint32_t eid) {
@@ -316,6 +330,39 @@ void GiveUp(uint32_t eid, const char* why) {
     }
     g_givenUpN += static_cast<uint32_t>(dropped);
     UE_LOGI("[BIND-WAIT] gave up eid=%u -- %zu hold(s) dropped (%s)", eid, dropped, why);
+}
+
+void GiveUpReplayHeld(uint32_t eid, const char* why) {
+    UE_ASSERT_GAME_THREAD("bind_wait::GiveUpReplayHeld");
+    const bool wasDeferred = g_deferred.erase(eid) > 0;
+    g_overWarned.erase(eid);
+    if (g_pumping || !g_due.empty()) ++g_gen[eid];   // as GiveUp: a due entry made before this call is voided
+    auto it = g_holds.find(eid);
+    if (it == g_holds.end() || it->second.empty()) {
+        if (it != g_holds.end()) g_holds.erase(it);
+        if (wasDeferred) ++g_emptyGiveUpN;
+        return;
+    }
+    std::vector<Held> held = std::move(it->second);
+    g_holds.erase(it);
+    // Queued, not replayed here: the caller may be walking a container the replay would change. The next
+    // Pump runs them with the eid already unmarked, so a replay that would hold again takes the unbound path.
+    Due due{eid, GenOf(eid), {}};
+    size_t dropped = 0;
+    for (Held& h : held) {
+        if (h.replayOnGiveUp) {
+            due.holds.push_back(std::move(h));
+            continue;
+        }
+        Release(h.slot, h.bytes.size());
+        ++g_kinds[h.kind].givenUp;
+        ++dropped;
+    }
+    const size_t queued = due.holds.size();
+    if (queued > 0) g_due.push_back(std::move(due));
+    g_givenUpN += static_cast<uint32_t>(dropped);
+    UE_LOGI("[BIND-WAIT] gave up eid=%u -- %zu hold(s) queued to replay unbound, %zu dropped (%s)", eid, queued,
+            dropped, why);
 }
 
 void OnSlotLeft(int slot) {

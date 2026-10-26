@@ -136,7 +136,8 @@ std::chrono::steady_clock::time_point g_lastPurgeAt{};
 // the join with no actor at all: the host has a pile this client will not see until a later join
 // re-expresses it. Nothing is materialised in its place, because the only position the row
 // carries is the stale save-time key and the host may have moved or removed the pile since --
-// inventing one there would be a second divergence on top of the first.
+// inventing one there would be a second divergence on top of the first. A convert held for the eid is
+// the exception: it carries the host's own current pose and form, so it still lands (below).
 void NoteGaveUp(uint32_t eid, const PendingTwin& p, void* bound) {
     if (bound) {
         UE_LOGI("[PILE-1C] twin eid=%u dropped after %d pass(es) -- E keeps its actor; the twin at "
@@ -148,7 +149,9 @@ void NoteGaveUp(uint32_t eid, const PendingTwin& p, void* bound) {
             "join re-expresses it", eid, p.unresolvedPasses, p.x, p.y, p.z);
     if (coop::dev::pile_key_probe::On())   // [MEASURE sync-order-wp5, temporary]
         coop::dev::pile_key_probe::LogGaveUp(eid, ue_wrap::FVector{p.x, p.y, p.z}, p.wantClump, p.chipType);
-    bind_wait::GiveUp(eid, "no native appeared at the save-time key");   // the held messages have no prop to reach
+    // The held converts carry the host's real pose and form: they replay at the next Pump on the unbound path
+    // (queued, since this runs inside the sweep's walk of the pending map). Anything else held is dropped.
+    bind_wait::GiveUpReplayHeld(eid, "no native appeared at the save-time key");
 }
 
 int SweepReconcileSaveTimeTwins() {
@@ -376,11 +379,6 @@ void ArmPendingSaveTimeTwin(coop::element::ElementId eid, const ue_wrap::FVector
             "(world-ready-miss or late-row pile -> sweep retires the stale native@old at quiescence)",
             static_cast<unsigned>(eid), savePos.X, savePos.Y, savePos.Z, static_cast<unsigned>(chipType),
             wantClump ? "clump" : "pile");
-}
-
-bool HasPendingSaveTimeTwin(coop::element::ElementId eid) {
-    auto it = g_pendingSaveTimeTwin.find(static_cast<uint32_t>(eid));
-    return it != g_pendingSaveTimeTwin.end() && !it->second.hostVacate;
 }
 
 void ArmHostVacateTwin(coop::element::ElementId eid, const ue_wrap::FVector& oldPos) {

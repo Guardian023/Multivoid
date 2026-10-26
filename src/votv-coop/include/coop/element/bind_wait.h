@@ -6,7 +6,7 @@
 // the single owner: the deferring bind MARKS the eid, a receiver HOLDS its message against it, and the
 // bind funnel's OnBound moves the holds to a due list that Pump replays in arrival order, from the
 // reliable drain. A bind that gives up (or a destroy of the eid, a slot that left, a world change)
-// DROPS the holds with a named reason. A message for an eid that was never marked is not held: it is
+// DROPS the holds with a named reason; only the holds taken by HoldReplayOnGiveUp survive a twin's give-up. A message for an eid that was never marked is not held: it is
 // counted (NoteNeverBound) and dropped by the caller. Game thread only, no mutex.
 
 #pragma once
@@ -48,6 +48,10 @@ bool Holds(uint32_t eid, uint16_t kind);
 // `coalesce`: an earlier hold of the same `kind` and `senderSlot` for the eid is replaced in place, latest wins.
 bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce);
 
+// Hold, always appending, for a message that is the receiver's own unbound path and carries the host's real
+// state (a convert's pose and form): GiveUpReplayHeld still replays it. Same returns as Hold.
+bool HoldReplayOnGiveUp(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n);
+
 // A bind took: the eid is no longer deferred and its holds become due.
 void OnBound(uint32_t eid);
 
@@ -62,6 +66,11 @@ void Drop(uint32_t eid, uint16_t kind, const char* why);
 
 // The bind will not come: drop the eid's mark and holds. A no-op for an eid neither deferred nor holding.
 void GiveUp(uint32_t eid, const char* why);
+
+// The eid's twin gave up, but the eid itself lives: drop its mark, queue the HoldReplayOnGiveUp holds for the
+// next Pump (the eid is no longer deferred, so they take the receiver's unbound path) and drop the rest. Not
+// for a destroy of the eid: that is GiveUp.
+void GiveUpReplayHeld(uint32_t eid, const char* why);
 
 // A slot left: drop the holds it sent.
 void OnSlotLeft(int slot);
