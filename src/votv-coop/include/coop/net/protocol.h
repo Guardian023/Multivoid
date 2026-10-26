@@ -1168,7 +1168,8 @@ enum class ReliableKind : uint8_t {
     // number n for one fire-finish and whether the Octa fires again. The Octa is the NPC element `octaEid`. Rides the
     // spawn lane (Bulk), so an event is ordered behind its Octa's EntitySpawn; the host sends none for an Octa whose
     // EntitySpawn it has not sent. Host-authoritative: a client's copy is refused at the host's receive edge; never
-    // relayed; not pre-world. Late join: none yet (a join re-send is the join increment's). Divergence from MTA, whose
+    // relayed; not pre-world. Late join: a joiner's snapshot of an Octa mid-attack carries one Aggro to that
+    // slot alone, the target now and the host's verdict count as its base. Divergence from MTA, whose
     // ped is simulated by the nearest client it picks as syncer
     // (reference/mtasa-blue/Server/mods/deathmatch/logic/CPedSync.cpp:141-163): the game's AI has one simulator and the
     // host is a listen server, so the host is the only sender. GeomOctaEventPayload.
