@@ -27,14 +27,16 @@ void MarkDeferred(uint32_t eid, const char* why);
 bool IsDeferred(uint32_t eid);
 
 // Keep a copy of the message until the eid binds. False when the eid is not deferred (or the red row is
-// on): the caller then owns the message. True when stored, and also when refused by a bound (warned).
+// on): the caller then owns the message. An unmarked eid whose registry row holds a purged actor is marked
+// here, "a row awaiting its re-bind": the game's re-created native binds onto it and frees the mark. True when stored, and also when refused by a bound (warned).
 // `coalesce`: an earlier hold of the same `kind` for the eid is replaced in place, latest wins.
 bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce);
 
 // A bind took: the eid is no longer deferred and its holds become due.
 void OnBound(uint32_t eid);
 
-// Run every due hold, in arrival order. O(1) when none is due. Called from the reliable drain.
+// Run every due hold, in arrival order. O(1) when none is due. Called from the reliable drain. A GiveUp of
+// an eid, or a slot that left, while the pass runs voids the holds of it the pass has not yet reached.
 void Pump();
 
 // The bind will not come: drop the eid's mark and holds. A no-op for an eid neither deferred nor holding.
@@ -45,6 +47,9 @@ void OnSlotLeft(int slot);
 
 // Disconnect or world change: drop every hold and mark.
 void Clear(const char* why);
+
+// True while any hold is stored or due: the dev selftest runs only once none is.
+bool HasHolds();
 
 // A message named an eid that was never deferred, so nothing waits for it: counted and warned.
 void NoteNeverBound(uint16_t kind, uint32_t eid);

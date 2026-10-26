@@ -5,6 +5,8 @@
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
 #include "coop/element/bind_wait.h"
+#include "coop/element/element.h"
+#include "coop/element/registry.h"
 #include "coop/net/session.h"
 #include "coop/session/net_pump.h"  // HasAnnouncedWorldReady
 
@@ -20,9 +22,12 @@ namespace BW = coop::element::bind_wait;
 
 // Above kMaxElements (65536) and below kInvalidId: no row of the registry and no wire eid is ever here.
 constexpr uint32_t kBase = 0xFFFE0000u;
-constexpr uint32_t kEids = 8;   // kBase .. kBase+7
+constexpr uint32_t kEids = 16;  // kBase .. kBase+15
+// A pump with real holds in it is not the selftest's to run: it waits this many ticks for them to clear.
+constexpr uint32_t kMaxWaitTicks = 600;
 
 bool g_fired = false;
+uint32_t g_waitTicks = 0;
 
 bool Enabled() {
     static const bool on = coop::config::ResolveInt(::coop::config_registry::rows::bind_wait_selftest) != 0;
@@ -36,10 +41,14 @@ bool RedOn() {
 struct Call { uint8_t tag; int slot; };
 std::vector<Call> g_calls;
 uint32_t g_reholdEid = 0;   // check 3: the eid the 'R' replay defers and holds again
+uint32_t g_giveUpEid = 0;   // check 7: the eid the 'K' replay gives up
+int g_leaveSlot = 0;        // check 8: the slot the 'L' replay drops
 
 void Record(const uint8_t* bytes, size_t n, int slot) {
     const uint8_t tag = n > 0 ? bytes[0] : 0;
     g_calls.push_back(Call{tag, slot});
+    if (tag == 'K') BW::GiveUp(g_giveUpEid, "selftest: a replay gives up a due eid");
+    if (tag == 'L') BW::OnSlotLeft(g_leaveSlot);
     if (tag == 'R') {   // a replay that defers a new eid and binds it: due, but only at the next Pump
         BW::MarkDeferred(g_reholdEid, "selftest: a replay defers again");
         const uint8_t s = 'S';
@@ -57,6 +66,31 @@ bool Calls(const char* tags) {
     for (; tags[i]; ++i)
         if (i >= g_calls.size() || g_calls[i].tag != static_cast<uint8_t>(tags[i])) return false;
     return g_calls.size() == i;
+}
+
+// Check 9: a prop row that outlived its purged actor (a live row, an actor whose object slot is gone) is the
+// window before BindUnboundReCreates re-binds it. A registry mirror at a free host id stands in for it, with
+// an actor pointer that is never read: the slot index -1 reads as not live.
+const char* CheckPurgeWindow() {
+    namespace CE = coop::element;
+    CE::ElementId eid = CE::kHostRangeSize - 1;
+    while (eid > 1 && CE::Registry::Get().Get(eid)) --eid;
+    if (CE::Registry::Get().Get(eid)) return "no free host eid for the purge-window row";
+    CE::Element row(CE::ElementType::Prop);
+    row.SetActor(reinterpret_cast<void*>(static_cast<uintptr_t>(0x10)), -1);
+    if (!CE::Registry::Get().RegisterMirror(eid, &row)) return "the purge-window row was not registered";
+    g_calls.clear();
+    const char* failed = nullptr;
+    if (!HoldTag(eid, 70, 1, 'W', false)) failed = "a hold for a row awaiting its re-bind was refused";
+    else if (!BW::IsDeferred(eid)) failed = "a row awaiting its re-bind was not marked";
+    else {
+        BW::OnBound(eid);
+        BW::Pump();
+        if (!Calls("W")) failed = "the hold of a row awaiting its re-bind did not replay at the bind";
+    }
+    BW::GiveUp(eid, "selftest");
+    g_calls.clear();
+    return failed;   // `row` unregisters itself
 }
 
 // The first failing check's name, or null.
@@ -116,6 +150,36 @@ const char* CheckGreen() {
     BW::OnBound(e7);
     BW::Pump();
     if (g_calls.size() != 64) return "the per-eid bound did not hold at 64";
+    g_calls.clear();
+    // 7. A give-up made by a replay reaches an eid already swapped out of the due list.
+    const uint32_t e8 = kBase + 8, e9 = kBase + 9;
+    g_giveUpEid = e9;
+    BW::MarkDeferred(e8, "selftest: giver");
+    BW::MarkDeferred(e9, "selftest: given up in flight");
+    HoldTag(e8, 50, 1, 'K', false);
+    HoldTag(e9, 51, 1, 'Y', false);
+    BW::OnBound(e8);
+    BW::OnBound(e9);
+    BW::Pump();
+    if (!Calls("K")) return "a give-up during a pump did not void the due eid it named";
+    g_calls.clear();
+    // 8. A slot that leaves during a pump has its remaining holds skipped, in every due eid.
+    const uint32_t e10 = kBase + 10, e11 = kBase + 11;
+    g_leaveSlot = 2;
+    BW::MarkDeferred(e10, "selftest: leaver");
+    BW::MarkDeferred(e11, "selftest: left");
+    HoldTag(e10, 60, 1, 'L', false);
+    HoldTag(e10, 61, 2, 'M', false);
+    HoldTag(e11, 62, 2, 'N', false);
+    HoldTag(e11, 63, 1, 'O', false);
+    BW::OnBound(e10);
+    BW::OnBound(e11);
+    BW::Pump();
+    if (!Calls("LO")) return "a slot that left during a pump still had its holds replayed";
+    g_calls.clear();
+    // 9. A row whose actor was purged is held without a mark, and its re-bind frees the hold.
+    const char* purged = CheckPurgeWindow();
+    if (purged) return purged;
     return nullptr;
 }
 
@@ -149,7 +213,7 @@ void Run() {
     const char* failed = CheckGreen();
     Cleanup();
     if (failed) UE_LOGE("[BIND-WAIT-SELFTEST] FAIL: %s", failed);
-    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (6 checks)");
+    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (9 checks)");
 }
 
 }  // namespace
@@ -157,10 +221,17 @@ void Run() {
 void Tick(coop::net::Session* session) {
     if (!Enabled() || g_fired || !session || session->role() == coop::net::Role::Host) return;
     if (!coop::net_pump::HasAnnouncedWorldReady()) return;
+    // The checks pump the whole due list, so a real hold must not be in it: wait, bounded, then do not run.
+    if (BW::HasHolds()) {
+        if (++g_waitTicks < kMaxWaitTicks) return;
+        g_fired = true;
+        UE_LOGW("[BIND-WAIT-SELFTEST] SKIPPED: real holds present");
+        return;
+    }
     g_fired = true;
     Run();
 }
 
-void OnDisconnect() { g_fired = false; }
+void OnDisconnect() { g_fired = false; g_waitTicks = 0; }
 
 }  // namespace coop::dev::bind_wait_selftest

@@ -11,6 +11,7 @@
 #include "coop/props/remote_prop.h"
 #include "remote_prop_internal.h"  // ResolveLiveActorByEid + DestroyEchoSuppressed (impl-private seam)
 
+#include "coop/element/bind_wait.h"           // MarkDeferred: a failed land leaves the armed twin's eid unbound
 #include "coop/element/quiescence_drain.h"   // ArmPendingSaveTimeTwin (capture-only)
 #include "coop/props/trash_mirror.h"         // Materialize / RepositionBoundNative
 #include "coop/props/pile_look.h"
@@ -127,6 +128,10 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
     if (!next) {
         UE_LOGW("[PILE] CLIENT convert %s eid=%u -- materialize of '%ls' FAILED, E left as the old actor (DESYNC)",
                 edge, E, cls.c_str());
+        // The land armed the twin and no actor took E: the sweep binds it through the funnel (which frees the
+        // mark) or NoteGaveUp gives it up, so an End arriving meanwhile waits instead of being dropped.
+        if (!wantClump && payload.hasMatchPos && !cur)
+            coop::element::bind_wait::MarkDeferred(E, "a land convert whose materialise failed");
         return nullptr;
     }
     // Retire the predecessor. It no longer owns E (the rebind above moved the element), so its
