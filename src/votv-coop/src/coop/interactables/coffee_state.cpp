@@ -2,6 +2,8 @@
 
 #include "coop/interactables/coffee_state.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/net/session.h"
 #include "coop/props/prop_record_gates.h"
 #include "coop/props/prop_save_data.h"
@@ -42,6 +44,8 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 bool g_brewWatched = false, g_hitWatched = false, g_settled = false, g_gatesRegistered = false;
 
 uint64_t g_cancelled = 0, g_madeMaker = 0, g_madeBag = 0, g_recordsRefused = 0, g_publishFailed = 0;
+// The other actor of the newest cancelled hit, for the drill's read only.
+ue_wrap::CachedObjRef g_lastOther;
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -95,6 +99,10 @@ void OnBrewPost(const sg::Call& call) {
     coop::net::Session* s = HostSession();
     if (!s || g_brewNote.object != call.object) return;
     g_brewNote.object = nullptr;
+    // The coffee drill's red arm: a brew publishes nothing. Resolved once.
+    static const bool s_redNoPublish =
+        coop::config::ResolveEnum(coop::config_registry::rows::coffee_red) == "no_publish";
+    if (s_redNoPublish) return;
     CF::MakerFlags now;
     // A brew sets and clears the three flags inside the one call, so the record that crosses is the final one.
     if (CF::ReadMakerFlags(call.object, now) && !(now == g_brewNote.flags))
@@ -105,10 +113,18 @@ void OnBrewPost(const sg::Call& call) {
 sg::Verdict OnHitPre(const sg::Call& call) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !s->running() || !call.object) return sg::Verdict::Run;
+    static R::ParamOffset s_other{L"OtherActor"};
     if (s->role() == coop::net::Role::Client) {
+        // The coffee drill's red arm: this copy's own run of the hit handler is not cancelled. Resolved once.
+        static const bool s_redNoCancel =
+            coop::config::ResolveEnum(coop::config_registry::rows::coffee_red) == "no_cancel";
+        if (s_redNoCancel) return sg::Verdict::Run;
         // The fill is the host's: this copy's run would destroy its mirror of the cup and set flags no record
         // carries. The cup's destroy and the maker's record come from the host. Contact rate: counted, said for
-        // the first three and every sixtieth.
+        // the first three and every sixtieth. The newest other actor is kept for the drill's read, by pointer.
+        const int32_t offSeen = s_other.Of(call.function);
+        void* seen = offSeen >= 0 ? *reinterpret_cast<void* const*>(call.locals + offSeen) : nullptr;
+        if (seen != g_lastOther.Raw()) g_lastOther.Set(seen);
         const uint64_t n = ++g_cancelled;
         if (n <= 3 || n % 60 == 0)
             UE_LOGI("[COFFEE-STATE] a client's hit on maker %p is cancelled -- the fill is the host's (#%llu)",
@@ -119,7 +135,6 @@ sg::Verdict OnHitPre(const sg::Call& call) {
     g_hitNote.object = nullptr;
     if (!CF::ReadMakerFlags(call.object, g_hitNote.flags)) return sg::Verdict::Run;
     g_hitNote.bag.Reset();
-    static R::ParamOffset s_other{L"OtherActor"};
     const int32_t off = s_other.Of(call.function);
     void* other = off >= 0 ? *reinterpret_cast<void* const*>(call.locals + off) : nullptr;
     if (CF::IsBag(other) && CF::ReadBagAmounts(other, g_hitNote.amounts)) g_hitNote.bag.Set(other);
@@ -197,6 +212,15 @@ void OnDisconnect() {
     g_cancelled = g_madeMaker = g_madeBag = g_recordsRefused = g_publishFailed = 0;
     g_brewNote = Note{};
     g_hitNote = Note{};
+    g_lastOther.Reset();
+}
+
+DrillView ReadForDrill() {
+    DrillView v;
+    v.cancelled = g_cancelled;
+    void* other = g_lastOther.Get();
+    if (other && ue_wrap::prop::IsDescendantOfProp(other)) v.lastOtherKey = ue_wrap::prop::GetKeyString(other);
+    return v;
 }
 
 }  // namespace coop::coffee_state

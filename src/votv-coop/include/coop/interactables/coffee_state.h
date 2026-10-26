@@ -13,6 +13,9 @@
 
 #pragma once
 
+#include <cstdint>
+#include <string>
+
 namespace coop::net {
 class Session;
 }  // namespace coop::net
@@ -28,5 +31,13 @@ void Tick();
 
 // The session ended: the counters, with one summary line.
 void OnDisconnect();
+
+// What the coffee drill reads of a client: how many of its own runs of the hit handler were cancelled this
+// session, and the key of the other actor of the newest one ("" when it is no keyed prop or no longer here).
+struct DrillView {
+    uint64_t     cancelled = 0;
+    std::wstring lastOtherKey;
+};
+DrillView ReadForDrill();
 
 }  // namespace coop::coffee_state

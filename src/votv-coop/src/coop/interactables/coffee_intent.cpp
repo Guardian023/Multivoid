@@ -2,6 +2,8 @@
 
 #include "coop/interactables/coffee_intent.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/intent_authority.h"
 #include "coop/net/intent_bucket.h"
 #include "coop/net/intent_queue.h"
@@ -154,6 +156,10 @@ bool Execute(coop::net::Session& s, const coop::net::CoffeeActionIntentPayload& 
 sg::Verdict OnPressPre(const sg::Call& call) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !s->running() || s->role() != coop::net::Role::Client || !call.object) return sg::Verdict::Run;
+    // The coffee drill's red arm: the press runs its own body here, as before the lane. Resolved once.
+    static const bool s_redNoIntent =
+        coop::config::ResolveEnum(coop::config_registry::rows::coffee_red) == "no_intent";
+    if (s_redNoIntent) return sg::Verdict::Run;
     int wi = -1;
     for (int i = 0; i < kWatchCount; ++i)
         if (kWatches[i].tag == call.tag) { wi = i; break; }
