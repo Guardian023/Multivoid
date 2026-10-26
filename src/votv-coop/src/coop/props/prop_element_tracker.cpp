@@ -371,6 +371,17 @@ void RebindLocalElementActor(coop::element::ElementId eid, void* newActor) {
             eid, oldActor, newActor);
 }
 
+// The capture's two ways to walk a trash actor and not key it, counted per run on the game thread;
+// each says its first and then every 100th.
+static uint32_t g_captureMintDeclined = 0;
+static uint32_t g_captureLocUnread    = 0;
+static bool CaptureDeclineSaid_(uint32_t& n) { return ++n == 1 || n % 100 == 0; }
+
+// MTA divergence: its entity add mints the IDs (Server/.../packets/CEntityAddPacket.cpp:103), and content
+// the client already holds is addressed by model, position and radius (Client/game_sa/CBuildingRemovalSA.cpp
+// :28-75). The joiner's natives are that kind of content, so ours is keyed by the pose its save holds,
+// and this walk is the only place the key is written.
+//
 // The save-time position of every live tracked trash actor of one form, by host eid: read right
 // after the scratch save was serialised (save_transfer's capture, the same game-thread tick), so
 // the value equals what the joining client loads its native at. Keyless only (a keyed Aprop_C is
@@ -398,12 +409,25 @@ static void CollectTrackedTrashTransforms_(
             MarkPropElement(obj, L"", R::ClassNameOf(obj),
                             EnrollSource::kPassiveCensus);             // mint now (register-only, idempotent; keyless -> census branch inert)
             eid = GetPropElementIdForActor(obj);                      // resolves in-call (minted before return)
-            if (eid == coop::element::kInvalidId || eid == 0u)
-                continue;  // mint declined (registry full) -> live-pose fallback for this one
+            if (eid == coop::element::kInvalidId || eid == 0u) {
+                // The capture is the only writer of the join's key, so a pile it walks and does not
+                // key is one the joiner's native cannot bind: say so, never skip it quietly.
+                if (CaptureDeclineSaid_(g_captureMintDeclined))
+                    UE_LOGW("prop_element_tracker: the capture could not mint an eid for %p (%ls) -- "
+                            "mint declined, so it carries no save-time key (#%u)",
+                            obj, R::ClassNameOf(obj).c_str(), g_captureMintDeclined);
+                continue;
+            }
             ++minted;
         }
         ue_wrap::FVector at{};
-        if (!ue_wrap::engine::TryGetActorLocation(obj, at)) continue;   // no read, no save-time position
+        if (!ue_wrap::engine::TryGetActorLocation(obj, at)) {
+            if (CaptureDeclineSaid_(g_captureLocUnread))
+                UE_LOGW("prop_element_tracker: the capture could not read the location of eid=%u %p (%ls) -- "
+                        "location unread, so it carries no save-time key (#%u)",
+                        static_cast<unsigned>(eid), obj, R::ClassNameOf(obj).c_str(), g_captureLocUnread);
+            continue;
+        }
         out[eid] = at;
         coop::dev::eid_lifetime_trace::RecordCaptureEid(obj, static_cast<uint32_t>(eid));  // the capture trace
         if (pileProbe) coop::dev::pile_key_probe::NoteHostPile(static_cast<uint32_t>(eid), obj, at);  // [MEASURE sync-order-wp5, temporary]

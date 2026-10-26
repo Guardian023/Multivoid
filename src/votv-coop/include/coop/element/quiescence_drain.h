@@ -37,10 +37,9 @@ void OnTick();
 
 // The queue arm entry points: event handlers capture here and never apply.
 
-// A land carried a save-time key (the host self-seeded the eid at an in-window grab and
-// stamped the pre-grab position), or the pile spawn bind's twin missed at world-ready. Arm a
-// pending save-time twin so the sweep retires the stale native at the old position at
-// quiescence. Idempotent per eid; the latest wins.
+// A save-time key to arm: the pile spawn bind's twin missed (at world-ready, or a late row), or the
+// dark identity bind's duplicate retire found a stale twin. Arm a pending save-time twin so the sweep
+// retires the stale native at the old position at quiescence. Idempotent per eid; the latest wins.
 void ArmPendingSaveTimeTwin(coop::element::ElementId eid, const ue_wrap::FVector& savePos, uint8_t chipType,
                             bool wantClump = false);
 

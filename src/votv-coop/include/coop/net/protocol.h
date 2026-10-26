@@ -30,7 +30,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // This file is past the 1500-line hard cap and stays there: it is the single-feature exception the
 // rule names. One wire format, whose enum, payload structs and static_asserts are read together;
 // splitting it would put a kind's number in one file and its bytes in another.
-inline constexpr uint16_t kProtocolVersion = 255;
+inline constexpr uint16_t kProtocolVersion = 256;
 
 // Default LAN port (overridable via multivoid.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -3334,12 +3334,9 @@ struct PropConvertPayload {
     uint8_t kind;                         // propconvert_kind: kToClump (grab) or kToPile (land)
     uint8_t ctx;                          // the host's per-eid generation, bumped on every trash transition; a later pose or
                                           // convert with an older ctx is dropped
-    uint8_t hasMatchPos;                  // 1 => matchX/Y/Z carry the pile's pre-grab save-time position (a landing after an
-                                          // in-window grab), so the client retires its stale native at the quiescence sweep
-    float   matchX, matchY, matchZ;       // the pre-grab position (world cm); valid iff hasMatchPos and kind is kToPile
     WirePileLook look;                    // kToPile: the landed pile's visible mesh; absent (sclX 0) on kToClump
 };
-static_assert(sizeof(PropConvertPayload) == 136, "PropConvertPayload must be 136 bytes");
+static_assert(sizeof(PropConvertPayload) == 123, "PropConvertPayload must be 123 bytes");
 
 // A grab intent (GrabIntent): the eid of the mirrored pile the client wants; intent only, no state.
 struct GrabIntentPayload {

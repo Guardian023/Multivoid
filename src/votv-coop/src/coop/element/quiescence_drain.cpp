@@ -373,7 +373,7 @@ void ArmPendingSaveTimeTwin(coop::element::ElementId eid, const ue_wrap::FVector
     twin.wantClump = wantClump;
     g_pendingSaveTimeTwin[static_cast<uint32_t>(eid)] = twin;
     UE_LOGI("[PILE-09] CLIENT armed pending save-time twin eid=%u key=(%.1f,%.1f,%.1f) chipType=%u form=%s "
-            "(in-window grabbed/moved or world-ready-miss pile -> sweep retires the stale native@old at quiescence)",
+            "(world-ready-miss or late-row pile -> sweep retires the stale native@old at quiescence)",
             static_cast<unsigned>(eid), savePos.X, savePos.Y, savePos.Z, static_cast<unsigned>(chipType),
             wantClump ? "clump" : "pile");
 }

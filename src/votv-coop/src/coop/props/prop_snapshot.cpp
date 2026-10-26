@@ -377,11 +377,12 @@ bool BuildPropSpawnPayload_(void* obj, coop::element::ElementId eid, int32_t int
     // The trash variant; GetChipType is 0 for a class without the property.
     p.chipType = ue_wrap::prop::GetChipType(obj);
     p.elementId = (eid == coop::element::kInvalidId) ? 0u : eid;
-    // For a chipPile in a join snapshot (matchSlot is the joiner), the save-time position from the
-    // host's blob map, so the client's twin destroy matches the native loaded at the old spot even
-    // if the host moved the pile in the join-load window. The incremental express passes -1 (no
-    // twin on the client); no map entry, no stamp, and the receiver falls back to the live pose.
-    // The form in the key is the form at the CAPTURE, which the entity may have left since.
+    // For a trash actor in a join snapshot (matchSlot is the joiner), the key the joiner's native
+    // sits at. It is the capture's alone, from the pile map or the clump map (an eid sits in exactly
+    // one of them), so its key AND form are the save's, and this row is the key's one carrier: no
+    // convert repeats it. The entity may have left that form since; the receiver's formMoved path
+    // then keys the native as saved. The incremental express passes -1 (no twin on the client); no map
+    // entry, no stamp, and the receiver falls back to the live pose.
     p.hasMatchPos = coop::net::match_form::kNone;
     if (matchSlot >= 1 && p.elementId != 0 && ue_wrap::prop::IsTrashActor(obj)) {
         ue_wrap::FVector sv;

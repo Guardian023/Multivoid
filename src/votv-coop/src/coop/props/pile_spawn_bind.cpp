@@ -211,7 +211,7 @@ void* BindOwnSavePile(const coop::net::PropSpawnPayload& payload,
             coop::element::quiescence_drain::ArmPendingSaveTimeTwin(payload.elementId, matchPos, payload.chipType,
                                                                     wantClump);
             // Messages for the eid wait for the sweep's bind only while it owns no actor: the same twin is
-            // also armed for a bound eid (a land, a dup retire), which has nothing to wait for.
+            // also armed for a bound eid (a dup retire), which has nothing to wait for.
             coop::element::Element* row = coop::element::Registry::Get().Get(payload.elementId);
             if (!row || !row->GetActor() || !R::IsLiveByIndex(row->GetActor(), row->GetInternalIdx()))
                 coop::element::bind_wait::MarkDeferred(payload.elementId, why);

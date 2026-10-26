@@ -21,7 +21,6 @@
 #include "coop/props/remote_prop.h"        // ResolveMirrorEidByActor (the pile-grab hook mirror eid resolve)
 #include "coop/props/remote_prop_spawn.h"
 #include "coop/props/join_membership_sweep.h"  // the sweep's candidate and claim queries
-#include "coop/save/join_window_baseline.h"  // RecordGrabTimePileXform, the grab-edge save-time key
 #include "coop/props/trash_channel.h"      // NoteClumpBorn, the clump's birth certificate
 #include "coop/props/trash_sweep.h"        // NoteSwept, a broom stroke's clumps
 #include "coop/props/trash_use_intercept.h"
@@ -81,9 +80,9 @@ bool g_repileThunkInstalled = false;          // process-lifetime Func-patch lat
 std::vector<std::wstring> g_pilelessClumpSources;
 
 // A clump was just born of `pile` (a grab's spawn, or a broom stroke's copy of the pile's morph):
-// resolve the pile's eid, minting one for an untracked pile, freeze the pile's position as its
-// save-time key and record the clump's certificate, which moves the id onto the clump now, before
-// the pile's destroy. False when no eid could be had.
+// resolve the pile's eid, minting one for an untracked pile, and record the clump's certificate,
+// which moves the id onto the clump now, before the pile's destroy. The join's save-time key is
+// not written here: the capture is its only writer. False when no eid could be had.
 bool NoteClumpBornOfPile(void* pile, void* clump) {
     coop::element::ElementId E = PT::GetPropElementIdForActor(pile);
     if (E == coop::element::kInvalidId)
@@ -99,11 +98,6 @@ bool NoteClumpBornOfPile(void* pile, void* clump) {
                     pile, static_cast<unsigned>(E));
     }
     if (E == coop::element::kInvalidId) return false;
-    // The pile's position frozen as the save-time key (it has not moved; it dies in place after
-    // this spawn).
-    ue_wrap::FVector pileLoc{};
-    if (ue_wrap::engine::TryGetActorLocation(pile, pileLoc))   // no read, no save-time key
-        coop::join_window_baseline::RecordGrabTimePileXform(E, pileLoc);
     coop::trash_channel::NoteClumpBorn(clump, E, ue_wrap::prop::GetChipType(pile));
     return true;
 }

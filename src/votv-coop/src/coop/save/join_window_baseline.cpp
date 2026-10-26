@@ -33,13 +33,14 @@ std::unordered_set<std::wstring> g_blobKeys[coop::net::kMaxPeers];
 // The save-time position of every live keyless chipPile at the capture instant, by host eid: the
 // positions the joiner loads its natives at. The connect replay stamps each pile's snapshot with
 // it, so the client's twin destroy matches the save-loaded native at the old spot even when the
-// host moved the pile in the join-load window.
+// host moved the pile in the join-load window. The capture writes this map and nothing after it does,
+// so an eid sits here or in the clump map below, with the key and form the save holds.
 std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
     g_blobPileXforms[coop::net::kMaxPeers];
 
 // The same for every live garbage clump at the capture instant: a clump at rest is in the save as
 // a clump, so the joiner loads its own copy there. A map of its own: what reads the pile map (the
-// position flush, a land convert's key) means a PILE at that key.
+// position flush) means a PILE at that key.
 std::unordered_map<coop::element::ElementId, ue_wrap::FVector>
     g_blobClumpXforms[coop::net::kMaxPeers];
 
@@ -410,13 +411,9 @@ void TickLateArm() {
                 g_lastFlushedKeyedPos[slot].clear();
             }
             // The join window closes here for the slot. The save-time maps are join-window
-            // structures, and with "active join" defined as a non-empty map that nothing emptied,
-            // every steady-state host pile grab kept stamping its pre-grab key and every landing
-            // carried one; the client then armed a hopeless pending twin per drop (its native was
-            // already retired at the hand-off), and each pinned the quiescence drain for many
-            // full-array sweeps, a hitch storm during pile play. The late flush is the maps' last
-            // consumer: at its expiry the joiner has quiesced and reconciled, and a late kerfur
-            // turn-on resolves by eid.
+            // structures, written by the capture alone. The late flush is their last consumer: at
+            // its expiry the joiner has quiesced and reconciled, and a late kerfur turn-on resolves
+            // by eid.
             if (held > 0) {
                 g_settleUntil[slot] = now + kHandSettleWindow;
                 UE_LOGI("[PILE-09] slot %d join window CLOSED -- %zu prop(s) a hand held after their "
@@ -427,8 +424,8 @@ void TickLateArm() {
             } else if (!g_blobPileXforms[slot].empty() || !g_blobClumpXforms[slot].empty() ||
                        !g_blobKerfurXforms[slot].empty() || !g_blobKeyedXforms[slot].empty()) {
                 UE_LOGI("[PILE-09] slot %d join window CLOSED (b3 late-flush expiry) -- retiring "
-                        "save-time maps (%zu pile + %zu clump + %zu kerfur + %zu keyed xform(s)); steady-state "
-                        "grabs no longer stamp save-time keys for this joiner",
+                        "save-time maps (%zu pile + %zu clump + %zu kerfur + %zu keyed xform(s)); the capture's "
+                        "keys are spent for this joiner",
                         slot, g_blobPileXforms[slot].size(), g_blobClumpXforms[slot].size(),
                         g_blobKerfurXforms[slot].size(), g_blobKeyedXforms[slot].size());
                 g_blobPileXforms[slot].clear();
@@ -463,15 +460,6 @@ bool TryGetClumpXform(int peerSlot, coop::element::ElementId eid, ue_wrap::FVect
     return true;
 }
 
-bool TryGetPileXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out) {
-    for (int slot = 1; slot < coop::net::kMaxPeers; ++slot) {
-        const auto& m = g_blobPileXforms[slot];
-        auto it = m.find(eid);
-        if (it != m.end()) { out = it->second; return true; }
-    }
-    return false;
-}
-
 bool TryGetKerfurXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& out) {
     // A KerfurConvert is one fan-out with no slot, and a kerfur's host eid is unique, so all active
     // slots are searched.
@@ -481,20 +469,6 @@ bool TryGetKerfurXformAnySlot(coop::element::ElementId eid, ue_wrap::FVector& ou
         if (it != m.end()) { out = it->second; return true; }
     }
     return false;
-}
-
-void RecordGrabTimePileXform(coop::element::ElementId eid, const ue_wrap::FVector& preGrabLoc) {
-    if (eid == 0u || eid == coop::element::kInvalidId) return;
-    int slots = 0;
-    for (int slot = 1; slot < coop::net::kMaxPeers; ++slot) {
-        if (g_blobPileXforms[slot].empty()) continue;   // no active join captured piles here
-        g_blobPileXforms[slot][eid] = preGrabLoc;
-        ++slots;
-    }
-    if (slots > 0)
-        UE_LOGI("[PILE-09] HOST pre-grab pos recorded eid=%u at (%.1f,%.1f,%.1f) -> %d active join slot(s) "
-                "(the kToPile convert will carry it as the save-time key)",
-                static_cast<unsigned>(eid), preGrabLoc.X, preGrabLoc.Y, preGrabLoc.Z, slots);
 }
 
 void ClearForSlot(int peerSlot) {

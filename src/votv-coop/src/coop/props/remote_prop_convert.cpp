@@ -11,8 +11,7 @@
 #include "coop/props/remote_prop.h"
 #include "remote_prop_internal.h"  // ResolveLiveActorByEid + DestroyEchoSuppressed (impl-private seam)
 
-#include "coop/element/bind_wait.h"           // MarkDeferred: a failed land leaves the armed twin's eid unbound
-#include "coop/element/quiescence_drain.h"   // ArmPendingSaveTimeTwin (capture-only)
+#include "coop/element/quiescence_drain.h"   // HasPendingSaveTimeTwin
 #include "coop/props/trash_mirror.h"         // Materialize / RepositionBoundNative
 #include "coop/props/pile_look.h"
 #include "coop/props/prop_element_tracker.h"
@@ -54,13 +53,6 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
     // Adopt the host's context for E and drop a stale or out-of-order convert (a duplicate, or
     // one older than a transition already applied).
     if (!coop::trash_channel::AdoptInboundConvertCtx(E, payload.ctx)) return nullptr;
-    // A land carrying a save-time key means the host self-seeded this eid at an in-window grab and
-    // stamped the pile's pre-grab position. Arm the order owner so the quiescence sweep reconciles
-    // our native at the old position -- before any branch below, so it fires whatever this convert
-    // then does.
-    if (!wantClump && payload.hasMatchPos)
-        coop::element::quiescence_drain::ArmPendingSaveTimeTwin(
-            E, ue_wrap::FVector{payload.matchX, payload.matchY, payload.matchZ}, payload.chipType);
 
     const ue_wrap::FVector  loc{payload.locX, payload.locY, payload.locZ};
     const ue_wrap::FRotator rot{payload.rotPitch, payload.rotYaw, payload.rotRoll};  // the host actor's rotation
@@ -128,10 +120,6 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
     if (!next) {
         UE_LOGW("[PILE] CLIENT convert %s eid=%u -- materialize of '%ls' FAILED, E left as the old actor (DESYNC)",
                 edge, E, cls.c_str());
-        // The land armed the twin and no actor took E: the sweep binds it through the funnel (which frees the
-        // mark) or NoteGaveUp gives it up, so an End arriving meanwhile waits instead of being dropped.
-        if (!wantClump && payload.hasMatchPos && !cur)
-            coop::element::bind_wait::MarkDeferred(E, "a land convert whose materialise failed");
         return nullptr;
     }
     // Retire the predecessor. It no longer owns E (the rebind above moved the element), so its
