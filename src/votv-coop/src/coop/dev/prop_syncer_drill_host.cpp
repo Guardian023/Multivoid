@@ -1,11 +1,12 @@
 // coop/dev/prop_syncer_drill_host.cpp -- the host of the prop syncer drill, see coop/dev/prop_syncer_drill.h.
-//   (with prop_syncer_load_kb set, the filler queued to the kicking client first) "PSYNC go" once both clients said
-//   they are ready (their own streams run); on "rested" waits for its own End to
-//   apply, says "ended", and judges the stream it took and where its copy rests.
+//   "PSYNC go" once both clients said they are ready (their own streams run); on "rested" waits for its own End to
+//   apply, says "ended", and judges the stream it took and where its copy rests. With prop_syncer_load_kb set, the
+//   filler is queued to the claiming client as the host answers its claim (BeforeGrant).
 
 #include "prop_syncer_drill_detail.h"  // co-located private header (src tree, not include/)
 
 #include "coop/dev/drill_chat.h"
+#include "coop/dev/prop_syncer_drill.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/props/prop_drive_stream.h"
@@ -27,7 +28,8 @@ namespace PSH = coop::prop_syncer_host;
 struct HostState {
     // The ready lines are latched the first time they are seen: a chat row is live for a short while, and the two
     // clients can join further apart than that.
-    bool     done = false, clientReady = false, observerReady = false, goSaid = false, restedSeen = false, endedSaid = false;
+    bool     done = false, clientReady = false, observerReady = false, goSaid = false, restedSeen = false, endedSaid = false,
+             loadQueued = false;   // the filler is queued once per session, at the first grant
     uint64_t at = 0, goAt = 0, restedAt = 0;
     Rested   r;
 } g_h;
@@ -55,31 +57,9 @@ void HostJudge(Arm a) {
                              static_cast<unsigned>(view.gen), view.rows, adm.rows, v.travelled, h.r.cm, v.offCm));
 }
 
-// The load arm: the filler queued to the kicking client, on the spawn lane, right before the go line. The backlog
-// takes what the transport refuses, so a send that returns false is a failed arm. Returns false after failing it.
-bool QueueLoad(coop::net::Session& s, bool& done) {
-    const long kb = LoadKb();
-    if (kb <= 0) return true;
-    constexpr uint32_t kFillBytes = sizeof(coop::net::DevLoadFillerPayload::fill);
-    const uint32_t n = static_cast<uint32_t>((static_cast<uint64_t>(kb) * 1024u + kFillBytes - 1u) / kFillBytes);
-    coop::net::DevLoadFillerPayload p{};
-    std::memset(p.fill, 0xA5, sizeof(p.fill));
-    p.total = n;
-    for (uint32_t i = 0; i < n; ++i) {
-        p.seq = i;
-        if (!s.SendReliableToSlot(kActorSlot, coop::net::ReliableKind::DevLoadFiller, &p, sizeof(p))) {
-            Fail("host", done, Fmt("the filler send %u of %u was refused", i, n));
-            return false;
-        }
-    }
-    UE_LOGI("[PROP-SYNC] host load queued: n=%u bytes=%u to slot %u", n, n * kFillBytes,
-            static_cast<unsigned>(kActorSlot));
-    return true;
-}
-
 }  // namespace
 
-void HostTick(coop::net::Session* s, Arm a) {
+void HostTick(Arm a) {
     HostState& h = g_h;
     if (h.done) return;
     const uint64_t now = Now();
@@ -90,7 +70,6 @@ void HostTick(coop::net::Session* s, Arm a) {
             h.observerReady = h.observerReady || DC::ChatHasLive(kObserverReadyLine);
         }
         if (h.clientReady && h.observerReady) {
-            if (!QueueLoad(*s, h.done)) return;
             DC::Say(kGoLine);
             h.goSaid = true;
             h.goAt = now;
@@ -118,3 +97,30 @@ void HostTick(coop::net::Session* s, Arm a) {
 void HostReset() { g_h = HostState{}; }
 
 }  // namespace coop::dev::prop_syncer_drill::detail
+
+namespace coop::dev::prop_syncer_drill {
+
+// The load arm: the filler goes to the claiming client, on the spawn lane, as the host answers its claim, so the
+// answer leaves behind a filler that has just been queued, whatever the walk or the rate. The backlog takes what the
+// transport refuses, so a send that returns false is a failed arm.
+void BeforeGrant(coop::net::Session& s, uint8_t slot) {
+    detail::HostState& h = detail::g_h;
+    const long kb = detail::LoadKb();
+    if (detail::ArmOf() == detail::Arm::Off || kb <= 0 || h.loadQueued || h.done) return;
+    h.loadQueued = true;
+    constexpr uint32_t kFillBytes = sizeof(coop::net::DevLoadFillerPayload::fill);
+    const uint32_t n = static_cast<uint32_t>((static_cast<uint64_t>(kb) * 1024u + kFillBytes - 1u) / kFillBytes);
+    coop::net::DevLoadFillerPayload p{};
+    std::memset(p.fill, 0xA5, sizeof(p.fill));
+    p.total = n;
+    for (uint32_t i = 0; i < n; ++i) {
+        p.seq = i;
+        if (!s.SendReliableToSlot(slot, coop::net::ReliableKind::DevLoadFiller, &p, sizeof(p))) {
+            detail::Fail("host", h.done, detail::Fmt("the filler send %u of %u was refused", i, n));
+            return;
+        }
+    }
+    UE_LOGI("[PROP-SYNC] host load queued: n=%u bytes=%u to slot %u", n, n * kFillBytes, static_cast<unsigned>(slot));
+}
+
+}  // namespace coop::dev::prop_syncer_drill

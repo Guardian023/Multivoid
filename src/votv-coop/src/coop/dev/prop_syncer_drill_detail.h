@@ -66,7 +66,7 @@ struct Verdict {
 Verdict JudgeCopy(const Rested& r, const coop::prop_drive_stream::dev::DriveView& v, bool needTravel);
 
 // The host's phases (prop_syncer_drill_host.cpp).
-void HostTick(coop::net::Session* s, Arm a);
+void HostTick(Arm a);
 void HostReset();
 
 // The observing client's phases (prop_syncer_drill_observer.cpp).

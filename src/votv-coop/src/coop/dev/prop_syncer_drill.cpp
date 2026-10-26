@@ -174,7 +174,7 @@ struct Target {
 };
 
 struct ClientState {
-    bool                                            done = false, readySaid = false, goSeen = false, loadSeen = false;
+    bool                                            done = false, readySaid = false, goSeen = false;
     CPh                                             phase = CPh::Go;
     uint64_t                                        at = 0, phaseAt = 0, kickAt = 0;
     std::vector<Target>                             targets;
@@ -275,18 +275,10 @@ bool ClaimRefused() {
 }
 
 void ClientClaim(void* player, void* prop) {
-    if (LoadKb() > 0 && !g_c.loadSeen) {   // the claim stands behind the host's filler: wait for its first message
-        if (g_f.count == 0) {
-            if (Now() - g_c.phaseAt > kSayBoundMs) ClientFail("the load never arrived");
-            return;
-        }
-        g_c.loadSeen = true;
-        g_c.phaseAt = Now();   // the grant bound counts from the claim
-    }
     PS::Claim(prop, coop::net::PropSyncReason::DevDrill);
     if (ClaimRefused()) return;
     if (PS::dev::EntryOf(g_c.eid).state == PS::dev::EntryState::Syncing) {
-        g_f.atGrant = g_f.count;   // stamped when the drill first sees the grant, a tick after it landed at most
+        g_f.atGrant = g_f.count;   // 0 in the bulk probe: the answer waits behind the whole filler (FIFO ahead of it)
         if (!E::TryGetActorLocation(prop, g_c.start)) return ClientFail("the target does not read");
         DC::Say(std::string(kKickedPrefix) + std::to_string(g_c.eid));
         if (!Kick(player, prop)) return ClientFail("the kick did not run");
@@ -363,7 +355,7 @@ void OnFiller(uint32_t seq, uint32_t total) {
 void Tick(coop::net::Session* s) {
     const Arm a = ArmOf();
     if (a == Arm::Off || !s) return;
-    if (s->role() == coop::net::Role::Host) return HostTick(s, a);
+    if (s->role() == coop::net::Role::Host) return HostTick(a);
     if (!s->connected()) return;
     if (coop::players::Registry::Get().LocalPeerId() == kObserverSlot && coop::net_pump::HasAnnouncedWorldReady())
         ObserverTick(s, a);
