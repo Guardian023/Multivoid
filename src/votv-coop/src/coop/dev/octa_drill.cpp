@@ -100,7 +100,6 @@ uint64_t g_puppetStillAt = 0;
 WStep    g_wstep = WStep::Stand;  // octa_measure_target=host: the host's legs after the spawn
 uint32_t g_volleysSeen = 0;       // the host's own verdicts (one per fire) since the Octa was spawned, as last polled
 bool     g_snapJudged = false;    // join, host: the joiner's snapshot has been judged
-uint32_t g_idleAtRelease = 0;     // join, host: the idle count when the joiner released it
 // CLIENT (measure)
 uint32_t g_appliedBase = 0;      // the explosion lane's applied count when the Octa mirror appeared
 uint32_t g_appliedSeen = 0;
@@ -565,7 +564,6 @@ void OnDisconnect() {
     g_joinHoldAt = 0;
     g_joinerSeen = false;
     g_snapJudged = false;
-    g_idleAtRelease = 0;
     ResetWalkers();
     ResetJoinHost();
     g_lastAppliedMs = 0;

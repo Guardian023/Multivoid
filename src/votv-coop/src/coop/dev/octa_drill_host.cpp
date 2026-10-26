@@ -263,14 +263,19 @@ void HostWalkTick(void* octa, void* me) {
     switch (g_wstep) {
     case WStep::Stand: {
         if (ArmOf() == Arm::Join) {
-            // The join arm's host stands where it is until the joiner's chat line, then walks out.
+            // The join arm's host stands where it is until the joiner's chat line, and the arm ends there: the proof
+            // is the joiner's, so the host needs no walk-out (its place can have no NavMesh route out of the sphere).
             if (!g_joinHoldAt) g_joinHoldAt = coop::net::NowMs();
             if (!JoinerDone()) {
                 if (coop::net::NowMs() - g_joinHoldAt > kJoinWaitMs) Fail("the joiner never said it was done (360 s)");
                 return;
             }
-            g_idleAtRelease = GS::GetCounters().idle;
-            if (BeginWalkOut(me, octa, "host")) g_wstep = WStep::Out;
+            const GS::Counters c = GS::GetCounters();
+            UE_LOGI("[OCTA-DRILL] join DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
+                    c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
+                    c.laser - g_base.laser, Now());
+            g_wstep = WStep::Finished;
+            g_hstep = HStep::Done;
             return;
         }
         const uint32_t now = GS::GetCounters().hostVerdict - g_base.hostVerdict;
@@ -348,16 +353,11 @@ void HostWatchMeasure() {
         return;
     }
     // An idle after the third verdict, with the puppet out of the sphere. The lane keeps the idle count at the moment
-    // it counted the third verdict, so an idle between that and this poll is not absorbed. The join arm's host leaves
-    // when the joiner has reported, so its idle is the first one after it walked out.
-    const bool idled = ArmOf() == Arm::Join ? g_wstep == WStep::Finished && c.idle > g_idleAtRelease
-                                            : c.windowReached && c.idle > c.idleAtWindow;
+    // it counted the third verdict, so an idle between that and this poll is not absorbed. The join arm ends in
+    // HostWalkTick, on the joiner's word.
+    const bool idled = ArmOf() != Arm::Join && c.windowReached && c.idle > c.idleAtWindow;
     if (idled && haveBoth && dist > kSphereCm) {
-        if (ArmOf() == Arm::Join)
-            UE_LOGI("[OCTA-DRILL] join DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
-                    c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
-                    c.laser - g_base.laser, Now());
-        else if (ArmOf() == Arm::Attack)
+        if (ArmOf() == Arm::Attack)
             UE_LOGI("[OCTA-DRILL] attack DONE aggros=%u verdicts=%u idles=%u lasers=%u t=%llu",
                     c.hostAggro - g_base.hostAggro, c.hostVerdict - g_base.hostVerdict, c.idle - g_base.idle,
                     c.laser - g_base.laser, Now());
