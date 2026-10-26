@@ -321,7 +321,8 @@ public:
     // thread. Not const: SendBacklog::DepthBytes is not.
     bool SlotReliableIdle(int slot);
 
-    void OpenJoinGate(int slot);   // the slot's Default-lane sends wait behind its snapshot (SendBacklog::OpenJoinGate)
+    void OpenJoinGateForSnapshot(int slot);  // a re-snapshot, no announce: the slot's Default-lane sends wait behind it (SendBacklog::OpenJoinGateForSnapshot)
+    void ReleaseAnnounceHold(int slot);      // the announce's replay has run: its hold on the gate ends (SendBacklog::ReleaseAnnounceHold)
     void CloseJoinGate(int slot);  // the snapshot completed: the held sends join the Default lane (SendBacklog::CloseJoinGate)
 
     // What the net thread last published about this slot's link: delivered and still-owed reliable

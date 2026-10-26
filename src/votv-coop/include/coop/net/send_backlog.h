@@ -106,13 +106,16 @@ public:
     // when the lane is empty, an append otherwise), and lifts the gate; a slot that leaves drops its queue
     // with the rest of its backlog (FreeSlot). The queue counts toward the slot's byte cap and its
     // stale-connection stamp, and not toward the no-progress timer, DepthBytes or SlotReliableIdle.
-    // OpenJoinGate on an open gate keeps its queue.
+    // OpenJoinGate on an open gate keeps its queue, and counts a hold that CloseJoinGate respects (it
+    // closes only at zero) until ReleaseAnnounceHold. OpenJoinGateForSnapshot opens with no hold.
     // DIVERGENCE: MTA skips a not-joined player and sends the state inside the one add; ours defers and
     // replays in send order, since the add spans ticks. MTA's per-element alternative (CPerPlayerEntity.h,
     // a sent-set per player) was rejected: it needs every Default kind's element id at send. The cost: a
     // held row can be older than a later spawn, so the handlers are idempotent.
     // Any thread.
     void OpenJoinGate(int slot);
+    void OpenJoinGateForSnapshot(int slot);
+    void ReleaseAnnounceHold(int slot);
     void CloseJoinGate(int slot);
 
     // Max messages one Drain() pass re-injects: bounds the per-slot mutex hold, and so the
@@ -145,6 +148,9 @@ private:
             uint8_t kind;
         };
         bool joinGate = false;
+        // Announces received whose replay has not yet run: a drain finishing in that gap must not
+        // close the gate, or the replay's seeds would go out ungated.
+        uint32_t announceHolds = 0;
         std::deque<std::vector<uint8_t>> joinQ;
         std::vector<JoinStamp> joinStamps;
         size_t joinBytes = 0;
@@ -154,6 +160,8 @@ private:
     // Reset q to a fresh state under mu (caller holds mu). Drops the join gate and its queue too: the
     // slot's leave and a stale connection both come through here.
     void ResetLocked_(SlotQ& s);
+    // The gate's opening, shared by both opens (caller holds s.mu).
+    void OpenLocked_(SlotQ& s);
     // SendOrQueue's body; the caller holds s.mu.
     SendOutcome SendLocked_(SlotQ& s, int slot, int lane, uint32_t hConn, const uint8_t* wire,
                             int len, SendAdmission& adm);

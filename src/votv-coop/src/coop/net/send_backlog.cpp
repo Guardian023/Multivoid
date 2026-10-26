@@ -55,6 +55,7 @@ void SendBacklog::ResetLocked_(SlotQ& s) {
     for (auto& l : s.lanes) { l.q.clear(); l.bytes = 0; }
     s.totalBytes = 0;
     s.joinGate = false;
+    s.announceHolds = 0;
     s.joinQ.clear();
     s.joinStamps.clear();
     s.joinBytes = 0;
@@ -287,14 +288,40 @@ void SendBacklog::FreeSlot(int slot) {
     ResetLocked_(s);
 }
 
+namespace {
+// Resolved once: the red arm of the join drills, where the gate is bypassed and the receive
+// parks catch the seeds that precede their props.
+bool JoinGateRed_() {
+    static const bool red = coop::config::ResolveInt(coop::config_registry::rows::join_gate_red) != 0;
+    return red;
+}
+}  // namespace
+
 void SendBacklog::OpenJoinGate(int slot) {
     if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return;
-    // Resolved once: the red arm of the join drills, where the gate is bypassed and the receive
-    // parks catch the seeds that precede their props.
-    static const bool red = coop::config::ResolveInt(coop::config_registry::rows::join_gate_red) != 0;
-    if (red) return;
+    if (JoinGateRed_()) return;
     SlotQ& s = slots_[slot];
     std::lock_guard<std::mutex> lk(s.mu);
+    ++s.announceHolds;
+    OpenLocked_(s);
+}
+
+void SendBacklog::OpenJoinGateForSnapshot(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return;
+    if (JoinGateRed_()) return;
+    SlotQ& s = slots_[slot];
+    std::lock_guard<std::mutex> lk(s.mu);
+    OpenLocked_(s);
+}
+
+void SendBacklog::ReleaseAnnounceHold(int slot) {
+    if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return;
+    SlotQ& s = slots_[slot];
+    std::lock_guard<std::mutex> lk(s.mu);
+    if (s.announceHolds > 0) --s.announceHolds;
+}
+
+void SendBacklog::OpenLocked_(SlotQ& s) {
     if (s.joinGate) return;  // a re-announce while open keeps the queue and the window
     s.joinGate = true;
     s.joinOpenedAt = std::chrono::steady_clock::now();
@@ -306,7 +333,7 @@ void SendBacklog::CloseJoinGate(int slot) {
     if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return;
     SlotQ& s = slots_[slot];
     std::lock_guard<std::mutex> lk(s.mu);
-    if (!s.joinGate) return;
+    if (!s.joinGate || s.announceHolds > 0) return;
     const auto now = std::chrono::steady_clock::now();
 
     // The close line: the window, what the gate held, and how long each held message waited.

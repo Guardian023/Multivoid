@@ -299,6 +299,16 @@ bool Session::SendReliableBatch(ReliableKind kind, const void* payloads, int pay
         UE_LOGW("net: SendReliableBatch rejected (len=%d count=%d)", payloadLen, count);
         return false;
     }
+    // The save-stream family never joins the backlog (see SendReliableToSlot): the fan-out takes
+    // the to-slot form, which paces each payload through the single path.
+    if (kind == ReliableKind::SaveTransferBegin || kind == ReliableKind::SaveTransferChunk) {
+        bool anySent = false;
+        for (int i = 0; i < kMaxPeers; ++i) {
+            if (peerConns_[i].load() == 0) continue;
+            if (SendReliableBatchToSlot(i, kind, payloads, payloadLen, count)) anySent = true;
+        }
+        return anySent;
+    }
     // One wire build and one seq run for the whole fan-out, as SendReliable's.
     const int total = BuildReliableBatch_(t_batchWire, kind, payloads, payloadLen, count,
                                           sendSeq_, ownEpoch_);
@@ -355,7 +365,9 @@ bool Session::SlotReliableIdle(int slot) {
     return st.m_cbPendingReliable == 0 && st.m_cbSentUnackedReliable == 0;
 }
 
-void Session::OpenJoinGate(int slot) { backlog_.OpenJoinGate(slot); }
+void Session::OpenJoinGateForSnapshot(int slot) { backlog_.OpenJoinGateForSnapshot(slot); }
+
+void Session::ReleaseAnnounceHold(int slot) { backlog_.ReleaseAnnounceHold(slot); }
 
 void Session::CloseJoinGate(int slot) { backlog_.CloseJoinGate(slot); }
 

@@ -211,7 +211,7 @@ bool Tick(coop::net::Session& session) {
                     // CGame.cpp:1407; CPlayerManager.cpp:159-172 skips only the not-joined). A re-seed
                     // gives props new mirrors, so a live row ahead of its re-snapshot spawn would miss it.
                     // Costs the peer's Default lane one drain, on a world transition.
-                    if (session.IsSlotWorldReady(slot)) session.OpenJoinGate(slot);
+                    if (session.IsSlotWorldReady(slot)) session.OpenJoinGateForSnapshot(slot);
                     coop::prop_snapshot::TriggerForSlot(slot);
                     UE_LOGI("net_pump: re-snapshot ready slot %d after re-seed", slot);
                 }
