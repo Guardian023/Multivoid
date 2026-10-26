@@ -1,7 +1,7 @@
 // coop/dispatch/event_dispatch_prop_drive.cpp -- the driven prop's reliable kinds: PropDriveEnd (the
 // close of a prop's stream, the host's to all or a syncing client's to the host) and the prop
 // syncer's pair, PropSyncClaim (client to host) and PropSyncAnswer (host to one client), and the developer
-// filler DevLoadFiller (host to one client). Each case
+// filler DevLoadFiller (host to one client) and DevParityReport (a joiner's pose report to the host). Each case
 // validates at the trust boundary and hands off to its module. The switch below is the family's
 // membership declaration; nothing re-lists it. Family contract per coop/dispatch/event_dispatch.h:
 // returns true iff msg.kind is in this family.
@@ -9,6 +9,7 @@
 #include "event_dispatch.h"  // co-located private header (src tree, not include/)
 
 #include "coop/dev/prop_syncer_drill.h"    // the drill's filler receiver
+#include "coop/dev/pile_defer_report.h"    // the pile deferral drill's report receiver
 #include "coop/element/registry.h"
 #include "coop/props/prop_drive_stream.h"  // the driven-prop end edge
 #include "coop/props/prop_syncer.h"        // the client's answer receiver
@@ -126,6 +127,27 @@ bool HandlePropDriveEvent(net::Session& session,
         net::DevLoadFillerPayload p{};
         std::memcpy(&p, msg.payload, sizeof(p));
         ::coop::dev::prop_syncer_drill::OnFiller(p.seq, p.total);
+        break;
+    }
+    case net::ReliableKind::DevParityReport: {
+        // CLIENT->HOST, developer only: one chunk of a joiner's pose report for the pile deferral drill. Refused on a
+        // client; the report module drops it at once when the drill row is off.
+        if (session.role() != net::Role::Host) {
+            UE_LOGW("event_feed: DevParityReport received on a client -- dropping");
+            break;
+        }
+        if (msg.payloadLen < sizeof(net::BlobChunkPayload)) {
+            UE_LOGW("event_feed: DevParityReport payload too short (%zu < %zu)",
+                    static_cast<size_t>(msg.payloadLen), sizeof(net::BlobChunkPayload));
+            break;
+        }
+        net::BlobChunkPayload chunk{};
+        std::memcpy(&chunk, msg.payload, sizeof(chunk));
+        const uint8_t slot =
+            (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
+                ? static_cast<uint8_t>(msg.senderPeerSlot)
+                : static_cast<uint8_t>(0xFF);
+        ::coop::dev::pile_defer_report::OnChunk(chunk, slot);
         break;
     }
     default:

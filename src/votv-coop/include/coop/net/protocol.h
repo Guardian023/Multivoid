@@ -1167,6 +1167,11 @@ enum class ReliableKind : uint8_t {
     // burst on the Transfer lane (a drill knob moves it to Default) ahead of the syncer's messages. Nothing
     // reads the fill; the receiver counts. Never relayed; not pre-world. DevLoadFillerPayload.
     DevLoadFiller = 204,
+    // CLIENT->HOST: developer only, read by the pile deferral drill (coop/dev/pile_defer_report): a chunked blob, the
+    // joiner's own report of every trash element it has bound, [u32 count] then count DevParityEntry rows, sent once
+    // after its join so the host can compare each pose with its own. Dropped at the host unless the drill row is on.
+    // Rides the Default lane; never relayed; not pre-world. Late join: none, a report is a reading.
+    DevParityReport = 205,
     // HOST->CLIENT: one decision of a Geom Octa, to be replayed into the client's own Blueprint (coop/creatures/
     // geom_octa_relay): op 0, an Aggro, the Octa took a target (the replay runs minSphere's begin-overlap handler with
     // the target's counterpart here), carrying the host's verdict count as the base; op 1, a FireVerdict, the host's
@@ -1789,6 +1794,15 @@ struct DevLoadFillerPayload {
 static_assert(sizeof(DevLoadFillerPayload) == 228, "DevLoadFillerPayload must be 228 bytes");
 static_assert(sizeof(DevLoadFillerPayload) <= 256 - 20 - 8,
               "DevLoadFillerPayload must fit in one reliable datagram");
+
+// One row of the DevParityReport blob: a trash element the joiner has bound, its form (0 pile, 1 clump) and its pose.
+struct DevParityEntry {
+    uint32_t eid;                // 4
+    uint8_t  form;               // 1 -- 0 pile, 1 clump
+    float    x, y, z;            // 12 -- the actor's place
+    float    pitch, yaw, roll;   // 12 -- the actor's rotation, degrees
+};
+static_assert(sizeof(DevParityEntry) == 29, "DevParityEntry must be 29 bytes");
 
 // A prop birth (PropSpawn): the class, the persistent key, the list_props row name that init()
 // resolves the mesh, mass and collision from, the transform and scale, the physics flags, an

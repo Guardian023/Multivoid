@@ -786,6 +786,8 @@ CFG_FLAG(key_index_forget_one, "key_index_forget_one", "dev", false, "VOTVCOOP_K
 #include "coop/config/config_registry_rows_dev_cord.inc"
 // The coffee lane's drill and red arm: their own file, one concept, included as _dev_port.inc is above.
 #include "coop/config/config_registry_rows_dev_coffee.inc"
+// The pile deferral drill's row: its own file, one concept, included as _dev_port.inc is above.
+#include "coop/config/config_registry_rows_dev_pile.inc"
 // The ATV lane's rows (its probe, corrector arm, spawn drill, health drill): their own file, as _dev_port.inc is above.
 #include "coop/config/config_registry_rows_dev_atv.inc"
 // The puppet-identity arc's selftests and drill (PI-1, PI-2, PI-3): their own file, one concept, included as
