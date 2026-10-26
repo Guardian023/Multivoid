@@ -311,7 +311,12 @@ void TickApplyAndDrive(coop::net::Session& s) {
     for (auto it = g_drives.begin(); it != g_drives.end();) {
         Drive& dr = it->second;
         void* actor = dr.d.LiveActor();
-        if (!actor) { it = g_drives.erase(it); continue; }   // the destroy crossed on its own seam
+        if (!actor) {   // the destroy crossed on its own seam
+            // The generation closes with the drive: a held End of an older one then reads stale on replay.
+            AdvanceGen(g_endedGen, it->first, dr.gen);
+            it = g_drives.erase(it);
+            continue;
+        }
         if (coop::prop_drive_host::InAHand(actor)) {
             // A hand took it before the end edge landed: the holder's drive owns the actor from here,
             // and its release restores the physics. This drive yields for good rather than writing
