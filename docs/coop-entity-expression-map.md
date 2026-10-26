@@ -396,6 +396,16 @@ registry recycled that id. `[V]`
   the game's occupied-socket rule and answers with the link it now has; every change is broadcast, and a joiner is
   seeded with every corded prop's link, plugged or not, which also repairs a cord its save plugged. A level socket is
   named by its key, a generator's outlet by its owner prop's key and its component.
+- **A coffee device a player uses.** A press of the coffee vending machine or the coffee maker is a request the host
+  performs: a client's own press is cancelled at the gate and goes as a `CoffeeActionIntent` naming the device by its
+  key (`coop/interactables/coffee_intent`); the host checks the sender's reach and that the key names exactly one of
+  the two classes, then runs the game's own action with the sender's puppet as the player, so the debit crosses by the
+  balance and the cup by the prop spawn lane. The maker's state is its save record, published by the host after a brew
+  and after a fill (`coop/interactables/coffee_state`) and applied on each client through the record's own `loadData`;
+  the fill (a cup or a bag touching the maker) is the host's, a client's own run of the hit handler is cancelled, and
+  the cup's destroy crosses by the native destroy seam. A client's record for a maker or a bag is refused, except the
+  one behind its own drop. The maker's power follows the cord lane on each peer and is not in the record.
+  A joiner's maker and bags arrive with the prop snapshot's records. `[V]` (`coffee_drill`)
 - **A salt rocket a client lights.** The rocket's own fuse and thrust run only on the host: a client's gate refuses its `attemptIgnite` and its `ignite`, and a light its own player's lighter or torch made goes to the host as `PropIgniteIntent` (`coop/world/salt_rocket_ignite`); the host checks the sender's reach and the tool its hand held, performs the verb on its copy, and its `fire()` puts the rocket under the drive claim (`coop/world/salt_rocket_flight`) until its blast, which the capture above carries. `[V]`
 - **Destroy.** Nothing crosses. Each copy ends by the actor's own lifespan, 10 s by the class default.
   `[RD]`
@@ -458,6 +468,7 @@ Every place two seams can express one actor, and what deduplicates it:
 | a client's local sit or grab of an ATV and the host's table | one seat and one syncer: the client acts at once, asks, and yields to the answer or stamp that names another; the host drops a block from any slot that is not the ATV's syncer `[?]` |
 | the host's idle stream and a client syncer's stream of one ATV | the host streams an ATV only while its table names the host; until the hand-back a client syncer's blocks are the ones applied and re-sent `[?]` |
 | a client's plug of a cord and the host's | one link: the client's own verb runs and its outcome is a claim; the host compares, applies the game's rule and answers every claim, and a client copy's stretch break is refused `[V]` (`cord_drill`) |
+| a client's press or fill of a coffee device and the host's | one run: the client's body is cancelled at the gate (the press is sent, the hit handler is counted) and the host performs it once; the maker's flags change on the host's copy and reach a client as the record, never from the client's own run `[V]` (`coffee_drill`) |
 | a client's Octa laser and the host's | two actors, one beam: each peer's Octa runs its own `fire()`; the client's blast is dissolved with no request and the host's `ExplosionSpawn` is the one explosion `[V]` (`octa_drill`) |
 | a client's roll of the night Octa and the host's | one Octa: the client's roll body is refused at the script gate and the host's roll is the only source `[V]` (`octa_drill` births) |
 
