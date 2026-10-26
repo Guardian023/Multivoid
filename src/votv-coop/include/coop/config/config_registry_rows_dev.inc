@@ -539,7 +539,11 @@ CFG_ENUM(prop_syncer_red, "prop_syncer_red", "dev", "off", "off|refuse|no_relay|
     "Developer red arm: never set. refuse (HOST): every claim is refused as paced, so the kick arm's client must fail. "
     "no_relay (HOST): an admitted client row is applied to the host's copy and never re-published, so the kick arm's "
     "observer must fail. not_syncer (HOST): the sender test of admission is skipped, so the forge arm's host must fail.")
-CFG_INT(prop_syncer_load_kb, "prop_syncer_load_kb", "dev", 0, 0, 16384, "VOTVCOOP_PROP_SYNCER_LOAD_KB",
+CFG_INT(join_gate_red, "join_gate_red", "dev", 0, 0, 1, "VOTVCOOP_JOIN_GATE_RED",
+    "Developer red arm: never set (HOST). 1 bypasses the join gate: a joining slot's sends are not held behind its "
+    "snapshot, so the receive parks catch the seeds that precede their props, and the join drills' park counts go "
+    "nonzero.")
+CFG_INT(prop_syncer_load_kb,"prop_syncer_load_kb", "dev", 0, 0, 16384, "VOTVCOOP_PROP_SYNCER_LOAD_KB",
     "Drill (host and the kicking client, the same value; arm kick or forge): the filler the host queues on the transfer "
     "lane to the kicking client right before it says go, in KiB (0 = none). The client waits for the filler's first "
     "message before it claims, so its claim stands behind the transfer; its DONE line carries the grant latency and "

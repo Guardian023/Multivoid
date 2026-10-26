@@ -437,6 +437,9 @@ void Session::HandleMessage(int peerSlot, uint32_t hConn, const void* data, int 
         if (cfg_.role == Role::Host &&
             static_cast<ReliableKind>(rh.kind) == ReliableKind::ClientWorldReady &&
             peerSlot >= 1 && peerSlot < kMaxPeers) {
+            // The join gate opens first, so no relay reaching the slot after the stamp passes ungated:
+            // the snapshot's completion closes it (prop_snapshot.cpp).
+            backlog_.OpenJoinGate(peerSlot);
             relayEligible_[peerSlot].store(peerConns_[peerSlot].load(),
                                            std::memory_order_release);
         }

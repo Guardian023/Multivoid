@@ -141,6 +141,7 @@
 #include "coop/session/player_handshake.h"  // TickSkinConverge
 #include "coop/player/skin_preview.h"
 #include "coop/net/session.h"
+#include "coop/net/snapshot_send_scope.h"  // the divergence deletes pass the slot's join gate
 #include "coop/creatures/npc_adoption.h"
 #include "coop/creatures/kerfur_prop_adoption.h"
 #include "coop/creatures/npc_mirror.h"
@@ -354,7 +355,10 @@ void ConnectReplayForSlot(int slot) {
     // client drops exactly those rather than the divergence sweep inferring the deletes. On the
     // bulk lane ahead of the snapshot, so the removes land before the adds. A no-op for a joiner
     // with no blob baseline, which the sweep still owns.
-    coop::join_window_baseline::SendDivergenceDeletes(slot);
+    {
+        coop::net::SnapshotSendScope scope(slot);  // the removes are the snapshot's, so the join gate passes them
+        coop::join_window_baseline::SendDivergenceDeletes(slot);
+    }
     // Every dish code, sent here on the bracket's lane ahead of its Begin, so a set that goes whole lands
     // before its Complete and a joined client holds the host's codes, a midnight since the capture
     // included; a set not taken whole is retried from the lane's tick and can land after it.

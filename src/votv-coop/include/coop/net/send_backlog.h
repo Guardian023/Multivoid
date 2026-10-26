@@ -52,6 +52,8 @@ public:
     //    event-driven). A link this far behind is minutes stale -- kicking is
     //    honest, dropping is the bug this class exists to kill.
     static constexpr auto kNoProgress = std::chrono::seconds(30);
+    // A join gate open this long without closing logs one warning (OpenJoinGate).
+    static constexpr auto kJoinGateWarn = std::chrono::seconds(10);
     static constexpr size_t kMaxBytesPerSlot = 16u * 1024u * 1024u;
 
     // Attempt-or-queue one complete on-wire reliable packet (PacketHeader +
@@ -84,8 +86,21 @@ public:
     // peerConns_[slot] is zeroed. Any thread.
     void FreeSlot(int slot);
 
-    // net-diag: total queued bytes across the slot's lanes (0 = idle).
+    // net-diag: total queued bytes across the slot's lanes (0 = idle). The join gate's queue is not
+    // counted: it is held by design and is not a link backlog.
     size_t DepthBytes(int slot);
+
+    // The join gate: MTA's not-yet-joined player (CPlayerManager.cpp:159-172, BroadcastOnlyJoined). From
+    // OpenJoinGate to CloseJoinGate, every Default-lane send to the slot is appended to the slot's join
+    // queue in send order, except a send made inside a SnapshotSendScope for that slot. CloseJoinGate
+    // splices the queue onto the slot's Default lane behind what is already there, as one move under the
+    // lock, and lifts the gate; a slot that leaves drops its queue with the rest of its backlog (FreeSlot).
+    // The queue counts toward the slot's byte cap and its stale-connection stamp, and not toward the
+    // no-progress timer, DepthBytes or SlotReliableIdle. OpenJoinGate on an open gate keeps its queue.
+    // Any thread.
+    void OpenJoinGate(int slot);
+    void CloseJoinGate(int slot);
+    bool JoinGateOpen(int slot);
 
     // Max messages one Drain() pass re-injects: bounds the per-slot mutex hold, and so the
     // cross-lane wait, to sub-millisecond; the next net-thread pass continues. 256 messages at
@@ -110,8 +125,21 @@ private:
         bool fatal = false;
         const char* fatalReason = nullptr;
         bool dyingLogged = false;  // fold the repeated dying-connection lines
+        // The join gate (OpenJoinGate). joinQ holds the wire packets in send order, and joinStamps is
+        // parallel to it: when each was held and which ReliableKind it carries, for the close line.
+        struct JoinStamp {
+            std::chrono::steady_clock::time_point at;
+            uint8_t kind;
+        };
+        bool joinGate = false;
+        std::deque<std::vector<uint8_t>> joinQ;
+        std::deque<JoinStamp> joinStamps;
+        size_t joinBytes = 0;
+        std::chrono::steady_clock::time_point joinOpenedAt{};
+        bool joinWarned = false;  // the open-too-long warning fires once per open
     };
-    // Reset q to a fresh state under mu (caller holds mu).
+    // Reset q to a fresh state under mu (caller holds mu). Drops the join gate and its queue too: the
+    // slot's leave and a stale connection both come through here.
     void ResetLocked_(SlotQ& s);
 
     SlotQ slots_[coop::players::kMaxPeers];

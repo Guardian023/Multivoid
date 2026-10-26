@@ -22,6 +22,7 @@
 #include "coop/props/remote_prop.h"
 #include "coop/save/join_window_baseline.h"  // TryGetPileXform / ClumpXform, the join snapshot's match key
 #include "coop/props/trash_channel.h"  // ExpressClumpGeneration, behind a clump's row
+#include "coop/net/snapshot_send_scope.h"  // SnapshotBegin and each drained prop pass the slot's join gate
 #include "coop/props/snapshot_census.h"  // the per-class completeness census on SnapshotComplete
 #include "coop/dev/eid_lifetime_trace.h"  // read-only: capture-eid vs wire-eid
 #include "coop/dev/force_overdestroy_test.h"  // dev only: inject the over-destroy to prove the floor
@@ -198,6 +199,7 @@ void StartEnumerationFor(int peerSlot) {
     if (auto* s = g_session_ptr.load(std::memory_order_acquire)) {
         coop::net::SnapshotBeginPayload b{};
         b.propTotal = static_cast<uint32_t>(g_snapshotCandidates.size());
+        coop::net::SnapshotSendScope scope(peerSlot);  // the bracket opens ahead of the slot's held sends
         s->SendReliableToSlot(peerSlot, coop::net::ReliableKind::SnapshotBegin, &b, sizeof(b));
     }
 }
@@ -263,9 +265,15 @@ void CompleteDrainForCurrentSlot(coop::net::Session* s) {
         const int budget = coop::net::kMaxReliablePayload - static_cast<int>(sizeof(e));
         coop::snapshot_census::BuildHostTail(tail, budget);
         buf.insert(buf.end(), tail.begin(), tail.end());
+        // Sent outside any scope, so the slot's join gate holds it last in the queue; closing the gate
+        // puts the queue on the lane, and the wire order is Begin, the spawns, the held sends, Complete:
+        // the joiner's cover lifts on a world that already holds its seeds. The close comes before
+        // CloseBracket_, whose latch reads the flushed queue (join_beacon).
         if (s->SendReliableToSlot(g_currentTargetSlot, coop::net::ReliableKind::SnapshotComplete,
-                                  buf.data(), static_cast<int>(buf.size())))
+                                  buf.data(), static_cast<int>(buf.size()))) {
+            s->CloseJoinGate(g_currentTargetSlot);
             CloseBracket_(g_currentTargetSlot);
+        }
     }
     UE_LOGI("snapshot: drain complete for slot %d (%zu candidates, %u sent, %u left out unread)",
             g_currentTargetSlot, g_snapshotCandidates.size(), g_snapshotSentTotal, g_snapshotUnreadTotal);
@@ -532,6 +540,9 @@ void DrainChunk() {
             }
             continue;
         }
+        // The drained prop is the snapshot's own send, so its spawn, clump generation and save record
+        // pass the slot's join gate; the sends the gate holds join the lane after the last of these.
+        coop::net::SnapshotSendScope scope(g_currentTargetSlot);
         // To the one slot: the other peers got these props from their own drain.
         s->SendReliableToSlot(g_currentTargetSlot,
                               coop::net::ReliableKind::PropSpawn,

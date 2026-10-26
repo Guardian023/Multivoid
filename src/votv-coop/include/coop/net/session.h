@@ -325,6 +325,9 @@ public:
     // thread. Not const: SendBacklog::DepthBytes is not.
     bool SlotReliableIdle(int slot);
 
+    // The slot's snapshot has completed: its held sends join the Default lane (SendBacklog::CloseJoinGate).
+    void CloseJoinGate(int slot) { backlog_.CloseJoinGate(slot); }
+
     // What the net thread last published about this slot's link: delivered and still-owed reliable
     // bytes, with the sample's time on the net clock. See SendRateControl::Published. Any thread.
     SendRateControl::Published LinkDeliveryOf(int slot) const { return rateControl_.PublishedFor(slot); }
