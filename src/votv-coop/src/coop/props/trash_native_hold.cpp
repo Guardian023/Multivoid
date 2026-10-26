@@ -7,6 +7,7 @@
 #include "coop/props/prop_element_tracker.h"  // GetPropElementIdForActor (a bound or minted actor is not a bare load spawn)
 #include "coop/session/world_load_episode.h"  // InEpisode: the join's world load
 #include "ue_wrap/actors/prop.h"              // IsGarbageClump
+#include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/game_thread.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
@@ -17,6 +18,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <unordered_map>
 
 namespace coop::trash_native_hold {
 namespace {
@@ -38,6 +40,11 @@ constexpr uint64_t kResolveRetryMs  = 1000;
 constexpr int      kMaxResolveTries = 30;
 
 uint32_t g_heldCount = 0;           // game thread only; per process
+uint32_t g_retiredCount = 0;
+
+// The bodies the catch held, by pointer, each with the slot's serial, so a recycled address is not a
+// held body. Session-scoped: OnDisconnect clears it.
+std::unordered_map<void*, ue_wrap::CachedObjRef> g_held;
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -64,6 +71,7 @@ void OnFinishSpawn(void* /*context*/, void* /*srcObj*/, void* result) {
     if (!R::IsLive(result)) return;
     if (PT::GetPropElementIdForActor(result) != coop::element::kInvalidId) return;
     Hold(result);
+    g_held[result].Set(result);
     if (++g_heldCount == 1 || g_heldCount % 100 == 0)
         UE_LOGI("trash_native_hold: held save-loaded clump %p at its load spawn (#%u) -- tick, physics off, "
                 "until the bind or the divergence sweep", result, g_heldCount);
@@ -94,8 +102,22 @@ void Install(coop::net::Session* session) {
     }
 }
 
+bool IsHeld(void* actor) {
+    if (!actor || g_held.empty()) return false;
+    const auto it = g_held.find(actor);
+    return it != g_held.end() && it->second.Is(actor);
+}
+
+void NoteRetired(void* actor) {
+    ++g_retiredCount;
+    if (g_retiredCount == 1 || g_retiredCount % 100 == 0)
+        UE_LOGI("trash_native_hold: destroyed held clump %p -- the host never bound it, so it is not in the "
+                "host's world (#%u of %u held)", actor, g_retiredCount, g_heldCount);
+}
+
 void OnDisconnect() {
     g_session.store(nullptr, std::memory_order_release);
+    g_held.clear();
 }
 
 }  // namespace coop::trash_native_hold

@@ -26,6 +26,7 @@
 #include "coop/props/remote_prop.h"
 #include "coop/props/save_identity_bind.h"
 #include "coop/props/snapshot_census.h"
+#include "coop/props/trash_native_hold.h"  // IsHeld: a body the join's load froze and no row bound
 #include "coop/props/trash_pile_sync.h"
 #include "coop/element/mirror_defer.h"
 #include "ue_wrap/engine/engine.h"
@@ -193,6 +194,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
     };
     std::vector<void*> doomed;
     doomed.reserve(propPairs.size());
+    std::vector<void*> heldUnbound;   // natives the join's load hold froze and no row bound (join with doomed after the floor)
     std::vector<std::wstring> doomedClass;  // Phase 0: class per doomed actor, parallel to `doomed`
     doomedClass.reserve(propPairs.size());
     std::unordered_map<std::wstring, int> doomedByClass;
@@ -210,6 +212,9 @@ static void RunDivergenceSweep_(void* localPlayer) {
         if (g_claimedActors.count(a)) { ++claimedCount; ++claimedByClass[acls]; continue; }  // host-expressed / self-claimed -> converged, keep
         if (Spared(a, acls, onHandAxis(a))) { ++sparedCount; continue; }
         if (ue_wrap::prop::IsTrashActor(a)) {          // a pile or a clump at rest: expressible on the eid lane
+            // A body the load hold froze and no row bound by now: the host never bound it, so the host's
+            // world does not have it, whatever the class count says. It leaves the floor's reckoning.
+            if (coop::trash_native_hold::IsHeld(a)) { heldUnbound.push_back(a); continue; }
             doomed.push_back(a);
             doomedClass.push_back(acls);
             ++doomedByClass[acls];
@@ -393,6 +398,15 @@ static void RunDivergenceSweep_(void* localPlayer) {
         }
     }
 
+    // The held natives rejoin the doomed after the floor, which would otherwise keep them on a class
+    // count; the valve below still sees them, so a partial bracket wipes nothing.
+    for (void* a : heldUnbound) {
+        std::wstring c = R::ClassNameOf(a);
+        ++doomedByClass[c];
+        doomed.push_back(a);
+        doomedClass.push_back(std::move(c));
+    }
+
     // The valve: the client loaded the host's save, so a legitimate divergence is a small delta. A
     // sweep that would destroy more than half the universe is an incomplete snapshot (the host
     // re-seeded mid-connect and sent a tiny first bracket, racing the chunked drain), and
@@ -426,6 +440,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
             UE_LOGI("join_membership_sweep:   dooming '%ls' key='%ls' loc=(%.1f,%.1f,%.1f)%s",
                     R::ClassNameOf(a).c_str(), dk.c_str(), dl.X, dl.Y, dl.Z, dlRead ? "" : " (unread)");
         }
+        if (coop::trash_native_hold::IsHeld(a)) coop::trash_native_hold::NoteRetired(a);
         coop::remote_prop::ClearAnyDriveFor(a);
         ue_wrap::engine::ReleaseMainPlayerGrabIfHolding(localPlayer, a);
         coop::prop_lifecycle::DestroyLocalProp(a, /*deferred=*/false);
@@ -434,6 +449,9 @@ static void RunDivergenceSweep_(void* localPlayer) {
             "%d claimed (expressed on the wire this bracket), %d spared (the hand axis, the player's own, "
             "per-player state), %d unclaimed locals destroyed (client adopts host world)",
             inClass, claimedCount, sparedCount, static_cast<int>(doomed.size()));
+    if (!heldUnbound.empty())
+        UE_LOGI("join_membership_sweep:   %zu of them held natives the host never bound (past the completeness floor)",
+                heldUnbound.size());
     // The doomed-class histogram: a wrongly-universed class shows up here, not as a delayed crash.
     {
         std::vector<std::pair<std::wstring, int>> hist(doomedByClass.begin(), doomedByClass.end());

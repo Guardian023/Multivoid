@@ -35,7 +35,15 @@ void Hold(void* actor);
 // spawns run before the world is up. Game thread.
 void Install(coop::net::Session* session);
 
-// Drop the cached session. Game thread.
+// Did the load catch hold this body? True while the same object still lives. A hold the host never bound
+// is a body the host's world does not have: the join's divergence sweep asks this of an unbound native
+// and destroys a held one whatever the completeness floor's class count says. Game thread.
+bool IsHeld(void* actor);
+
+// The sweep destroyed a held body: count it and say the first and every 100th. Game thread.
+void NoteRetired(void* actor);
+
+// Drop the cached session and the held set. Game thread.
 void OnDisconnect();
 
 }  // namespace coop::trash_native_hold
