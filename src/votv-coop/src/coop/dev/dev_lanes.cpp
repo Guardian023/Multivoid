@@ -50,6 +50,7 @@
 #include "coop/dev/octa_drill.h"  // [dev] the Geom Octa lane's drill: the host's births and the Octa's measured liveness
 #include "coop/dev/fire_ignite_drill.h"  // [dev] a client's light on a salt rocket is performed by the host and flown
 #include "coop/dev/cord_drill.h"  // [dev] cords plugged on both peers, judged by the host's word
+#include "coop/dev/late_join_drill.h"  // [dev] the bind wait's tallies per kind, on a joiner once its join is idle
 #include "coop/dev/cord_pos_drill.h"  // [dev] a corded maker that binds on a joiner keeps the floor while hidden
 #include "coop/dev/coffee_drill.h"  // [dev] the coffee devices pressed on a client and the maker's state, judged by the host's word
 #include "coop/dev/grid_drill.h"  // [dev] the power grid: a client's presses and repair, the host's break and lockout
@@ -217,6 +218,7 @@ void EndSession() {
     coop::dev::sat_console_drill::OnDisconnect();  // [dev] the steps and the host's counts belong to one session
     coop::dev::calib_drill::OnDisconnect();  // [dev] a rejoin's peers run their legs again
     coop::dev::drive_drill::OnDisconnect();  // [dev] the same for the drive drill
+    coop::dev::late_join_drill::OnDisconnect();  // [dev] a rejoin's client prints its tallies again
     coop::dev::download_drill::OnDisconnect();  // [dev] the same for the download drill
     coop::dev::rack_birth_drill::OnDisconnect();  // [dev] a rejoin's peers run the drill again
     coop::dev::burn_revive_drill::OnDisconnect();  // [dev] a rejoin's client runs the drill again
@@ -335,6 +337,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::sat_console_drill::Tick(&session);  // [dev] the SAT console drill (two short string compares when off)
     coop::dev::calib_drill::Tick(&session);  // [dev] the precision drill (two short string compares when off)
     coop::dev::drive_drill::Tick(&session);  // [dev] the drive drill (two short string compares when off)
+    coop::dev::late_join_drill::Tick(&session);  // [dev] the bind wait's tallies (a latched bool read when off)
     coop::dev::download_drill::Tick(&session);  // [dev] the download drill (two short string compares when off)
     coop::dev::laptop_drill::Tick(&session);  // [dev] the laptop drill (a latched read when off)
     coop::dev::laptop_power_drill::Tick(&session);  // [dev] the laptop power drill (a bool read when off)
