@@ -71,10 +71,11 @@ R::ParamOffset g_action[kWatchCount] = {R::ParamOffset{L"action"}, R::ParamOffse
 bool g_actionSaid = false;
 
 // Why a press was refused or went nowhere, counted by reason and said at most once in kRefusalSayMs a reason.
-enum Reason : uint8_t { kNoDevice, kWrongClass, kOutOfReach, kNotRun, kQueueFull, kReasonCount };
+enum Reason : uint8_t { kNoDevice, kWrongClass, kOutOfReach, kNotRun, kQueueFull, kSenderDead, kReasonCount };
 const char* const kReasonName[kReasonCount] = {
     "no device holds the key", "the key names no coffee device", "the sender is not within reach",
     "the host's copy did not take the call", "the sender's queue is full",
+    "the sender's player is not alive",
 };
 uint64_t g_refused[kReasonCount] = {};
 struct Said { uint64_t nextMs = 0; uint64_t since = 0; };
@@ -115,6 +116,11 @@ bool Execute(coop::net::Session& s, const coop::net::CoffeeActionIntentPayload& 
     void* device = key.empty() ? nullptr : coop::prop_key_index::Find(key);
     if (!device) {
         Refuse(kNoDevice, slot, key, nullptr);
+        return true;
+    }
+    // A player who is not alive presses nothing; judged before reach and the rest, as the cord lane judges a claim.
+    if (coop::players::Registry::Get().LifeOf(slot) != coop::players::PuppetLife::Alive) {
+        Refuse(kSenderDead, slot, key, nullptr);
         return true;
     }
     const coop::element::IntentSubject subject =
@@ -268,6 +274,7 @@ DrillView ReadForDrill() {
     v.outOfReach = g_refused[kOutOfReach];
     v.notRun = g_refused[kNotRun];
     v.queueFull = g_refused[kQueueFull];
+    v.senderDead = g_refused[kSenderDead];
     v.dropSize = g_dropSize;
     v.dropKey = g_dropKey;
     return v;
@@ -278,15 +285,16 @@ void OnDisconnect() {
     for (const uint64_t n : g_refused) refused += n;
     if (g_sent || g_ran || g_unkeyed || refused || g_dropSize || g_dropKey)
         UE_LOGI("[COFFEE-INTENT] session end -- sent=%llu ran=%llu unkeyed=%llu denied=%llu (no device %llu, wrong "
-                "class %llu, out of reach %llu, not run %llu, queue full %llu) dropped at the edge: size %llu, "
-                "key %llu",
+                "class %llu, out of reach %llu, not run %llu, queue full %llu, sender dead %llu) dropped at the "
+                "edge: size %llu, key %llu",
                 static_cast<unsigned long long>(g_sent), static_cast<unsigned long long>(g_ran),
                 static_cast<unsigned long long>(g_unkeyed), static_cast<unsigned long long>(refused),
                 static_cast<unsigned long long>(g_refused[kNoDevice]),
                 static_cast<unsigned long long>(g_refused[kWrongClass]),
                 static_cast<unsigned long long>(g_refused[kOutOfReach]),
                 static_cast<unsigned long long>(g_refused[kNotRun]),
-                static_cast<unsigned long long>(g_refused[kQueueFull]), static_cast<unsigned long long>(g_dropSize),
+                static_cast<unsigned long long>(g_refused[kQueueFull]),
+                static_cast<unsigned long long>(g_refused[kSenderDead]), static_cast<unsigned long long>(g_dropSize),
                 static_cast<unsigned long long>(g_dropKey));
     g_sent = g_ran = g_unkeyed = g_claims = g_dropSize = g_dropKey = 0;
     for (uint64_t& n : g_refused) n = 0;
