@@ -140,7 +140,10 @@ bool StreamsRun() {
            coop::net_pump::IsWorldSettled() && coop::join_membership_sweep::HasLoadTailQuiesced();
 }
 
-long LoadKb() { return coop::config::ResolveInt(coop::config_registry::rows::prop_syncer_load_kb); }
+long LoadKb() {
+    static const long kb = coop::config::ResolveInt(coop::config_registry::rows::prop_syncer_load_kb);
+    return kb;
+}
 
 }  // namespace detail
 

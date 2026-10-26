@@ -105,8 +105,9 @@ namespace coop::dev::prop_syncer_drill {
 // transport refuses, so a send that returns false is a failed arm.
 void BeforeGrant(coop::net::Session& s, uint8_t slot) {
     detail::HostState& h = detail::g_h;
+    if (detail::ArmOf() == detail::Arm::Off) return;
     const long kb = detail::LoadKb();
-    if (detail::ArmOf() == detail::Arm::Off || kb <= 0 || h.loadQueued || h.done) return;
+    if (kb <= 0 || h.loadQueued || h.done) return;
     h.loadQueued = true;
     constexpr uint32_t kFillBytes = sizeof(coop::net::DevLoadFillerPayload::fill);
     const uint32_t n = static_cast<uint32_t>((static_cast<uint64_t>(kb) * 1024u + kFillBytes - 1u) / kFillBytes);
