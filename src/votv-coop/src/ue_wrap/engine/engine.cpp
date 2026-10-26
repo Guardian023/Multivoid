@@ -163,7 +163,7 @@ void* g_getScaleFn = nullptr;
 void* g_setScaleFn = nullptr;
 void* g_setLifeFn = nullptr;
 void* g_setHiddenFn = nullptr;     // SetActorHiddenInGame (visual-only; instant-world deferred-hide)
-void* g_setCollisionFn = nullptr;  // SetActorEnableCollision (paired with hide so a hidden mirror is not grabbable)
+void* g_setCollisionFn = nullptr;  // SetActorEnableCollision (the Off mode of a mirror hide)
 
 // Always spawn, whatever the collision: the orphan must exist even if it overlaps geometry.
 constexpr uint8_t kAlwaysSpawn = 1;
@@ -605,8 +605,8 @@ bool SetActorHiddenInGame(void* actor, bool hidden) {
 }
 
 bool SetActorEnableCollision(void* actor, bool enabled) {
-    // Paired with hiding on a deferred-hidden mirror, so it is not grab-trace-hittable or
-    // physics-active while invisible; hide alone leaves collision on. Game thread.
+    // The whole actor's collision flag: mirror_defer's Off mode takes it for a hidden mirror that must be
+    // neither grab-trace-hittable nor physics-active; a hide alone leaves collision on. Game thread.
     if (!actor || !ResolveActorFns() || !g_setCollisionFn) {
         UE_LOGE("engine: SetActorEnableCollision unresolved (fn=%p)", g_setCollisionFn);
         return false;

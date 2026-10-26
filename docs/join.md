@@ -185,8 +185,9 @@ census counted, and a valve aborts a sweep that would remove more than half of w
 
 Visually the joiner never sees the reconcile. A full-screen curtain rises at connect and fades
 out when the primary world is assembled, at the end marker plus the spawn drain, seconds before
-quiescence (`ui/join_curtain`). Every host mirror spawns hidden and without collision
-(`coop/element/mirror_defer`); the confirmed ones are revealed as the curtain lifts, the ones
+quiescence (`ui/join_curtain`). Every host mirror spawns hidden (`coop/element/mirror_defer`): an
+NPC or a prop held for its local twin without collision, any other prop with only the physics
+collision of each primitive it owns, so no trace reaches it yet it rests on the floor `[?]`; the confirmed ones are revealed as the curtain lifts, the ones
 still pending adjudication are revealed at quiescence, after the sweep has run.
 
 ### The join window

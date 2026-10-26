@@ -411,9 +411,11 @@ bool SpawnFreshNpcMirror(const std::wstring& classW, void* actorClass, uint32_t 
     ue_wrap::kerfur::NeutralizeAiTimers(spawned);
 
     // Hidden until the reveal, after the install so it is enumerable. A fresh-spawn NPC has no
-    // local twin, so it is confirmed and revealed at the curtain lift; collision off, so the
-    // invisible capsule cannot block the player.
-    coop::mirror_defer::OnMirrorSpawned(elementId, spawned, /*collisionOff=*/true, /*holdUntilQuiescence=*/false);
+    // local twin, so it is confirmed and revealed at the curtain lift; collision Off, not PhysicsOnly:
+    // the mirror is parked, so it has no floor to keep, and a PhysicsOnly capsule could shove local
+    // props or block the player.
+    coop::mirror_defer::OnMirrorSpawned(elementId, spawned, coop::mirror_defer::HideCollision::Off,
+                                        /*holdUntilQuiescence=*/false);
 
     UE_LOGI("npc-sync[client OnSpawn]: materialized mirror eid=%u class='%ls' actor=%p loc=(%.0f, %.0f, %.0f)",
             elementId, classW.c_str(), spawned, locX, locY, locZ);

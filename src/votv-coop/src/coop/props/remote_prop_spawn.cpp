@@ -232,7 +232,7 @@ void OnSpawn(const coop::net::PropSpawnPayload& payload, int senderSlot,
             // Hide the fresh mirror until the reveal: a moved-save pile (hasMatchPos) whose local
             // native at the old spot is still visible holds to quiescence; a derived or window pile
             // reveals at the curtain lift. A convert re-skin (skipBind) is OnConvert's.
-            coop::mirror_defer::OnMirrorSpawned(payload.elementId, mirror, /*collisionOff=*/false,
+            coop::mirror_defer::OnMirrorSpawned(payload.elementId, mirror, coop::mirror_defer::HideCollision::Keep,
                                                 /*holdUntilQuiescence=*/payload.hasMatchPos != 0);
         }
         if (outSpawned) *outSpawned = mirror;

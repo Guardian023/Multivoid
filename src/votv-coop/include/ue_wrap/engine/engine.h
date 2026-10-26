@@ -148,8 +148,9 @@ bool SetActorTickEnabled(void* actor, bool enabled);
 // below. Game thread.
 bool SetActorHiddenInGame(void* actor, bool hidden);
 
-// AActor::SetActorEnableCollision; pair it with a hide so an invisible mirror is neither grabbable
-// nor physics-active. Game thread.
+// AActor::SetActorEnableCollision: the whole actor's collision flag, query and physics. A mirror that
+// must be neither grabbable nor physics-active while hidden takes it (mirror_defer's Off mode); one that
+// must still land on the floor keeps its physics through SetActorRootCollisionEnabled. Game thread.
 bool SetActorEnableCollision(void* actor, bool enabled);
 
 // AActor::CustomTimeDilation, the actor's own multiplier on its tick delta (the world's global dilation
