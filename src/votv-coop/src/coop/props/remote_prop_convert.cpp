@@ -11,6 +11,7 @@
 #include "coop/props/remote_prop.h"
 #include "remote_prop_internal.h"  // ResolveLiveActorByEid + DestroyEchoSuppressed (impl-private seam)
 
+#include "coop/element/bind_wait.h"           // Hold: a convert for an eid whose twin is pending
 #include "coop/element/quiescence_drain.h"   // HasPendingSaveTimeTwin
 #include "coop/props/trash_mirror.h"         // Materialize / RepositionBoundNative
 #include "coop/props/pile_look.h"
@@ -27,12 +28,26 @@
 #include "ue_wrap/engine/engine.h"
 
 #include <cmath>
+#include <cstring>
 #include <string>
 
 namespace coop::remote_prop {
 
 namespace R = ue_wrap::reflection;
 namespace E = ue_wrap::engine;
+
+namespace {
+constexpr uint16_t kConvertKind = static_cast<uint16_t>(coop::net::ReliableKind::PropConvert);
+
+// A convert held in bind_wait runs again once its eid binds: the whole of OnConvert, so the context
+// gate judges it fresh and a native that has loaded by then takes the claim branches.
+void ReplayConvert(const uint8_t* bytes, size_t n, int senderSlot) {
+    coop::net::PropConvertPayload p{};
+    if (n != sizeof p) return;
+    std::memcpy(&p, bytes, sizeof p);
+    OnConvert(p, nullptr, senderSlot);
+}
+}  // namespace
 
 void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlayer*/, int senderSlot) {
     UE_ASSERT_GAME_THREAD("g_drives (remote_prop::OnConvert)");
@@ -50,6 +65,18 @@ void* OnConvert(const coop::net::PropConvertPayload& payload, void* /*localPlaye
     UE_LOGI("[PILE] CLIENT recv convert %s eid=%u ctx=%u known=%u mirror=%p -- RECEPTION (pre-gate)",
             edge, E, static_cast<unsigned>(payload.ctx),
             static_cast<unsigned>(coop::trash_channel::CtxForEid(E)), cur);
+    // The row precedes its converts in send order (the join gate), but the row's native can load
+    // later than the convert: a pile whose twin is still pending has no actor here, and a mirror
+    // materialised now would double it when the native arrives. The convert waits for the bind and
+    // replays through OnConvert, in arrival order; a give-up drops it. Before the context gate, so
+    // a held convert does not advance E's generation and the replay is judged fresh.
+    if (!cur && coop::element::bind_wait::IsDeferred(E) &&
+        coop::element::bind_wait::Hold(E, kConvertKind, senderSlot, &ReplayConvert, &payload, sizeof payload,
+                                       /*coalesce=*/false)) {
+        UE_LOGI("[PILE] CLIENT convert %s eid=%u ctx=%u -- the eid's twin is pending; held in bind_wait",
+                edge, E, static_cast<unsigned>(payload.ctx));
+        return nullptr;
+    }
     // Adopt the host's context for E and drop a stale or out-of-order convert (a duplicate, or
     // one older than a transition already applied).
     if (!coop::trash_channel::AdoptInboundConvertCtx(E, payload.ctx)) return nullptr;
