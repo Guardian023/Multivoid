@@ -159,6 +159,9 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/cord_drill_client.cpp
     src/coop/dev/cord_drill_hand.cpp
     src/coop/dev/cord_drill_host.cpp
+    src/coop/dev/cord_pos_drill.cpp
+    src/coop/dev/cord_pos_drill_client.cpp
+    src/coop/dev/cord_pos_drill_host.cpp
     src/coop/dev/grid_drill.cpp
     src/coop/dev/grid_drill_checks.cpp
     src/coop/dev/grid_drill_upgrade.cpp
