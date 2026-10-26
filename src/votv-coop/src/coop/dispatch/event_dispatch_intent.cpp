@@ -323,14 +323,14 @@ bool HandleIntentEvent(net::Session& session,
         break;
     }
     case net::ReliableKind::CoffeeActionIntent: {
-        if (session.role() != net::Role::Host || msg.senderPeerSlot < 1 || msg.senderPeerSlot >= net::kMaxPeers ||
-            msg.payloadLen != sizeof(net::CoffeeActionIntentPayload)) {
-            UE_LOGW("event_feed: CoffeeActionIntent dropped (role, sender slot %d or length %zu)",
-                    msg.senderPeerSlot, static_cast<size_t>(msg.payloadLen));
+        if (session.role() != net::Role::Host || msg.senderPeerSlot < 1 || msg.senderPeerSlot >= net::kMaxPeers) {
+            UE_LOGW("event_feed: CoffeeActionIntent dropped (role or sender slot %d)", msg.senderPeerSlot);
             break;
         }
         net::CoffeeActionIntentPayload p{};
+        if (msg.payloadLen != sizeof(p)) { coop::coffee_intent::CountDropped(coop::coffee_intent::Drop::Size); break; }
         std::memcpy(&p, msg.payload, sizeof(p));
+        if (p.key.len > sizeof(p.key.data)) { coop::coffee_intent::CountDropped(coop::coffee_intent::Drop::Key); break; }
         coop::coffee_intent::OnAction(session, p, static_cast<uint8_t>(msg.senderPeerSlot));
         break;
     }

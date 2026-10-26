@@ -274,6 +274,8 @@ DrillView ReadForDrill() {
     DrillView v;
     v.cancelled = g_cancelled;
     v.hits = g_tallyHits;
+    v.madeMaker = g_madeMaker;
+    v.recordsRefused = g_recordsRefused;
     for (const ClassTally& t : g_tally) v.byClass.push_back({t.name, t.n});
     void* other = g_lastOther.Get();
     if (other && ue_wrap::prop::IsDescendantOfProp(other)) v.lastOtherKey = ue_wrap::prop::GetKeyString(other);

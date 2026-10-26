@@ -34,7 +34,8 @@ void Tick();
 void OnDisconnect();
 
 // What the coffee drill reads of a client: how many of its own runs of the hit handler were cancelled this
-// session, and the key of the other actor of the newest one ("" when it is no keyed prop or no longer here).
+// session, and the key of the other actor of the newest one ("" when it is no keyed prop or no longer here); and,
+// for the hostile drill, the maker records the host published and the client records its gate refused.
 // With the drill on (coffee_drill), every run of the hit handler on either role is also tallied: `hits` in all and
 // `byClass` by the class of the actor that touched the maker. Both stay empty with it off.
 struct ClassCount {
@@ -45,6 +46,7 @@ struct DrillView {
     uint64_t     cancelled = 0;
     std::wstring lastOtherKey;
     uint64_t     hits = 0;
+    uint64_t     madeMaker = 0, recordsRefused = 0;
     std::vector<ClassCount> byClass;
 };
 DrillView ReadForDrill();

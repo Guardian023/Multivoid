@@ -35,8 +35,22 @@ void Tick(coop::net::Session& session);
 void OnAction(coop::net::Session& session, const coop::net::CoffeeActionIntentPayload& payload,
               uint8_t senderSlot);
 
+// The dispatcher refused a press of this kind, for this reason: counted, not logged, so a flood costs no line. A
+// payload that is not the struct's size, or a key longer than the wire's.
+enum class Drop : uint8_t { Size, Key };
+void CountDropped(Drop why);
+
 // The session ended: the counters, with one summary line. A sender's queue, its rate and its said-once latches
 // live in its per-slot state and go with its occupant.
 void OnDisconnect();
+
+// What the hostile drill reads of the host's lane. Every press past the dispatcher is one claim, and each claim
+// ends in exactly one of ran and the refusals; the dispatcher's drops are not claims. A read.
+struct DrillView {
+    uint64_t claims = 0, ran = 0;
+    uint64_t noDevice = 0, wrongClass = 0, outOfReach = 0, notRun = 0, queueFull = 0;
+    uint64_t dropSize = 0, dropKey = 0;
+};
+DrillView ReadForDrill();
 
 }  // namespace coop::coffee_intent

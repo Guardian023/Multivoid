@@ -80,7 +80,7 @@ uint64_t g_refused[kReasonCount] = {};
 struct Said { uint64_t nextMs = 0; uint64_t since = 0; };
 Said g_said[kReasonCount];
 
-uint64_t g_sent = 0, g_ran = 0, g_unkeyed = 0;
+uint64_t g_sent = 0, g_ran = 0, g_unkeyed = 0, g_claims = 0, g_dropSize = 0, g_dropKey = 0;
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -248,26 +248,47 @@ void OnAction(coop::net::Session& session, const coop::net::CoffeeActionIntentPa
               uint8_t senderSlot) {
     if (session.role() != coop::net::Role::Host) return;
     if (senderSlot < 1 || senderSlot >= coop::net::kMaxPeers) return;
+    ++g_claims;
     Slot& sl = g_slots[senderSlot];
     auto payloadCopy = payload;
     if (!sl.queue.Push(std::move(payloadCopy), kMaxPending))
         Refuse(kQueueFull, senderSlot, coop::net::StringFromWireKey(payload.key), nullptr);
 }
 
+void CountDropped(Drop why) {
+    ++(why == Drop::Size ? g_dropSize : g_dropKey);
+}
+
+DrillView ReadForDrill() {
+    DrillView v;
+    v.claims = g_claims;
+    v.ran = g_ran;
+    v.noDevice = g_refused[kNoDevice];
+    v.wrongClass = g_refused[kWrongClass];
+    v.outOfReach = g_refused[kOutOfReach];
+    v.notRun = g_refused[kNotRun];
+    v.queueFull = g_refused[kQueueFull];
+    v.dropSize = g_dropSize;
+    v.dropKey = g_dropKey;
+    return v;
+}
+
 void OnDisconnect() {
     uint64_t refused = 0;
     for (const uint64_t n : g_refused) refused += n;
-    if (g_sent || g_ran || g_unkeyed || refused)
+    if (g_sent || g_ran || g_unkeyed || refused || g_dropSize || g_dropKey)
         UE_LOGI("[COFFEE-INTENT] session end -- sent=%llu ran=%llu unkeyed=%llu denied=%llu (no device %llu, wrong "
-                "class %llu, out of reach %llu, not run %llu, queue full %llu)",
+                "class %llu, out of reach %llu, not run %llu, queue full %llu) dropped at the edge: size %llu, "
+                "key %llu",
                 static_cast<unsigned long long>(g_sent), static_cast<unsigned long long>(g_ran),
                 static_cast<unsigned long long>(g_unkeyed), static_cast<unsigned long long>(refused),
                 static_cast<unsigned long long>(g_refused[kNoDevice]),
                 static_cast<unsigned long long>(g_refused[kWrongClass]),
                 static_cast<unsigned long long>(g_refused[kOutOfReach]),
                 static_cast<unsigned long long>(g_refused[kNotRun]),
-                static_cast<unsigned long long>(g_refused[kQueueFull]));
-    g_sent = g_ran = g_unkeyed = 0;
+                static_cast<unsigned long long>(g_refused[kQueueFull]), static_cast<unsigned long long>(g_dropSize),
+                static_cast<unsigned long long>(g_dropKey));
+    g_sent = g_ran = g_unkeyed = g_claims = g_dropSize = g_dropKey = 0;
     for (uint64_t& n : g_refused) n = 0;
     for (Said& sd : g_said) sd = Said{};
     g_actionSaid = false;
