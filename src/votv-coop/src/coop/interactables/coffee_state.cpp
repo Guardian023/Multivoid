@@ -44,6 +44,16 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 // Each watch registers once; the set settles once both are live, or once no name is left to resolve.
 bool g_brewWatched = false, g_hitWatched = false, g_settled = false, g_gatesRegistered = false;
 
+// Each maker's cancelled hits, for the bounded line: the count so far, when the next line may be said, and the count
+// at the last line said. Sized by the makers a session has seen, so the steady state allocates nothing.
+struct CancelSay {
+    void*    maker;
+    uint64_t n;
+    uint64_t nextMs;
+    uint64_t lastN;
+};
+std::vector<CancelSay> g_cancelSay;
+
 uint64_t g_cancelled = 0, g_madeMaker = 0, g_madeBag = 0, g_recordsRefused = 0, g_publishFailed = 0;
 // The other actor of the newest cancelled hit, for the drill's read only.
 ue_wrap::CachedObjRef g_lastOther;
@@ -81,6 +91,25 @@ void PublishRecord(coop::net::Session* s, void* actor, const char* what, uint64_
         return;
     }
     ++made;
+}
+
+// The client's cancelled hit on `maker`, said for the first three of that maker and then once in kRefusalSayMs
+// with the count since the last line: the hit runs at contact rate, so a count-based bound still said twice a second.
+void SayCancelled(void* maker) {
+    CancelSay* c = nullptr;
+    for (CancelSay& x : g_cancelSay)
+        if (x.maker == maker) { c = &x; break; }
+    if (!c) {
+        g_cancelSay.push_back({maker, 0, 0, 0});
+        c = &g_cancelSay.back();
+    }
+    ++c->n;
+    if (c->n > 3 && NowMs() < c->nextMs) return;
+    UE_LOGI("[COFFEE-STATE] a client's hit on maker %p is cancelled -- the fill is the host's (%llu since the last "
+            "line, %llu in all)", maker, static_cast<unsigned long long>(c->n - c->lastN),
+            static_cast<unsigned long long>(c->n));
+    c->lastN = c->n;
+    c->nextMs = NowMs() + kRefusalSayMs;
 }
 
 // ---- the brew --------------------------------------------------------------------------------
@@ -148,12 +177,10 @@ sg::Verdict OnHitPre(const sg::Call& call) {
             coop::config::ResolveEnum(coop::config_registry::rows::coffee_red) == "no_cancel";
         if (s_redNoCancel) return sg::Verdict::Run;
         // The fill is the host's: this copy's run would destroy its mirror of the cup and set flags no record
-        // carries. The cup's destroy and the maker's record come from the host. Contact rate: counted, said for
-        // the first three and every sixtieth.
-        const uint64_t n = ++g_cancelled;
-        if (n <= 3 || n % 60 == 0)
-            UE_LOGI("[COFFEE-STATE] a client's hit on maker %p is cancelled -- the fill is the host's (#%llu)",
-                    call.object, static_cast<unsigned long long>(n));
+        // carries. The cup's destroy and the maker's record come from the host. Contact rate: counted, and said
+        // bounded by time.
+        ++g_cancelled;
+        SayCancelled(call.object);
         return sg::Verdict::Cancel;
     }
     if (s->role() != coop::net::Role::Host) return sg::Verdict::Run;
@@ -238,6 +265,7 @@ void OnDisconnect() {
     g_brewNote = Note{};
     g_hitNote = Note{};
     g_lastOther.Reset();
+    g_cancelSay.clear();
     g_tally.clear();
     g_tallyHits = 0;
 }
