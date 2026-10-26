@@ -2,6 +2,7 @@
 
 #include "coop/creatures/kerfus_state.h"
 
+#include "coop/element/bind_wait.h"
 #include "coop/element/element.h"
 #include "coop/element/mirror_manager.h"
 #include "coop/element/prop.h"
@@ -20,6 +21,7 @@
 #include <atomic>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
 #include <unordered_map>
 
 namespace coop::kerfus_state {
@@ -39,8 +41,7 @@ constexpr int kTagTick = 0x4B465401;  // 'KFT' 1
 // drains a unit in 30 s and charges one in 5 s.
 constexpr float    kEnergyStep     = 0.5f;
 constexpr uint64_t kEnergyPeriodMs = 1000;
-// A state whose Kerfus has not bound on this client in two minutes names one that is gone.
-constexpr uint64_t kWaitExpiryMs = 120000;
+constexpr uint16_t kStateKind = static_cast<uint16_t>(coop::net::ReliableKind::KerfusState);
 
 std::atomic<coop::net::Session*> g_session{nullptr};
 bool g_watched = false;
@@ -110,14 +111,9 @@ void OnTickPost(const sg::Call& c) {
 
 // ---- client --------------------------------------------------------------------------------------
 
-struct Waiting {
-    coop::net::KerfusStatePayload p;
-    uint64_t since;
-};
-std::unordered_map<uint32_t, Waiting> g_waiting;
 bool g_saidWrongClass = false;
 
-// False while the Kerfus's mirror is not bound here: the state waits.
+// False while the Kerfus's mirror is not bound here: the state is held in bind_wait for its bind.
 bool Apply(const coop::net::KerfusStatePayload& p) {
     EL::Prop* el = EL::MirrorManager<EL::Prop>::Instance().Get(static_cast<EL::ElementId>(p.elementId));
     void* k = el ? el->GetActor() : nullptr;
@@ -158,18 +154,6 @@ void Tick() {
             UE_LOGI("kerfus_state: the Kerfus's tick is watched -- a host sends its state");
         }
     }
-    if (g_waiting.empty()) return;
-    const uint64_t ms = coop::active_drive::NowMs();
-    for (auto it = g_waiting.begin(); it != g_waiting.end();) {
-        if (Apply(it->second.p)) { it = g_waiting.erase(it); continue; }
-        if (ms - it->second.since > kWaitExpiryMs) {
-            UE_LOGW("kerfus_state: the state for eid=%u waited %llu s for its Kerfus -- dropped", it->first,
-                    static_cast<unsigned long long>((ms - it->second.since) / 1000));
-            it = g_waiting.erase(it);
-            continue;
-        }
-        ++it;
-    }
 }
 
 void OnPeerWorldReady(int slot) {
@@ -189,16 +173,28 @@ void OnPeerWorldReady(int slot) {
     if (sent) UE_LOGI("kerfus_state: slot %d's world is up -- sent %d Kerfus state(s)", slot, sent);
 }
 
+namespace {
+// A state held in bind_wait runs again once its Kerfus is bound: the whole of OnState.
+void ReplayState(const uint8_t* bytes, size_t n, int /*senderSlot*/) {
+    coop::net::KerfusStatePayload p{};
+    if (n != sizeof p) return;
+    std::memcpy(&p, bytes, sizeof p);
+    OnState(p);
+}
+}  // namespace
+
 void OnState(const coop::net::KerfusStatePayload& payload) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s) return;  // from the host alone: its receive edge refuses a client's copy
-    if (Apply(payload)) { g_waiting.erase(payload.elementId); return; }
-    g_waiting[payload.elementId] = Waiting{payload, coop::active_drive::NowMs()};
+    if (Apply(payload)) return;
+    // Latest state wins. Not deferred: no bind is coming for this eid, so there is nothing to wait for.
+    if (!coop::element::bind_wait::Hold(payload.elementId, kStateKind, /*senderSlot=*/0, &ReplayState, &payload,
+                                        sizeof payload, /*coalesce=*/true))
+        coop::element::bind_wait::NoteNeverBound(kStateKind, payload.elementId);
 }
 
 void OnDisconnect() {
     g_host.clear();
-    g_waiting.clear();
     g_saidWrongClass = false;
 }
 
