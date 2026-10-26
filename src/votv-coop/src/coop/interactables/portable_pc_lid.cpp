@@ -16,6 +16,7 @@
 
 #include <atomic>
 #include <cstring>
+#include <set>
 #include <vector>
 
 namespace coop::portable_pc_lid {
@@ -46,6 +47,7 @@ std::vector<HeldEdge> g_held;
 
 uint64_t g_nextRetry = 0;
 bool g_saidUnreadable = false;  // a live PC whose lid does not read: said once a session
+std::set<uint32_t> g_wrongClassSaid;  // eids a lid line named that are no portable PC here (said once a session)
 Counts g_counts{};  // [dev] this session's authored and applied lines
 
 // The lane's own `open` calls in progress (game thread): a receiver's apply runs the verb a player
@@ -264,8 +266,9 @@ void OnLid(const coop::net::LaptopStatePayload& p, uint8_t senderSlot) {
     const bool opened = p.isOpened != 0;
     void* actor = coop::element::LivePropActor(p.eid);
     if (actor && !IsPc(actor)) {
-        UE_LOGW("portable_pc_lid: a lid line for eid=%u (from slot %u) names a prop that is not a portable PC -- "
-                "dropped", p.eid, static_cast<unsigned>(senderSlot));
+        if (g_wrongClassSaid.insert(p.eid).second)
+            UE_LOGW("portable_pc_lid: a lid line for eid=%u (from slot %u) names a prop that is not a portable PC -- "
+                    "dropped", p.eid, static_cast<unsigned>(senderSlot));
         return;
     }
     if (!actor) {
@@ -328,6 +331,7 @@ Counts LineCounts() {
 void OnDisconnect() {
     g_counts = {};
     g_saidUnreadable = false;
+    g_wrongClassSaid.clear();
     g_held.clear();
     g_nextRetry = 0;
     g_inFlight.clear();

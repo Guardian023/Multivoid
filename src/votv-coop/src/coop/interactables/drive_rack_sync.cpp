@@ -25,6 +25,7 @@
 #include <chrono>
 #include <cstring>
 #include <map>
+#include <set>
 #include <vector>
 
 namespace coop::drive_rack_sync {
@@ -49,6 +50,7 @@ std::map<uint32_t, std::vector<uint8_t>> g_rackShadow;  // rack eid -> last cano
 // MTA keeps an element's state on the element (reference/mtasa-blue/Client/mods/deathmatch/logic/CClientObject.cpp);
 // ours is the engine's actor, so the lane tags each shadow with the actor it was read from.
 std::map<uint32_t, ue_wrap::CachedObjRef> g_rackActor;  // rack eid -> the actor its shadow was taken from
+std::set<uint32_t> g_wrongClassSaid;  // eids a canonical named that are no rack here (said once a session)
 
 bool g_primed = false;
 bool g_wasConnected = false;
@@ -409,8 +411,9 @@ void ClientApplyRackBlob(const coop::net::RackStateHead& h, const std::vector<ui
     }
     if (!DC::IsRackClass(R::ClassOf(rack))) {
         // A live actor of another class: an identity defect to see, not a wait.
-        UE_LOGW("drive_rack: a canonical for eid=%u names a live actor that is not a prop_driveRack_C -- dropped",
-                h.rackEid);
+        if (g_wrongClassSaid.insert(h.rackEid).second)
+            UE_LOGW("drive_rack: a canonical for eid=%u names a live actor that is not a prop_driveRack_C -- dropped",
+                    h.rackEid);
         return;
     }
     // Drain before adopt: push any local pending diff as ops FIRST.
@@ -552,6 +555,7 @@ uint64_t HostCanonicalsSent() {
 }
 
 void OnDisconnect() {
+    g_wrongClassSaid.clear();
     g_rackDirty.store(false, std::memory_order_relaxed);
     g_rackBase.clear();
     g_rackShadow.clear();

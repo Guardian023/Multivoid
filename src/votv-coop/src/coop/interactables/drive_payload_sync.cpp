@@ -25,6 +25,7 @@
 #include <cstring>
 #include <cwchar>
 #include <map>
+#include <set>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -89,7 +90,7 @@ coop::blob_chunks::Assembler g_asm;
 Clock::time_point g_nextSlow{};
 Clock::time_point g_nextStats{};
 Clock::time_point g_nextRefusalSay[coop::net::kMaxPeers] = {};
-Clock::time_point g_nextWrongClassSay{};
+std::set<uint32_t> g_wrongClassSaid;  // eids a row named that are no drive here (said once a session)
 Counts g_counts;
 
 enum class Reg : uint8_t { Pending, Registered, Refused };
@@ -339,11 +340,8 @@ void ApplyBlob(const std::vector<uint8_t>& blob, uint8_t senderSlot) {
     }
     if (!DC::IsDriveClass(R::ClassOf(actor))) {
         // A live actor of another class: an identity defect to see, not a wait.
-        const auto now = Clock::now();
-        if (now >= g_nextWrongClassSay) {
-            g_nextWrongClassSay = now + kSayEvery;
+        if (g_wrongClassSaid.insert(eid).second)
             UE_LOGW("drive_payload_sync: a row for eid=%u names a live actor that is not a prop_drive_C -- dropped", eid);
-        }
         return;
     }
     SD::Row row;
@@ -555,7 +553,7 @@ void OnDisconnect() {
     g_applying = false;
     g_counts = Counts{};
     for (auto& t : g_nextRefusalSay) t = {};
-    g_nextWrongClassSay = {};
+    g_wrongClassSaid.clear();
 }
 
 Counts LaneCounts() { return g_counts; }

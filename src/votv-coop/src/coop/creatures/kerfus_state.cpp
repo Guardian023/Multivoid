@@ -22,6 +22,7 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <set>
 #include <unordered_map>
 
 namespace coop::kerfus_state {
@@ -111,7 +112,7 @@ void OnTickPost(const sg::Call& c) {
 
 // ---- client --------------------------------------------------------------------------------------
 
-bool g_saidWrongClass = false;
+std::set<uint32_t> g_wrongClassSaid;  // eids a state named that are no Kerfus here (said once a session)
 
 // False while the Kerfus's mirror is not bound here: the state is held in bind_wait for its bind.
 bool Apply(const coop::net::KerfusStatePayload& p) {
@@ -120,10 +121,8 @@ bool Apply(const coop::net::KerfusStatePayload& p) {
     if (!k || !R::IsLiveByIndex(k, el->GetInternalIdx())) return false;
     bool wasActive = false;
     if (!UK::IsKerfus(k) || !UK::ReadActive(k, wasActive)) {
-        if (!g_saidWrongClass) {
-            g_saidWrongClass = true;
+        if (g_wrongClassSaid.insert(p.elementId).second)
             UE_LOGW("kerfus_state: a state named eid=%u, which is no Kerfus here -- dropped", p.elementId);
-        }
         return true;
     }
     const bool active = (p.flags & KF::kActive) != 0;
@@ -195,7 +194,7 @@ void OnState(const coop::net::KerfusStatePayload& payload) {
 
 void OnDisconnect() {
     g_host.clear();
-    g_saidWrongClass = false;
+    g_wrongClassSaid.clear();
 }
 
 }  // namespace coop::kerfus_state

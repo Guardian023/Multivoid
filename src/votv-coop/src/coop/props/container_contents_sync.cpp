@@ -77,6 +77,7 @@ coop::blob_chunks::Assembler g_asm;
 // than the component pointer: IsLive cannot detect an address recycled by a new object between the
 // edge and the drain, and an eid re-resolves forward, so a destroyed container stops resolving.
 std::set<uint32_t> g_dirty;
+std::set<uint32_t> g_wrongClassSaid;  // eids a slice named that are no container here (said once a session)
 
 // The hash of the last blob sent and of the last applied, per eid. Skipping an unchanged blob is
 // what bounds the orphaned-buffer cost: a steady-state re-broadcast applies and allocates nothing.
@@ -289,7 +290,8 @@ Ingest ApplyContents(uint32_t eid, const std::vector<SR::SaveRecord>& recs, uint
     if (!actor) return Ingest::NoActor;
     // The wire eid must name a container before a cached component offset is read off it.
     if (!ci::IsContainer(actor)) {
-        UE_LOGW("container_contents: eid=%u does not resolve to a container -- refusing", eid);
+        if (g_wrongClassSaid.insert(eid).second)
+            UE_LOGW("container_contents: eid=%u does not resolve to a container -- refusing", eid);
         return Ingest::Handled;
     }
     void* inv = ci::InventoryOf(actor);
@@ -688,6 +690,7 @@ bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol) {
 }
 
 void OnDisconnect() {
+    g_wrongClassSaid.clear();
     g_dirty.clear();
     g_retry.clear();
     wp::Reset();

@@ -30,6 +30,7 @@
 #include <chrono>
 #include <cstdio>
 #include <cstring>
+#include <set>
 #include <vector>
 
 namespace coop::drive_sync {
@@ -116,7 +117,7 @@ uint64_t g_cGrabKept = 0;  // this player's grab left alone inside a replayed in
 uint64_t g_cPrimedOffWorld = 0;  // CLIENT: slot edges outside the world it announced, primed
 uint64_t g_cRekeyed = 0;         // a slot's drive under a new eid, primed
 uint64_t g_cEjectRefused = 0;    // HOST: client ejects naming another drive, answered
-uint64_t g_cWrongClass = 0;      // a slot line naming a live actor that is not a drive, dropped
+std::set<uint32_t> g_wrongClassSaid;  // eids a slot line named that are no drive here (said once a session)
 
 // ---- the local player is never the subject of a replayed insert ----
 // The slot's putDriveIn, and the eraser's handler of the slot's driveIn, end the grab of the machine's
@@ -330,8 +331,10 @@ void OnSlotLine(const coop::net::DriveSlotStatePayload& p, uint8_t senderSlot) {
         void* drive = LivePropActor(p.driveEid);
         if (!drive) {
             // Held for the drive's bind, with the role's generation after this line's own bump: a newer line or
-            // a move of the slot since voids it at replay -- never resurrect a stale occupant. Not deferred: no
-            // bind is coming for this eid, so there is nothing to wait for.
+            // a move of the slot since voids it at replay -- never resurrect a stale occupant. This is the one
+            // module that holds several lines per eid (coalesce=false), each judged by its own role's generation;
+            // the others keep the latest state of an eid. Not deferred: no bind is coming for this eid, so there
+            // is nothing to wait for.
             ++g_roleGen[p.role];
             HeldSlotLine held{};
             held.line = p;
@@ -343,7 +346,7 @@ void OnSlotLine(const coop::net::DriveSlotStatePayload& p, uint8_t senderSlot) {
         }
         if (!DC::IsDriveClass(R::ClassOf(drive))) {
             // A live actor of another class: an identity defect to see, not a wait.
-            if (++g_cWrongClass <= 20)
+            if (g_wrongClassSaid.insert(p.driveEid).second)
                 UE_LOGW("drive_sync: slot role=%u line names eid=%u, a live actor that is not a prop_drive_C -- "
                         "dropped", p.role, p.driveEid);
             return;
@@ -531,7 +534,8 @@ void OnDisconnect() {
     g_wasConnected = false;
     g_replayingInsert = false;
     g_cGrabKept = 0;
-    g_cPrimedOffWorld = g_cRekeyed = g_cEjectRefused = g_cWrongClass = 0;
+    g_cPrimedOffWorld = g_cRekeyed = g_cEjectRefused = 0;
+    g_wrongClassSaid.clear();
     g_session.store(nullptr, std::memory_order_release);
     UE_LOGI("drive_sync: teardown (slot baselines cleared)");
 }
