@@ -205,6 +205,8 @@ bool Tick(coop::net::Session& session) {
             if (session.role() != coop::net::Role::Host) return;
             for (int slot = 1; slot < coop::players::kMaxPeers; ++slot) {
                 if (session.IsSlotReady(slot)) {
+                    // Costs the peer's Default lane one drain, on a world transition.
+                    session.OpenJoinGate(slot);
                     coop::prop_snapshot::TriggerForSlot(slot);
                     UE_LOGI("net_pump: re-snapshot ready slot %d after re-seed", slot);
                 }

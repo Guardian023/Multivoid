@@ -327,6 +327,8 @@ public:
 
     // The slot's snapshot has completed: its held sends join the Default lane (SendBacklog::CloseJoinGate).
     void CloseJoinGate(int slot) { backlog_.CloseJoinGate(slot); }
+    // The slot's snapshot is about to run again: its Default-lane sends wait behind it (SendBacklog::OpenJoinGate).
+    void OpenJoinGate(int slot) { backlog_.OpenJoinGate(slot); }
 
     // What the net thread last published about this slot's link: delivered and still-owed reliable
     // bytes, with the sample's time on the net clock. See SendRateControl::Published. Any thread.
