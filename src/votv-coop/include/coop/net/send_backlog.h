@@ -73,7 +73,8 @@ public:
     // under ONE acquisition of the slot's lock, in order: a join gate opened on the net thread cannot
     // split them, so they go straight or are held together. Each packet follows SendOrQueue's rules;
     // the first Dropped ends the batch. Returns Dropped if one was, else Queued if any was held, else
-    // Streamed; `streamed` is how many entered GNS. Any thread.
+    // Streamed; `streamed` is how many entered GNS. The slot lock is held across up to 255 sends
+    // (a blob's chunk ceiling), about the length of one Drain pass (kDrainPassCap). Any thread.
     SendOutcome SendOrQueueBatch(int slot, int lane, uint32_t hConn, const uint8_t* wire, int len,
                                  int count, SendAdmission& adm, int& streamed);
 
@@ -101,14 +102,13 @@ public:
     // The join gate: MTA's not-yet-joined player (CPlayerManager.cpp:159-172, BroadcastOnlyJoined). From
     // OpenJoinGate to CloseJoinGate, every Default-lane send to the slot is appended to the slot's join
     // queue in send order, except a send made inside a SnapshotSendScope for that slot. CloseJoinGate
-    // splices the queue onto the slot's Default lane behind what is already there, as one move under the
-    // lock, and lifts the gate; a slot that leaves drops its queue with the rest of its backlog (FreeSlot).
+    // splices the queue onto the slot's Default lane behind what is already there under the lock (a swap
+    // when the lane is empty, an append otherwise), and lifts the gate; a slot that leaves drops its queue with the rest of its backlog (FreeSlot).
     // The queue counts toward the slot's byte cap and its stale-connection stamp, and not toward the
     // no-progress timer, DepthBytes or SlotReliableIdle. OpenJoinGate on an open gate keeps its queue.
     // Any thread.
     void OpenJoinGate(int slot);
     void CloseJoinGate(int slot);
-    bool JoinGateOpen(int slot);
 
     // Max messages one Drain() pass re-injects: bounds the per-slot mutex hold, and so the
     // cross-lane wait, to sub-millisecond; the next net-thread pass continues. 256 messages at
@@ -141,7 +141,7 @@ private:
         };
         bool joinGate = false;
         std::deque<std::vector<uint8_t>> joinQ;
-        std::deque<JoinStamp> joinStamps;
+        std::vector<JoinStamp> joinStamps;
         size_t joinBytes = 0;
         std::chrono::steady_clock::time_point joinOpenedAt{};
         bool joinWarned = false;  // the open-too-long warning fires once per open

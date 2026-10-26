@@ -409,6 +409,15 @@ void Session::HandleMessage(int peerSlot, uint32_t hConn, const void* data, int 
             // that locks after is dropped here -- none is left for the game thread to dispatch
             // after the slot's teardown. The departed peer's message goes no further (no relay).
             if (peerConns_[peerSlot].load() != hConn) return;
+            // The join gate opens before the announce is visible to the game thread, which runs the
+            // connect replay on it: no send of that replay, and no relay reaching the slot after
+            // this, passes ungated. The snapshot's completion closes it (prop_snapshot.cpp). Lock
+            // order: the inbox mutex, then the slot's; nothing takes them the other way round.
+            if (cfg_.role == Role::Host &&
+                static_cast<ReliableKind>(rh.kind) == ReliableKind::ClientWorldReady &&
+                peerSlot >= 1 && peerSlot < kMaxPeers) {
+                backlog_.OpenJoinGate(peerSlot);
+            }
             // No hard cap here: a silent drop on an in-order reliable lane is permanent state
             // divergence. Growth is bounded upstream by the NetThread pause both roles share, which
             // stops receiving at kReliableInboxSoftPause while GNS buffers losslessly beneath; one
@@ -437,9 +446,6 @@ void Session::HandleMessage(int peerSlot, uint32_t hConn, const void* data, int 
         if (cfg_.role == Role::Host &&
             static_cast<ReliableKind>(rh.kind) == ReliableKind::ClientWorldReady &&
             peerSlot >= 1 && peerSlot < kMaxPeers) {
-            // The join gate opens first, so no relay reaching the slot after the stamp passes ungated:
-            // the snapshot's completion closes it (prop_snapshot.cpp).
-            backlog_.OpenJoinGate(peerSlot);
             relayEligible_[peerSlot].store(peerConns_[peerSlot].load(),
                                            std::memory_order_release);
         }

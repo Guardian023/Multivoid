@@ -205,8 +205,10 @@ bool Tick(coop::net::Session& session) {
             if (session.role() != coop::net::Role::Host) return;
             for (int slot = 1; slot < coop::players::kMaxPeers; ++slot) {
                 if (session.IsSlotReady(slot)) {
+                    // A world-ready peer only: a joiner still loading is gated by its own announce,
+                    // and a gate opened earlier would hold the pre-world kinds it must receive.
                     // Costs the peer's Default lane one drain, on a world transition.
-                    session.OpenJoinGate(slot);
+                    if (session.IsSlotWorldReady(slot)) session.OpenJoinGate(slot);
                     coop::prop_snapshot::TriggerForSlot(slot);
                     UE_LOGI("net_pump: re-snapshot ready slot %d after re-seed", slot);
                 }

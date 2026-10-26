@@ -26,6 +26,9 @@ namespace coop::net {
 
 namespace {
 
+// Held messages the gate's enqueue stamps make room for at open, so a typical join does not regrow them.
+constexpr size_t kJoinStampReserve = 512;
+
 // One GNS send attempt of a prebuilt wire packet. Returns the raw rc
 // (message number >= 0 on success, -EResult on refusal). The refused
 // message is deleted by GNS (bDeleteFailedMessages) -- the caller's copy
@@ -296,13 +299,7 @@ void SendBacklog::OpenJoinGate(int slot) {
     s.joinGate = true;
     s.joinOpenedAt = std::chrono::steady_clock::now();
     s.joinWarned = false;
-}
-
-bool SendBacklog::JoinGateOpen(int slot) {
-    if (slot < 0 || slot >= static_cast<int>(coop::players::kMaxPeers)) return false;
-    SlotQ& s = slots_[slot];
-    std::lock_guard<std::mutex> lk(s.mu);
-    return s.joinGate;
+    s.joinStamps.reserve(kJoinStampReserve);
 }
 
 void SendBacklog::CloseJoinGate(int slot) {
@@ -351,12 +348,16 @@ void SendBacklog::CloseJoinGate(int slot) {
             s.joinQ.size(), s.joinBytes, kinds, other, median, maxDelay);
 
     // The splice: the held packets join the Default lane behind whatever it already holds, in send
-    // order, as one move under the lock. They become backlog from here: the byte count moves with
-    // them, and the no-progress timer starts if the lanes were empty.
+    // order, under the lock: a swap when the lane is empty, an append otherwise. They become backlog
+    // from here: the byte count moves with them, and the no-progress timer starts if the lanes were empty.
     LaneQ& dl = s.lanes[static_cast<int>(Lane::Default)];
     if (!s.joinQ.empty()) {
         if (s.totalBytes == 0) s.lastProgress = now;
-        for (auto& m : s.joinQ) dl.q.push_back(std::move(m));
+        if (dl.q.empty()) {
+            dl.q.swap(s.joinQ);
+        } else {
+            for (auto& m : s.joinQ) dl.q.push_back(std::move(m));
+        }
         dl.bytes += s.joinBytes;
         s.totalBytes += s.joinBytes;
     }

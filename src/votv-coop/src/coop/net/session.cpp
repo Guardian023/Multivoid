@@ -267,6 +267,18 @@ bool Session::SendReliableBatchToSlot(int peerSlot, ReliableKind kind, const voi
                 peerSlot, payloadLen, count);
         return false;
     }
+    // The save-stream family never joins the backlog (see SendReliableToSlot): each payload takes
+    // the paced single path, and the first refusal is the caller's pacing signal.
+    if (kind == ReliableKind::SaveTransferBegin || kind == ReliableKind::SaveTransferChunk) {
+        for (int i = 0; i < count; ++i) {
+            if (!TrySendReliableToSlot(peerSlot, kind,
+                                       static_cast<const uint8_t*>(payloads) +
+                                           static_cast<size_t>(i) * payloadLen,
+                                       payloadLen))
+                return false;
+        }
+        return true;
+    }
     // SendReliableToSlot's pre-world gate and dead-slot rule, once for the whole batch.
     if (!IsSlotWorldReady(peerSlot) && !IsPreWorldSendableKind(kind)) return false;
     const uint32_t hConn = peerConns_[peerSlot].load();

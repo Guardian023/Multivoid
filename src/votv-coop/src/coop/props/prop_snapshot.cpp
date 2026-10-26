@@ -242,6 +242,13 @@ bool DrillHoldsSlot_(int peerSlot) {
     return false;
 }
 
+// Is a snapshot for `peerSlot` still to come behind the running drain: queued, or deferred for a retry.
+bool QueuedBehind_(int peerSlot) {
+    if (peerSlot < 1 || peerSlot >= coop::players::kMaxPeers) return false;
+    return g_deferredSlots[peerSlot] ||
+           std::find(g_pendingSlots.begin(), g_pendingSlots.end(), peerSlot) != g_pendingSlots.end();
+}
+
 void DequeuePending_() {
     while (g_currentTargetSlot == -1 && !g_pendingSlots.empty()) {
         const int next = g_pendingSlots.front();
@@ -268,12 +275,14 @@ void CompleteDrainForCurrentSlot(coop::net::Session* s) {
         // Sent outside any scope, so the slot's join gate holds it last in the queue; closing the gate
         // puts the queue on the lane, and the wire order is Begin, the spawns, the held sends, Complete:
         // the joiner's cover lifts on a world that already holds its seeds. The close comes before
-        // CloseBracket_, whose latch reads the flushed queue (join_beacon).
-        if (s->SendReliableToSlot(g_currentTargetSlot, coop::net::ReliableKind::SnapshotComplete,
-                                  buf.data(), static_cast<int>(buf.size()))) {
-            s->CloseJoinGate(g_currentTargetSlot);
-            CloseBracket_(g_currentTargetSlot);
-        }
+        // CloseBracket_, whose latch reads the flushed queue (join_beacon). The gate lives as long as
+        // the slot's snapshots: a drain queued or deferred behind this one keeps it open for its own
+        // Complete, and a failed Complete send closes it too, since no later drain would.
+        const bool sent = s->SendReliableToSlot(g_currentTargetSlot,
+                                                coop::net::ReliableKind::SnapshotComplete,
+                                                buf.data(), static_cast<int>(buf.size()));
+        if (!QueuedBehind_(g_currentTargetSlot)) s->CloseJoinGate(g_currentTargetSlot);
+        if (sent) CloseBracket_(g_currentTargetSlot);
     }
     UE_LOGI("snapshot: drain complete for slot %d (%zu candidates, %u sent, %u left out unread)",
             g_currentTargetSlot, g_snapshotCandidates.size(), g_snapshotSentTotal, g_snapshotUnreadTotal);
@@ -698,6 +707,11 @@ size_t OnDisconnect() {
 
 bool IsBracketClosed(int peerSlot) {
     return peerSlot >= 1 && peerSlot < coop::players::kMaxPeers && g_bracketClosed[peerSlot];
+}
+
+bool HasSnapshotFor(int peerSlot) {
+    return peerSlot >= 1 && peerSlot < coop::players::kMaxPeers &&
+           (g_currentTargetSlot == peerSlot || QueuedBehind_(peerSlot));
 }
 
 }  // namespace coop::prop_snapshot
