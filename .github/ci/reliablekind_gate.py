@@ -46,7 +46,7 @@ WHAT IT HOLDS -- these FAIL the build:
      not a kind, or a relayable kind that is not Client (the edge would refuse what the relay forwards).
 
 WHAT IT DELIBERATELY DOES NOT HOLD. `session_lanes.h`'s three switches -- `LaneForKind`,
-`IsClientRelayableReliableKind`, `IsPreWorldSendableKind` -- all default safely (Normal /
+`IsClientRelayableReliableKind`, `IsPreWorldSendableKind` -- all default safely (Default /
 no-relay / hold-until-world-ready), and whether a given kind SHOULD relay is a design
 decision no text scan can make. Absence there is legitimate for every host-authored kind.
 So they are reported in `--table`, not gated: this file must not manufacture a failure it
@@ -523,11 +523,11 @@ def print_table(tree, enums, fam):
             where = "net thread (terminal)"
         print("  %3s %-26s %-24s %-7s %-6s %s"
               % (enums[name] if enums[name] is not None else "?", name, where,
-                 lanes["lane"].get(name, "Normal*"),
+                 lanes["lane"].get(name, "Default*"),
                  "yes" if name in lanes["relay"] else "-",
                  "yes" if name in lanes["preworld"] else "-"))
     print("  (* = falls to the switch default. All three session_lanes.h switches default")
-    print("   safely -- Normal / no-relay / hold-until-world-ready -- so absence there is")
+    print("   safely -- Default / no-relay / hold-until-world-ready -- so absence there is")
     print("   legitimate for every host-authored kind and is reported, not gated.)")
 
 

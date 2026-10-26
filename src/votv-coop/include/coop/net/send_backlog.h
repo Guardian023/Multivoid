@@ -68,7 +68,7 @@ public:
                             SendAdmission& adm);
 
     // One drain pass for a slot (net-thread tick). Re-attempts queued heads in lane-priority
-    // order (High -> Normal -> Bulk); the GNS rc is the correctness backstop, so a refusal ends
+    // order (High -> Default -> Transfer); the GNS rc is the correctness backstop, so a refusal ends
     // the pass. The refill stops at the same headroom rule every send path obeys, so the
     // UnreliableNoDelay pose and voice streams keep flowing through a drain episode instead of
     // being starved for its whole length. Returns the bytes this pass handed to GNS, which is the

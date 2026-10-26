@@ -30,8 +30,7 @@ void Tick(coop::net::Session* s);
 // CLIENT: message `seq` of `total` of the host's DevLoadFiller arrived. Dropped at once when the drill row is off;
 // otherwise counted, with the receive time of the first and of the last logged. With prop_syncer_load_kb > 0 (the
 // host and the kicking client) the host queues that filler as it answers the claim (BeforeGrant), and the client's
-// DONE line adds grant_ms, load_msgs_at_grant, load_total and load_ms; sync_order_probe=bulk (all
-// peers) moves the syncer's three kinds onto the filler's lane for the comparison. Game thread.
+// DONE line adds grant_ms, load_msgs_at_grant, load_total and load_ms. Game thread.
 void OnFiller(uint32_t seq, uint32_t total);
 
 // HOST: the claim of `slot` is about to be answered Granted. With the drill row on and prop_syncer_load_kb > 0, queues
