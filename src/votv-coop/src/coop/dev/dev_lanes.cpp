@@ -108,6 +108,7 @@
 #include "coop/dev/native_pile_inert_probe.h"
 #include "coop/dev/native_spawn_probe.h"  // [dev] every allowlisted creature a Blueprint graph spawns here, and the client orb question
 #include "coop/dev/order_probe.h"  // who writes the order queue, and what the drone delivers, per peer
+#include "coop/dev/bind_wait_selftest.h"  // [dev] the bind wait's rules on stated inputs
 #include "coop/dev/order_selftest.h"  // exercise host-side order pricing end to end
 #include "coop/dev/physmods_drill.h"  // [dev] a module plug and unplug are sent at their verbs, and a rejoin's load sends none
 #include "coop/dev/pinecone_probe.h"
@@ -244,6 +245,7 @@ void EndSession() {
     coop::dev::ban_drill::OnSessionEnd();  // [dev] empty by design: its one state, the step, stands
     coop::dev::pause_quit_drill::OnDisconnect();  // [dev] a pending wait for the pause menu is dropped; the per-process latch stands
     coop::dev::order_selftest::OnDisconnect();  // [dev] a rejoin's peers run their legs again
+    coop::dev::bind_wait_selftest::OnDisconnect();  // [dev] a rejoin's client runs the checks again
     coop::dev::meadow_selftest::OnDisconnect();  // [dev] a rejoin's peers run their legs again
     coop::dev::lid_drill::OnDisconnect();  // [dev] the PC and the legs belong to one world
     coop::dev::subject_drill::OnDisconnect();  // [dev] the drives and the legs belong to one world
@@ -390,6 +392,7 @@ void TickProbes(coop::net::Session& session, bool isConnected, bool isHost) {
     coop::dev::order_probe::Install(&session);  // ini order_probe=1; the order queue's writers and the drone's deliveries (a bool when off)
     coop::dev::store_table_probe::Tick();  // ini store_table_probe=1; ONE-SHOT: which mechanism can read a list_store row
     coop::dev::order_selftest::Tick(&session);  // ini order_selftest=1: a client's shop order, the host's daily order, each once a session
+    coop::dev::bind_wait_selftest::Tick(&session);  // ini bind_wait_selftest=1: the bind wait's rules on synthetic eids, a client once its world is announced
     coop::dev::meadow_selftest::Tick(&session);  // ini meadow_selftest=1: the host's row into its signal database and out, once a session
     coop::dev::delivery_census::Tick(isHost);  // ini delivery_census=1; edges only // polls drone/order/radar; with drone_probe_drive=1 ALSO auto-fires one delivery (host) / order (client)
     coop::dev::native_pile_inert_probe::Install();  // GO/NO-GO gate for nativizing the trash mirror (ini native_pile_inert_probe=1)

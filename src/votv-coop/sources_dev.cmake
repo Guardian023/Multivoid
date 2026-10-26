@@ -9,6 +9,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/delivery_census_probe.cpp
     src/coop/dev/store_table_probe.cpp
     src/coop/dev/order_selftest.cpp
+    src/coop/dev/bind_wait_selftest.cpp
     src/coop/dev/meadow_selftest.cpp
     src/coop/dev/meadow_selftest_rows.cpp
     src/coop/dev/order_probe.cpp
