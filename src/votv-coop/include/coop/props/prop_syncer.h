@@ -57,6 +57,8 @@ struct EntryView {
 EntryView EntryOf(uint32_t eid);
 // The generation of the last grant this session for `eid`, 0 if none.
 uint8_t LastGrantedGen(uint32_t eid);
+// Milliseconds from the claim's send to its last grant this session for `eid`, 0 if none.
+uint64_t LastGrantMs(uint32_t eid);
 
 enum class Count : uint8_t {
     ClaimsSent, FeederRefused, HeldOff, SendFailed, Granted, GrantedNoEntry, Refused, Revoked, HostEnds,

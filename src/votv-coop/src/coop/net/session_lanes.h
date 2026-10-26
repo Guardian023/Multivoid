@@ -5,7 +5,9 @@
 
 #pragma once
 
-#include "coop/net/protocol.h"  // ReliableKind
+#include "coop/config/config.h"           // ResolveEnum, the measurement knob
+#include "coop/config/config_registry.h"  // rows::sync_order_probe
+#include "coop/net/protocol.h"            // ReliableKind
 
 namespace coop::net {
 
@@ -40,6 +42,13 @@ inline bool IsAdmissionKind(ReliableKind k) {
 inline bool IsReserveExemptKind(ReliableKind k) {
     return k == ReliableKind::LinkProbe || k == ReliableKind::LinkProbeReply ||
            k == ReliableKind::JoinPhaseNote;
+}
+
+// [MEASURE sync-order, temporary] The developer knob sync_order_probe, resolved once (LaneForKind runs per send).
+inline bool SyncOrderProbeBulk() {
+    static const bool bulk =
+        coop::config::ResolveEnum(coop::config_registry::rows::sync_order_probe) == "bulk";
+    return bulk;
 }
 
 inline Lane LaneForKind(ReliableKind k) {
@@ -218,9 +227,10 @@ inline Lane LaneForKind(ReliableKind k) {
     // PropDriveEnd is host-to-all, with no lane order against other kinds: its stream is unreliable on
     // its own datagram kind, and a never-parked receiver closes the generation and no more. A
     // join-window PropSnapPos (Bulk) is ordered against it by its drive context. The default, as for the syncer pair.
-    case ReliableKind::PropDriveEnd:      return Lane::Normal;
-    case ReliableKind::PropSyncClaim:     return Lane::Normal;
-    case ReliableKind::PropSyncAnswer:    return Lane::Normal;
+    // [MEASURE sync-order, temporary] the developer knob sync_order_probe=bulk puts the three on the spawn lane.
+    case ReliableKind::PropDriveEnd:      return SyncOrderProbeBulk() ? Lane::Bulk : Lane::Normal;
+    case ReliableKind::PropSyncClaim:     return SyncOrderProbeBulk() ? Lane::Bulk : Lane::Normal;
+    case ReliableKind::PropSyncAnswer:    return SyncOrderProbeBulk() ? Lane::Bulk : Lane::Normal;
     // The Kerfus pair is ordered against nothing: a state for a Kerfus whose mirror has not bound
     // waits for the bind, and the host resolves an intent by eid. The default, by decision.
     case ReliableKind::KerfusState:       return Lane::Normal;

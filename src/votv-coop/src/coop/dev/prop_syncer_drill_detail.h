@@ -37,6 +37,8 @@ inline constexpr const char* kEndedPrefix = "PSYNC ended ";
 
 // This client's streams run, as a player in a settled world: both clients' ready condition.
 bool StreamsRun();
+// The load arm: the filler the host queues to the kicking client, in KiB (0 = none). Host and client read the row.
+long LoadKb();
 uint64_t Now();                              // steady-clock ms
 std::string Fmt(const char* f, ...);
 void Pass(const char* role, bool& done, const std::string& numbers);   // the role's DONE PASS line, tagged PROP-SYNC
@@ -64,7 +66,7 @@ struct Verdict {
 Verdict JudgeCopy(const Rested& r, const coop::prop_drive_stream::dev::DriveView& v, bool needTravel);
 
 // The host's phases (prop_syncer_drill_host.cpp).
-void HostTick(Arm a);
+void HostTick(coop::net::Session* s, Arm a);
 void HostReset();
 
 // The observing client's phases (prop_syncer_drill_observer.cpp).

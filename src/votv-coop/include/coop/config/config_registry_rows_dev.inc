@@ -539,6 +539,15 @@ CFG_ENUM(prop_syncer_red, "prop_syncer_red", "dev", "off", "off|refuse|no_relay|
     "Developer red arm: never set. refuse (HOST): every claim is refused as paced, so the kick arm's client must fail. "
     "no_relay (HOST): an admitted client row is applied to the host's copy and never re-published, so the kick arm's "
     "observer must fail. not_syncer (HOST): the sender test of admission is skipped, so the forge arm's host must fail.")
+CFG_INT(prop_syncer_load_kb, "prop_syncer_load_kb", "dev", 0, 0, 16384, "VOTVCOOP_PROP_SYNCER_LOAD_KB",
+    "Drill (host and the kicking client, the same value; arm kick or forge): the filler the host queues on the spawn "
+    "lane to the kicking client right before it says go, in KiB (0 = none). The client waits for the filler's first "
+    "message before it claims, so its claim stands behind the transfer; its DONE line carries the grant latency and "
+    "the filler counts.")
+CFG_ENUM(sync_order_probe, "sync_order_probe", "dev", "off", "off|bulk", "VOTVCOOP_SYNC_ORDER_PROBE",
+    "[MEASURE sync-order, temporary] Developer (BOTH peers, the same value): bulk puts PropDriveEnd, PropSyncClaim "
+    "and PropSyncAnswer on the spawn lane instead of the default one, to time the syncer's grant behind a queued "
+    "transfer on each.")
 CFG_FLAG(drone_call_drill, "drone_call_drill", "dev", false, "VOTVCOOP_DRONE_CALL_DRILL",
     "Drill (BOTH peers): the client walks to the garage's drone console, opens its lid if it is shut, presses "
     "the leave-timer face twice (the click sounds on its copy and the host's stream flips the timer, then flips "

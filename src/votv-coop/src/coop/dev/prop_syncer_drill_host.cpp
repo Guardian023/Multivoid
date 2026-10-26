@@ -1,14 +1,20 @@
 // coop/dev/prop_syncer_drill_host.cpp -- the host of the prop syncer drill, see coop/dev/prop_syncer_drill.h.
-//   "PSYNC go" once both clients said they are ready (their own streams run); on "rested" waits for its own End to
+//   (with prop_syncer_load_kb set, the filler queued to the kicking client first) "PSYNC go" once both clients said
+//   they are ready (their own streams run); on "rested" waits for its own End to
 //   apply, says "ended", and judges the stream it took and where its copy rests.
 
 #include "prop_syncer_drill_detail.h"  // co-located private header (src tree, not include/)
 
 #include "coop/dev/drill_chat.h"
+#include "coop/net/protocol.h"
+#include "coop/net/session.h"
 #include "coop/props/prop_drive_stream.h"
 #include "coop/props/prop_syncer_host.h"
 
+#include "ue_wrap/core/log.h"
+
 #include <cstdint>
+#include <cstring>
 #include <string>
 
 namespace coop::dev::prop_syncer_drill::detail {
@@ -49,9 +55,31 @@ void HostJudge(Arm a) {
                              static_cast<unsigned>(view.gen), view.rows, adm.rows, v.travelled, h.r.cm, v.offCm));
 }
 
+// The load arm: the filler queued to the kicking client, on the spawn lane, right before the go line. The backlog
+// takes what the transport refuses, so a send that returns false is a failed arm. Returns false after failing it.
+bool QueueLoad(coop::net::Session& s, bool& done) {
+    const long kb = LoadKb();
+    if (kb <= 0) return true;
+    constexpr uint32_t kFillBytes = sizeof(coop::net::DevLoadFillerPayload::fill);
+    const uint32_t n = static_cast<uint32_t>((static_cast<uint64_t>(kb) * 1024u + kFillBytes - 1u) / kFillBytes);
+    coop::net::DevLoadFillerPayload p{};
+    std::memset(p.fill, 0xA5, sizeof(p.fill));
+    p.total = n;
+    for (uint32_t i = 0; i < n; ++i) {
+        p.seq = i;
+        if (!s.SendReliableToSlot(kActorSlot, coop::net::ReliableKind::DevLoadFiller, &p, sizeof(p))) {
+            Fail("host", done, Fmt("the filler send %u of %u was refused", i, n));
+            return false;
+        }
+    }
+    UE_LOGI("[PROP-SYNC] host load queued: n=%u bytes=%u to slot %u", n, n * kFillBytes,
+            static_cast<unsigned>(kActorSlot));
+    return true;
+}
+
 }  // namespace
 
-void HostTick(Arm a) {
+void HostTick(coop::net::Session* s, Arm a) {
     HostState& h = g_h;
     if (h.done) return;
     const uint64_t now = Now();
@@ -62,6 +90,7 @@ void HostTick(Arm a) {
             h.observerReady = h.observerReady || DC::ChatHasLive(kObserverReadyLine);
         }
         if (h.clientReady && h.observerReady) {
+            if (!QueueLoad(*s, h.done)) return;
             DC::Say(kGoLine);
             h.goSaid = true;
             h.goAt = now;

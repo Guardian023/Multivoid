@@ -140,6 +140,8 @@ bool StreamsRun() {
            coop::net_pump::IsWorldSettled() && coop::join_membership_sweep::HasLoadTailQuiesced();
 }
 
+long LoadKb() { return coop::config::ResolveInt(coop::config_registry::rows::prop_syncer_load_kb); }
+
 }  // namespace detail
 
 using namespace detail;
@@ -172,7 +174,7 @@ struct Target {
 };
 
 struct ClientState {
-    bool                                            done = false, readySaid = false, goSeen = false;
+    bool                                            done = false, readySaid = false, goSeen = false, loadSeen = false;
     CPh                                             phase = CPh::Go;
     uint64_t                                        at = 0, phaseAt = 0, kickAt = 0;
     std::vector<Target>                             targets;
@@ -184,7 +186,7 @@ struct ClientState {
 
 // The host's DevLoadFiller as this client sees it: how many messages arrived and when the first and the last did.
 struct FillerState {
-    uint32_t count = 0, total = 0;
+    uint32_t count = 0, total = 0, atGrant = 0;   // atGrant: the count when this client first saw its grant
     uint64_t firstAt = 0, lastAt = 0;
 } g_f;
 
@@ -273,9 +275,18 @@ bool ClaimRefused() {
 }
 
 void ClientClaim(void* player, void* prop) {
+    if (LoadKb() > 0 && !g_c.loadSeen) {   // the claim stands behind the host's filler: wait for its first message
+        if (g_f.count == 0) {
+            if (Now() - g_c.phaseAt > kSayBoundMs) ClientFail("the load never arrived");
+            return;
+        }
+        g_c.loadSeen = true;
+        g_c.phaseAt = Now();   // the grant bound counts from the claim
+    }
     PS::Claim(prop, coop::net::PropSyncReason::DevDrill);
     if (ClaimRefused()) return;
     if (PS::dev::EntryOf(g_c.eid).state == PS::dev::EntryState::Syncing) {
+        g_f.atGrant = g_f.count;   // stamped when the drill first sees the grant, a tick after it landed at most
         if (!E::TryGetActorLocation(prop, g_c.start)) return ClientFail("the target does not read");
         DC::Say(std::string(kKickedPrefix) + std::to_string(g_c.eid));
         if (!Kick(player, prop)) return ClientFail("the kick did not run");
@@ -302,8 +313,13 @@ void ClientKick(void* prop) {
         if (cm < kMinTravelCm) return ClientFail(Fmt("the kick moved the prop only %.1f cm (want >= %.0f)", cm, kMinTravelCm));
         DC::Say(Fmt("%s%u %.1f %.1f %.1f %.1f %.1f %.1f %.1f", kRestedPrefix, g_c.eid, cm, ue_wrap::NormalizeAxis(rot.Pitch),
                     ue_wrap::NormalizeAxis(rot.Yaw), ue_wrap::NormalizeAxis(rot.Roll), at.X, at.Y, at.Z));
+        std::string load;
+        if (LoadKb() > 0)
+            load = Fmt(" grant_ms=%llu load_msgs_at_grant=%u load_total=%u load_ms=%llu",
+                       static_cast<unsigned long long>(PS::dev::LastGrantMs(g_c.eid)), g_f.atGrant, g_f.total,
+                       static_cast<unsigned long long>(g_f.count == g_f.total ? g_f.lastAt - g_f.firstAt : 0));
         return Pass("client", g_c.done, Fmt("eid=%u gen=%u rows_sent=%u travelled=%.1f cm", g_c.eid,
-                    static_cast<unsigned>(PS::dev::LastGrantedGen(g_c.eid)), g_c.maxRows, cm));
+                    static_cast<unsigned>(PS::dev::LastGrantedGen(g_c.eid)), g_c.maxRows, cm) + load);
     }
     if (now - g_c.kickAt < kKickHoldMs) PS::Claim(prop, coop::net::PropSyncReason::DevDrill);
     else if (now - g_c.kickAt > kKickHoldMs + kRestBoundMs) ClientFail("the copy never rested");
@@ -347,7 +363,7 @@ void OnFiller(uint32_t seq, uint32_t total) {
 void Tick(coop::net::Session* s) {
     const Arm a = ArmOf();
     if (a == Arm::Off || !s) return;
-    if (s->role() == coop::net::Role::Host) return HostTick(a);
+    if (s->role() == coop::net::Role::Host) return HostTick(s, a);
     if (!s->connected()) return;
     if (coop::players::Registry::Get().LocalPeerId() == kObserverSlot && coop::net_pump::HasAnnouncedWorldReady())
         ObserverTick(s, a);

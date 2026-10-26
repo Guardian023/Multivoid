@@ -81,6 +81,7 @@ uint16_t                              g_seq = 0;
 std::unordered_map<uint32_t, Entry>   g_table;
 std::unordered_map<uint32_t, Backoff> g_backoff;
 std::unordered_map<uint32_t, uint8_t> g_lastGen;     // eid -> the generation of its last grant, for the drill
+std::unordered_map<uint32_t, uint64_t> g_lastGrantMs; // eid -> ms from the claim to its last grant, for the drill
 uint32_t                              g_count[static_cast<unsigned>(Count::kCount)] = {};
 uint32_t                              g_refused[8] = {};
 
@@ -196,12 +197,17 @@ void OnGranted(const coop::net::PropSyncAnswerPayload& p) {
     e.gen = p.gen;
     e.everSent = false;
     e.rowsSent = 0;
-    e.lastMoveMs = coop::active_drive::NowMs();
+    const uint64_t now = coop::active_drive::NowMs();
+    e.lastMoveMs = now;
     e.nextProbeMs = 0;
-    if (coop::dev::prop_syncer_drill::IsEnabled()) g_lastGen[p.eid] = p.gen;
+    const uint64_t ms = now - e.claimSentMs;   // the claim's send to this grant, on this client's clock
+    if (coop::dev::prop_syncer_drill::IsEnabled()) {
+        g_lastGen[p.eid] = p.gen;
+        g_lastGrantMs[p.eid] = ms;
+    }
     ++CountRef(Count::Granted);
-    UE_LOGI("[PROP-SYNC] CLIENT granted eid=%u gen=%u seq=%u (#%u)", p.eid, static_cast<unsigned>(p.gen),
-            static_cast<unsigned>(p.seq), CountRef(Count::Granted));
+    UE_LOGI("[PROP-SYNC] CLIENT granted eid=%u gen=%u seq=%u ms=%llu (#%u)", p.eid, static_cast<unsigned>(p.gen),
+            static_cast<unsigned>(p.seq), static_cast<unsigned long long>(ms), CountRef(Count::Granted));
 }
 
 void OnRefused(const coop::net::PropSyncAnswerPayload& p) {
@@ -210,12 +216,15 @@ void OnRefused(const coop::net::PropSyncAnswerPayload& p) {
         Tally(Count::AnswersDropped, "answer dropped: no claim is open for it", p.eid);
         return;
     }
+    const uint64_t now = coop::active_drive::NowMs();
+    const uint64_t ms = now - it->second.claimSentMs;   // the claim's send to this refusal
     g_table.erase(it);
-    SetBackoff(p.eid, coop::active_drive::NowMs(), p.refusal == static_cast<uint8_t>(PropSyncRefusal::InHand));
+    SetBackoff(p.eid, now, p.refusal == static_cast<uint8_t>(PropSyncRefusal::InHand));
     ++CountRef(Count::Refused);
     uint32_t& n = g_refused[p.refusal & 7u];
     if (++n == 1 || (n % 100) == 0)
-        UE_LOGI("[PROP-SYNC] CLIENT refused eid=%u: %s (#%u)", p.eid, kRefusalName[p.refusal & 7u], n);
+        UE_LOGI("[PROP-SYNC] CLIENT refused eid=%u: %s ms=%llu (#%u)", p.eid, kRefusalName[p.refusal & 7u],
+                static_cast<unsigned long long>(ms), n);
 }
 
 void OnRevoked(const coop::net::PropSyncAnswerPayload& p) {
@@ -358,6 +367,7 @@ void OnDisconnect() {
     g_table.clear();
     g_backoff.clear();
     g_lastGen.clear();
+    g_lastGrantMs.clear();
     for (uint32_t& n : g_count) n = 0;
     for (uint32_t& n : g_refused) n = 0;
 }
@@ -378,6 +388,11 @@ EntryView EntryOf(uint32_t eid) {
 uint8_t LastGrantedGen(uint32_t eid) {
     const auto it = g_lastGen.find(eid);
     return it == g_lastGen.end() ? 0 : it->second;
+}
+
+uint64_t LastGrantMs(uint32_t eid) {
+    const auto it = g_lastGrantMs.find(eid);
+    return it == g_lastGrantMs.end() ? 0 : it->second;
 }
 
 uint32_t CountOf(Count c) {
