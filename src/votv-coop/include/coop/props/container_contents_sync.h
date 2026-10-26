@@ -1,7 +1,7 @@
 // coop/props/container_contents_sync.h -- a world container's CONTENTS, authored by the peer whose
 // verb fired and arbitrated by the host. docs/devices.md carries the model; the invariants a
-// client-authored slice must pass are coop/props/container_write_policy, the pen that holds one it
-// cannot judge yet is coop/props/container_park, the bytes are coop/props/container_slice_wire.
+// client-authored slice must pass are coop/props/container_write_policy, a slice for a container with no actor
+// waits in bind_wait, one for a container not ready in container_park, the bytes are container_slice_wire.
 //
 // Two rules restate HERE, because breaking either destroys player data: a container whose
 // propInventory_C.Player reads true, OR whose offset will not resolve, is SKIPPED (personal
@@ -45,10 +45,10 @@ void OnContentsChunk(const coop::net::BlobChunkPayload& p, uint8_t senderSlot);
 // a snapshot taken at request time; this is the anchor that corrects it.
 void QueueConnectBroadcastForSlot(int peerSlot);
 
-// Park aging is anchored to the client's own join-snapshot bracket: parks do not age while it is
-// open, because a contents slice systematically precedes its PropSpawn under backpressure and a
-// slow link can exceed any fixed TTL with no loss at all. At Complete every park is re-stamped and
-// the TTL runs as a leak guard only. Called from the client-side snapshot dispatch.
+// The readiness pen's aging is anchored to the client's own join-snapshot bracket: its entries do not age while
+// it is open, since a readiness wait during a join is still a wait and a slow link can exceed any fixed TTL with
+// no loss at all. At Complete every entry is re-stamped and the TTL runs as a leak guard only. Called from the
+// client-side snapshot dispatch.
 void NoteJoinSnapshotBracket(bool open);
 
 void OnDisconnect();

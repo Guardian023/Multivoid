@@ -1,4 +1,4 @@
-// coop/props/container_park.cpp -- see coop/props/container_park.h.
+// coop/props/container_park.cpp -- the container readiness pen; see coop/props/container_park.h.
 
 #include "coop/props/container_park.h"
 
@@ -63,7 +63,7 @@ void Admit(uint32_t eid, uint8_t authorSlot, std::vector<uint8_t>&& blob, uint64
     }
     g_parked[eid] = Parked{std::move(blob), nowMs, authorSlot};
     if (g_quiet) return;
-    UE_LOGI("container_contents: eid=%u not resolvable yet -- parked (TTL %llu ms, author slot %u)",
+    UE_LOGI("container_contents: eid=%u not ready yet -- parked in the readiness pen (TTL %llu ms, author slot %u)",
             eid, static_cast<unsigned long long>(kTtlMs), static_cast<unsigned>(authorSlot));
 }
 
@@ -74,7 +74,7 @@ void Sweep(ReplayFn replay, uint64_t nowMs) {
             it = g_parked.erase(it);
         } else if (!g_joinBracketOpen && nowMs - it->second.atMs > kTtlMs) {
             if (!g_quiet) {
-                UE_LOGW("container_contents: parked eid=%u expired after %llu ms unresolved -- "
+                UE_LOGW("container_contents: parked eid=%u expired after %llu ms not ready -- "
                         "dropped", it->first, static_cast<unsigned long long>(kTtlMs));
             }
             it = g_parked.erase(it);
@@ -103,7 +103,7 @@ void Reset() {
 }
 
 namespace {
-// Replay arms for the selftest: one that never resolves, one that always does.
+// Replay arms for the selftest: one whose container is never ready, one that always deals with its entry.
 bool ReplayNever(const std::vector<uint8_t>&, uint8_t) { return false; }
 bool ReplayAlways(const std::vector<uint8_t>&, uint8_t) { return true; }
 }  // namespace

@@ -85,7 +85,7 @@ Decision JudgeAgainstState(uint32_t eid, uint64_t baseHash, uint64_t nowMs) {
 Decision SpendArrival(uint32_t eid, uint8_t authorSlot, uint64_t nowMs, coop::net::Session& session,
                       Source src, bool held) {
     // The budget is spent by ARRIVAL, not by acceptance: a refused slice still costs the host a
-    // parse, this arbitration and a corrective re-publish. A replay out of the park spends
+    // parse, this arbitration and a corrective re-publish. A replay out of bind_wait or the pen spends
     // nothing -- it arrived once already, and a pen sweeping four times a second would otherwise
     // rate-block the author of the very slice it is holding. A seated peer's proved storage guid
     // is the source; an author the host has no proved identity for is not counted rather than
@@ -125,7 +125,7 @@ Decision Accept(uint32_t eid, uint64_t baseHash, uint8_t authorSlot, uint64_t no
     // REACH, and only where it is answerable. A container's contents are mutated through the
     // player's own look-at trace, so an author that is neither at the container nor at an actor that
     // opens it (the drone, its sack, the ATV) did not run the verb it is reporting. NoRow and StaleDead
-    // are not refusals here: they mean the element has not arrived (or has gone), which is the park's
+    // are not refusals here: they mean the element has not arrived (or has gone), which is the hold's
     // question, not this one.
     const auto tok = coop::element::IntentTarget::ForClientIntent(session, authorSlot, kReachUU);
     const auto sub = tok.Resolve(static_cast<coop::element::ElementId>(eid),

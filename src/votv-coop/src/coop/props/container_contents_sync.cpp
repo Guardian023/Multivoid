@@ -11,6 +11,7 @@
 #include "coop/props/container_slice_wire.h"
 #include "coop/props/container_write_policy.h"
 
+#include "coop/element/bind_wait.h"
 #include "coop/element/registry.h"
 #include "coop/items/save_record_wire.h"
 #include "coop/net/blob_chunks.h"
@@ -59,6 +60,8 @@ UE_FACT_FN(kRowTakeObj,   "container_contents_sync", nullptr, L"takeObj",   AnyC
 // The sweep drains an edge-driven set, not a poll; 250 ms coalesces a burst (a loot roll fires
 // addObject four times) into one broadcast.
 constexpr uint64_t kSweepMs = 250;
+
+constexpr uint16_t kContainerContents = static_cast<uint16_t>(coop::net::ReliableKind::ContainerContents);
 
 std::atomic<coop::net::Session*> g_session{nullptr};
 
@@ -273,16 +276,17 @@ void DrainDirty(coop::net::Session* s) {
 // for both an accepted and a refused client write, a refused write was relayed to every other
 // client stamped as slot 0, host truth, which peers running no CAS applied unconditionally.
 enum class Ingest {
-    Park,      // the eid does not resolve yet (birth skew / mid-join) -- park and retry
+    NoActor,   // the eid has no live actor here yet (birth skew / mid-join) -- hold in bind_wait for its bind
+    Park,      // the actor is here but not ready (inventory, slice slot, author's body, budget) -- the pen
     Handled,   // dealt with and deliberately NOT applied: refused, malformed, non-container,
                // BOUNDARY 1, or a no-op duplicate. NEVER relayed.
     Applied,   // this peer's state actually changed. The only outcome the host may pass on.
 };
 
-// Applied, Handled or Park; see Ingest.
+// Applied, Handled, NoActor or Park; see Ingest.
 Ingest ApplyContents(uint32_t eid, const std::vector<SR::SaveRecord>& recs, uint64_t blobHash) {
     void* actor = LivePropActor(eid);
-    if (!actor) return Ingest::Park;
+    if (!actor) return Ingest::NoActor;
     // The wire eid must name a container before a cached component offset is read off it.
     if (!ci::IsContainer(actor)) {
         UE_LOGW("container_contents: eid=%u does not resolve to a container -- refusing", eid);
@@ -466,13 +470,32 @@ Ingest ParseAndApply(const std::vector<uint8_t>& blob, uint32_t& outEid, uint8_t
     return outcome;
 }
 
-// The park's replay: true when the blob was dealt with, false while its container still does not
-// resolve. The author rides with the blob because a parked slice must pass the SAME arbitration it
+// The readiness pen's replay: true when the blob was dealt with, false while its container is still
+// not ready. The author rides with the blob because a parked slice must pass the SAME arbitration it
 // would have passed on arrival -- replaying a client's write as slot 0 would hand it the host's
-// own authority, and the host does park client writes (every inbound blob it cannot resolve yet).
+// own authority, and the host does park client writes (a slice whose author has no body yet).
 bool ReplayParked(const std::vector<uint8_t>& blob, uint8_t authorSlot) {
     uint32_t eid = 0;
-    return ParseAndApply(blob, eid, authorSlot, wp::Source::Replay) != Ingest::Park;
+    const Ingest outcome = ParseAndApply(blob, eid, authorSlot, wp::Source::Replay);
+    if (outcome == Ingest::NoActor) {
+        // Parked with no actor (its author had no body yet), or the container went while it waited: the
+        // eid was bound once or was never a bind wait, so this is a drop and not a never-bound one.
+        UE_LOGW("container_contents: a parked slice for eid=%u met no container on its replay -- dropped", eid);
+        return true;
+    }
+    return outcome != Ingest::Park;
+}
+
+// A blob held in bind_wait runs again once its container is bound: the whole of ParseAndApply, the author's
+// arbitration included, and its outcome is routed as on arrival except that a second miss is a drop.
+void ReplayHeld(const uint8_t* bytes, size_t n, int senderSlot) {
+    std::vector<uint8_t> blob(bytes, bytes + n);
+    uint32_t eid = 0;
+    const Ingest outcome = ParseAndApply(blob, eid, static_cast<uint8_t>(senderSlot), wp::Source::Replay);
+    if (outcome == Ingest::NoActor)
+        coop::element::bind_wait::NoteNeverBound(kContainerContents, eid);
+    else if (outcome == Ingest::Park)
+        pk::Admit(eid, static_cast<uint8_t>(senderSlot), std::move(blob), NowMs());
 }
 
 // The verb edge.
@@ -569,9 +592,8 @@ void Tick() {
     g_asm.Sweep(std::chrono::steady_clock::now(), std::chrono::seconds(10));
 
     // Both peers drain: the host fans its changes out, a client ships the container it mutated to
-    // the host, which arbitrates and relays. Both sweep their parked inbound blobs -- the host's
-    // were never swept at all, so a client write it could not resolve on arrival was neither
-    // retried nor evicted for the life of the session.
+    // the host, which arbitrates and relays. Both sweep the readiness pen: a slice for a container that
+    // is here but not ready (a client write whose author has no body yet, say) is retried and evicted.
     cb::Sweep(now, g_dirty);
     DrainDirty(s);
     pk::Sweep(&ReplayParked, NowMs());
@@ -596,9 +618,17 @@ void OnContentsChunk(const coop::net::BlobChunkPayload& p, uint8_t senderSlot) {
 
     uint32_t eid = 0;
     const Ingest outcome = ParseAndApply(blob, eid, senderSlot, wp::Source::Arrival);
+    if (outcome == Ingest::NoActor) {
+        // The container's element is not bound yet: held in bind_wait for the bind, the latest blob
+        // winning. Not deferred: no bind is coming for this eid, so there is nothing to wait for.
+        if (!coop::element::bind_wait::Hold(eid, kContainerContents, senderSlot, &ReplayHeld, blob.data(),
+                                            blob.size(), /*coalesce=*/true))
+            coop::element::bind_wait::NoteNeverBound(kContainerContents, eid);
+        return;
+    }
     if (outcome == Ingest::Park) {
-        // The container's element is not bound yet: parked (latest wins per eid) and retried by the
-        // sweep until the TTL.
+        // The container is here but not ready (its inventory or slice slot, the author's body, the
+        // arrival budget): kept in the readiness pen, latest wins per eid, retried by the sweep until the TTL.
         pk::Admit(eid, senderSlot, std::move(blob), NowMs());
         return;
     }
