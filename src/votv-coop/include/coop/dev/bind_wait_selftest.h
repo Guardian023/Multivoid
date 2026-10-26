@@ -6,10 +6,12 @@
 // whole, its hold runs at the next; 4: a given-up eid's holds never replay; 5: a slot that left takes only
 // its own holds; 6: the 65th hold of one eid is refused; 7: a give-up made by a replay voids a due eid the
 // pump has not reached; 8: a slot that leaves during a pump has its remaining holds skipped; 9: an unmarked
-// eid whose registry row holds a purged actor is held and replays at its bind; 10: with bind_wait_red=1 a
-// hold is refused whatever the eid. "[BIND-WAIT-SELFTEST] PASS" is the --done-marker, "... FAIL" the
-// --fail-marker. It waits up to 600 ticks for the session's real holds to clear, else prints "... SKIPPED:
-// real holds present" and does not run. With bind_wait_red=1 only checks 1 and 10 run and the line is
+// eid whose registry row holds a purged actor is held and replays at its bind; 10: a replay's Drop of a later
+// hold of its own eid voids it mid-pass; 11: a Drop of a stored hold; 12: of a due hold; 13: HeldOf against
+// CoalescedOf on two holds of a kind (check 6 also counts the refused 65th in RefusedCount); 14: with
+// bind_wait_red=1 a hold is refused whatever the eid. "[BIND-WAIT-SELFTEST] PASS" is the --done-marker,
+// "... FAIL" the --fail-marker. It waits up to 600 ticks for the session's real holds to clear, else prints
+// "... SKIPPED: real holds present" and does not run. With bind_wait_red=1 only checks 1 and 14 run, the line is
 // "RED ARM" (no PASS), the red: a drill expecting PASS must fail. Run with bind_wait_selftest=1.
 
 #pragma once

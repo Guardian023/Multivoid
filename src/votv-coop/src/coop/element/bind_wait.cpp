@@ -3,7 +3,7 @@
 #include "coop/element/bind_wait.h"
 
 #include "coop/config/config.h"           // ResolveInt, the red arm
-#include "coop/config/config_registry.h"  // rows::bind_wait_red
+#include "coop/config/config_registry.h"  // rows::bind_wait_red, bind_wait_mark_unknown
 #include "coop/element/element.h"         // the row's actor and its cached slot
 #include "coop/element/registry.h"        // Registry: a row awaiting its re-bind
 #include "ue_wrap/core/hot_path_guard.h"  // UE_ASSERT_GAME_THREAD
@@ -45,7 +45,16 @@ std::unordered_set<uint16_t> g_neverBoundKinds;            // kinds whose first 
 size_t g_heldBytes = 0;                                    // bytes in g_holds and g_due, not yet replayed
 uint32_t g_epoch = 0;                                      // bumped by Clear: a Pump in flight stops
 
+// A Drop made while a Pump runs: (eid, kind) pairs the pass checks before each replay; cleared when it ends.
+std::vector<std::pair<uint32_t, uint16_t>> g_droppedInPump;
+
+// The per-kind tallies a drill reads (the header's HeldOf and its siblings).
+struct Tally { uint32_t held = 0, coalesced = 0, replayed = 0, dropped = 0, neverBound = 0; };
+std::unordered_map<uint16_t, Tally> g_kinds;
+
 uint32_t g_deferredN = 0, g_heldN = 0, g_replayedN = 0, g_givenUpN = 0, g_neverBoundN = 0;
+uint32_t g_refusedN = 0;                                   // holds refused at a bound
+uint32_t g_dropN = 0;                                      // Drop calls that voided a hold: the log cadence
 uint32_t g_replayEvents = 0;                               // eids replayed: the log cadence
 uint32_t g_emptyGiveUpN = 0;                               // marks that ended with no hold to drop
 
@@ -58,7 +67,32 @@ bool Red() {
     return red;
 }
 
+// The drill row: an eid this peer has no registry row for is marked deferred at its first hold, so a seed that
+// lands before its spawn is held and replays at the spawn's bind. Resolved once.
+bool MarkUnknown() {
+    static const bool on = coop::config::ResolveFlag(coop::config_registry::rows::bind_wait_mark_unknown);
+    return on;
+}
+
+uint32_t TallyOf(uint16_t kind, uint32_t Tally::*field) {
+    auto it = g_kinds.find(kind);
+    return it == g_kinds.end() ? 0 : it->second.*field;
+}
+
 void Release(size_t n) { g_heldBytes = g_heldBytes >= n ? g_heldBytes - n : 0; }
+
+// Erase the holds of `kind` from one list, releasing their bytes; the count erased.
+size_t EraseKind(std::vector<Held>& v, uint16_t kind) {
+    const size_t before = v.size();
+    v.erase(std::remove_if(v.begin(), v.end(),
+                           [&](const Held& h) {
+                               if (h.kind != kind) return false;
+                               Release(h.bytes.size());
+                               return true;
+                           }),
+            v.end());
+    return before - v.size();
+}
 
 uint32_t GenOf(uint32_t eid) {
     auto it = g_gen.find(eid);
@@ -93,9 +127,24 @@ bool IsDeferred(uint32_t eid) {
     return g_deferred.count(eid) > 0;
 }
 
+bool Holds(uint32_t eid, uint16_t kind) {
+    UE_ASSERT_GAME_THREAD("bind_wait::Holds");
+    if (auto it = g_holds.find(eid); it != g_holds.end())
+        for (const Held& h : it->second)
+            if (h.kind == kind) return true;
+    for (const Due& d : g_due) {
+        if (d.eid != eid) continue;
+        for (const Held& h : d.holds)
+            if (h.kind == kind) return true;
+    }
+    return false;
+}
+
 bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce) {
     UE_ASSERT_GAME_THREAD("bind_wait::Hold");
     if (Red() || !fn) return false;
+    if (MarkUnknown() && !coop::element::Registry::Get().Get(eid))
+        MarkDeferred(eid, "drill: an eid this peer has no row for");
     if (g_deferred.count(eid) == 0) {
         if (!AwaitsRebind(eid)) return false;
         MarkDeferred(eid, "a row awaiting its re-bind");
@@ -104,6 +153,7 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
     std::vector<Held>& v = g_holds[eid];
     // Past a bound the hold is refused but still taken: the caller must not drop it a second way.
     auto refuse = [&]() {
+        ++g_refusedN;
         if (g_overWarned.insert(eid).second)
             UE_LOGW("[BIND-WAIT] eid=%u over its bound -- hold refused (%zu hold(s), %zu B held in all)", eid,
                     v.size(), g_heldBytes);
@@ -119,6 +169,7 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
             h.fn = fn;
             h.bytes.assign(b, b + n);
             ++g_heldN;
+            ++g_kinds[kind].coalesced;
             return true;
         }
     }
@@ -126,6 +177,7 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
     v.push_back(Held{kind, senderSlot, fn, std::vector<uint8_t>(b, b + n)});
     g_heldBytes += n;
     ++g_heldN;
+    ++g_kinds[kind].held;
     return true;
 }
 
@@ -153,6 +205,7 @@ void Pump() {
         ~PassEnd() {
             g_pumping = false;
             g_leftInPump.clear();
+            g_droppedInPump.clear();
             if (g_due.empty()) g_gen.clear();
         }
     } passEnd;
@@ -168,14 +221,37 @@ void Pump() {
                 ++g_givenUpN;
                 continue;
             }
+            if (std::find(g_droppedInPump.begin(), g_droppedInPump.end(), std::make_pair(d.eid, h.kind)) !=
+                g_droppedInPump.end()) {   // its module voided it (Drop) since it fell due
+                ++g_kinds[h.kind].dropped;
+                continue;
+            }
             h.fn(h.bytes.data(), h.bytes.size(), h.slot);
             ++g_replayedN;
+            ++g_kinds[h.kind].replayed;
             ++ran;
         }
         if (ran > 0 && Loud(++g_replayEvents))
             UE_LOGI("[BIND-WAIT] replayed %zu hold(s) for eid=%u -- %u replayed so far", ran, d.eid,
                     g_replayedN);
     }
+}
+
+void Drop(uint32_t eid, uint16_t kind, const char* why) {
+    UE_ASSERT_GAME_THREAD("bind_wait::Drop");
+    if (g_pumping) g_droppedInPump.emplace_back(eid, kind);   // the pass's swapped-out holds of it skip
+    size_t dropped = 0;
+    if (auto it = g_holds.find(eid); it != g_holds.end()) {
+        dropped += EraseKind(it->second, kind);
+        if (it->second.empty()) g_holds.erase(it);
+    }
+    for (Due& d : g_due)
+        if (d.eid == eid) dropped += EraseKind(d.holds, kind);
+    if (dropped == 0) return;
+    g_kinds[kind].dropped += static_cast<uint32_t>(dropped);
+    if (Loud(++g_dropN))
+        UE_LOGI("[BIND-WAIT] dropped %zu hold(s) of kind %u for eid=%u (%s) -- %u drop(s) so far", dropped,
+                static_cast<unsigned>(kind), eid, why, g_dropN);
 }
 
 void GiveUp(uint32_t eid, const char* why) {
@@ -241,6 +317,7 @@ void Clear(const char* why) {
 void NoteNeverBound(uint16_t kind, uint32_t eid) {
     UE_ASSERT_GAME_THREAD("bind_wait::NoteNeverBound");
     ++g_neverBoundN;
+    ++g_kinds[kind].neverBound;
     if (g_neverBoundKinds.insert(kind).second || Loud(g_neverBoundN))
         UE_LOGW("[BIND-WAIT] kind %u names eid=%u, a prop this peer never bound -- dropped (%u so far)",
                 static_cast<unsigned>(kind), eid, g_neverBoundN);
@@ -259,5 +336,12 @@ uint32_t DeferredCount()   { UE_ASSERT_GAME_THREAD("bind_wait::DeferredCount"); 
 uint32_t HeldCount()       { UE_ASSERT_GAME_THREAD("bind_wait::HeldCount");       return g_heldN; }
 uint32_t ReplayedCount()   { UE_ASSERT_GAME_THREAD("bind_wait::ReplayedCount");   return g_replayedN; }
 uint32_t GivenUpCount()    { UE_ASSERT_GAME_THREAD("bind_wait::GivenUpCount");    return g_givenUpN; }
+uint32_t RefusedCount()    { UE_ASSERT_GAME_THREAD("bind_wait::RefusedCount");    return g_refusedN; }
+
+uint32_t HeldOf(uint16_t kind)       { UE_ASSERT_GAME_THREAD("bind_wait::HeldOf");       return TallyOf(kind, &Tally::held); }
+uint32_t CoalescedOf(uint16_t kind)  { UE_ASSERT_GAME_THREAD("bind_wait::CoalescedOf");  return TallyOf(kind, &Tally::coalesced); }
+uint32_t ReplayedOf(uint16_t kind)   { UE_ASSERT_GAME_THREAD("bind_wait::ReplayedOf");   return TallyOf(kind, &Tally::replayed); }
+uint32_t DroppedOf(uint16_t kind)    { UE_ASSERT_GAME_THREAD("bind_wait::DroppedOf");    return TallyOf(kind, &Tally::dropped); }
+uint32_t NeverBoundOf(uint16_t kind) { UE_ASSERT_GAME_THREAD("bind_wait::NeverBoundOf"); return TallyOf(kind, &Tally::neverBound); }
 
 }  // namespace coop::element::bind_wait

@@ -9,8 +9,10 @@
 // DROPS the holds with a named reason. A message for an eid that was never marked is not held: it is
 // counted (NoteNeverBound) and dropped by the caller. Game thread only, no mutex.
 //
-// Bounds: 64 holds per eid and 1 MiB of held bytes in all; past either the new hold is refused, with one
-// warning per eid. A replay that holds again lands in the next Pump, never inside the one running.
+// A coalesced hold keeps its first arrival's place: across KINDS of one eid the replay is in first-arrival
+// order, within a kind the latest bytes win. Bounds: 64 holds per eid and 1 MiB of held bytes in all; past
+// either the new hold is refused, with one warning per eid. A replay that holds again lands in the next
+// Pump, not the one running.
 
 #pragma once
 
@@ -26,9 +28,15 @@ using Replay = void (*)(const uint8_t* bytes, size_t n, int senderSlot);
 void MarkDeferred(uint32_t eid, const char* why);
 bool IsDeferred(uint32_t eid);
 
+// True while a hold of `kind` for the eid is stored or due (not yet replayed).
+bool Holds(uint32_t eid, uint16_t kind);
+
 // Keep a copy of the message until the eid binds. False when the eid is not deferred (or the red row is
 // on): the caller then owns the message. An unmarked eid whose registry row holds a purged actor is marked
-// here, "a row awaiting its re-bind": the game's re-created native binds onto it and frees the mark. True when stored, and also when refused by a bound (warned).
+// here, "a row awaiting its re-bind": the game's re-created native binds onto it and frees the mark. With the
+// drill row bind_wait_mark_unknown, an eid this peer has no registry row for is marked here too (a seed that
+// lands before its spawn then waits for the spawn's bind). True when stored, and also when refused by a
+// bound (warned, counted in RefusedCount).
 // `coalesce`: an earlier hold of the same `kind` for the eid is replaced in place, latest wins.
 bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce);
 
@@ -38,6 +46,11 @@ void OnBound(uint32_t eid);
 // Run every due hold, in arrival order. O(1) when none is due. Called from the reliable drain. A GiveUp of
 // an eid, or a slot that left, while the pass runs voids the holds of it the pass has not yet reached.
 void Pump();
+
+// The module's own newer state voids its held messages: erase the eid's stored and due holds of `kind`,
+// also those a Pump in flight has swapped out and not yet reached. Counted into DroppedOf, never GivenUpCount.
+// One kind number carrying several ops must hold with one op only, else the Drop voids the others too.
+void Drop(uint32_t eid, uint16_t kind, const char* why);
 
 // The bind will not come: drop the eid's mark and holds. A no-op for an eid neither deferred nor holding.
 void GiveUp(uint32_t eid, const char* why);
@@ -60,5 +73,15 @@ uint32_t DeferredCount();
 uint32_t HeldCount();
 uint32_t ReplayedCount();
 uint32_t GivenUpCount();
+uint32_t RefusedCount();   // holds refused at a bound (Hold returned true, the message was not kept)
+
+// Per kind, for a drill's verdict on one module. HeldOf counts distinct holds (a coalesced overwrite counts
+// into CoalescedOf); a correct run keeps HeldOf == ReplayedOf + DroppedOf + the holds of that kind given
+// up or lost with a slot. A module's own drop at replay time is the module's to count.
+uint32_t HeldOf(uint16_t kind);
+uint32_t CoalescedOf(uint16_t kind);
+uint32_t ReplayedOf(uint16_t kind);
+uint32_t DroppedOf(uint16_t kind);
+uint32_t NeverBoundOf(uint16_t kind);
 
 }  // namespace coop::element::bind_wait

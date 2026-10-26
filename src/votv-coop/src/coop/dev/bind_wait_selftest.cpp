@@ -43,10 +43,12 @@ std::vector<Call> g_calls;
 uint32_t g_reholdEid = 0;   // check 3: the eid the 'R' replay defers and holds again
 uint32_t g_giveUpEid = 0;   // check 7: the eid the 'K' replay gives up
 int g_leaveSlot = 0;        // check 8: the slot the 'L' replay drops
+uint32_t g_dropEid = 0;     // check 10: the eid whose kind-80 holds the 'D' replay drops
 
 void Record(const uint8_t* bytes, size_t n, int slot) {
     const uint8_t tag = n > 0 ? bytes[0] : 0;
     g_calls.push_back(Call{tag, slot});
+    if (tag == 'D') BW::Drop(g_dropEid, 80, "selftest: a replay drops a later hold of its own eid");
     if (tag == 'K') BW::GiveUp(g_giveUpEid, "selftest: a replay gives up a due eid");
     if (tag == 'L') BW::OnSlotLeft(g_leaveSlot);
     if (tag == 'R') {   // a replay that defers a new eid and binds it: due, but only at the next Pump
@@ -146,7 +148,9 @@ const char* CheckGreen() {
     // 6.
     const uint32_t e7 = kBase + 7;
     BW::MarkDeferred(e7, "selftest: bound");
+    const uint32_t refused0 = BW::RefusedCount();
     for (uint16_t k = 0; k < 65; ++k) HoldTag(e7, 100 + k, 1, 'z', false);
+    if (BW::RefusedCount() != refused0 + 1) return "the refusal at the per-eid bound was not counted";
     BW::OnBound(e7);
     BW::Pump();
     if (g_calls.size() != 64) return "the per-eid bound did not hold at 64";
@@ -180,6 +184,58 @@ const char* CheckGreen() {
     // 9. A row whose actor was purged is held without a mark, and its re-bind frees the hold.
     const char* purged = CheckPurgeWindow();
     if (purged) return purged;
+    // 10. A replay that Drops a later hold of its own eid during the pass: that hold does not run.
+    const uint32_t e12 = kBase + 12;
+    g_dropEid = e12;
+    const uint32_t dropped80 = BW::DroppedOf(80);
+    BW::MarkDeferred(e12, "selftest: a replay drops");
+    HoldTag(e12, 80, 1, 'D', false);
+    HoldTag(e12, 81, 1, 'E', false);
+    HoldTag(e12, 80, 1, 'F', false);
+    BW::OnBound(e12);
+    BW::Pump();
+    if (!Calls("DE")) return "a Drop made by a replay did not void the later hold of its kind in the pass";
+    if (BW::DroppedOf(80) != dropped80 + 1) return "the hold a replay's Drop voided was not counted as dropped";
+    g_calls.clear();
+    // 11. A Drop of a stored hold erases it, releases its bytes and leaves the eid's other kinds.
+    const uint32_t e13 = kBase + 13;
+    const uint32_t dropped90 = BW::DroppedOf(90);
+    BW::MarkDeferred(e13, "selftest: drop stored");
+    HoldTag(e13, 90, 1, 'S', false);
+    HoldTag(e13, 91, 1, 'T', false);
+    if (!BW::Holds(e13, 90) || !BW::Holds(e13, 91)) return "Holds did not see a stored hold";
+    BW::Drop(e13, 90, "selftest");
+    if (BW::Holds(e13, 90) || !BW::Holds(e13, 91)) return "a Drop of a stored hold took more or less than its kind";
+    if (BW::DroppedOf(90) != dropped90 + 1) return "a Drop of a stored hold was not counted as dropped";
+    BW::OnBound(e13);
+    BW::Pump();
+    if (!Calls("T")) return "a stored hold that was dropped still replayed";
+    if (BW::HasHolds()) return "a Drop left bytes held";
+    g_calls.clear();
+    // 12. A Drop of a due hold (bound, not yet pumped) erases it.
+    const uint32_t e14 = kBase + 14;
+    BW::MarkDeferred(e14, "selftest: drop due");
+    HoldTag(e14, 92, 1, 'U', false);
+    HoldTag(e14, 93, 1, 'V', false);
+    BW::OnBound(e14);
+    if (!BW::Holds(e14, 92)) return "Holds did not see a due hold";
+    BW::Drop(e14, 92, "selftest");
+    if (BW::Holds(e14, 92) || !BW::Holds(e14, 93)) return "a Drop of a due hold took more or less than its kind";
+    BW::Pump();
+    if (!Calls("V")) return "a due hold that was dropped still replayed";
+    g_calls.clear();
+    // 13. Two holds of one kind: a coalesced one overwrites in place and counts as coalesced, not as held.
+    const uint32_t e15 = kBase + 15;
+    const uint32_t held94 = BW::HeldOf(94), coalesced94 = BW::CoalescedOf(94), replayed94 = BW::ReplayedOf(94);
+    BW::MarkDeferred(e15, "selftest: coalesced tally");
+    HoldTag(e15, 94, 1, 'c', true);
+    HoldTag(e15, 94, 1, 'C', true);
+    if (BW::HeldOf(94) != held94 + 1 || BW::CoalescedOf(94) != coalesced94 + 1)
+        return "a coalesced hold was not counted apart from a distinct one";
+    BW::OnBound(e15);
+    BW::Pump();
+    if (!Calls("C") || BW::ReplayedOf(94) != replayed94 + 1) return "a coalesced hold did not replay once, latest bytes";
+    g_calls.clear();
     return nullptr;
 }
 
@@ -213,7 +269,7 @@ void Run() {
     const char* failed = CheckGreen();
     Cleanup();
     if (failed) UE_LOGE("[BIND-WAIT-SELFTEST] FAIL: %s", failed);
-    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (9 checks)");
+    else UE_LOGI("[BIND-WAIT-SELFTEST] PASS (13 checks)");
 }
 
 }  // namespace
