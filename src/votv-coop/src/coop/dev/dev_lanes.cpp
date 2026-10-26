@@ -110,6 +110,7 @@
 #include "coop/dev/native_spawn_probe.h"  // [dev] every allowlisted creature a Blueprint graph spawns here, and the client orb question
 #include "coop/dev/order_probe.h"  // who writes the order queue, and what the drone delivers, per peer
 #include "coop/dev/bind_wait_selftest.h"  // [dev] the bind wait's rules on stated inputs
+#include "coop/dev/pile_key_probe.h"  // [dev] [MEASURE sync-order-wp5, temporary] the pile key against its native
 #include "coop/dev/order_selftest.h"  // exercise host-side order pricing end to end
 #include "coop/dev/physmods_drill.h"  // [dev] a module plug and unplug are sent at their verbs, and a rejoin's load sends none
 #include "coop/dev/pinecone_probe.h"
@@ -248,6 +249,7 @@ void EndSession() {
     coop::dev::pause_quit_drill::OnDisconnect();  // [dev] a pending wait for the pause menu is dropped; the per-process latch stands
     coop::dev::order_selftest::OnDisconnect();  // [dev] a rejoin's peers run their legs again
     coop::dev::bind_wait_selftest::OnDisconnect();  // [dev] a rejoin's client runs the checks again
+    coop::dev::pile_key_probe::OnDisconnect();  // [dev] [MEASURE sync-order-wp5, temporary] the first-seen records belong to one world
     coop::dev::meadow_selftest::OnDisconnect();  // [dev] a rejoin's peers run their legs again
     coop::dev::lid_drill::OnDisconnect();  // [dev] the PC and the legs belong to one world
     coop::dev::subject_drill::OnDisconnect();  // [dev] the drives and the legs belong to one world

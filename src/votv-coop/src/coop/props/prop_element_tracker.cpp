@@ -9,6 +9,7 @@
 #include "prop_element_tracker_detail.h"  // co-located private header (src tree, not include/)
 
 #include "coop/dev/eid_lifetime_trace.h"  // RecordCaptureEid, the host's capture trace
+#include "coop/dev/pile_key_probe.h"  // [MEASURE sync-order-wp5, temporary] the capture-tick speed of each pile
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
 #include "coop/element/mirror_managers.h"  // PropMirrors/NpcMirrors/WaMirrors
@@ -382,6 +383,9 @@ static void CollectTrackedTrashTransforms_(
     bool clumps, std::unordered_map<coop::element::ElementId, ue_wrap::FVector>& out) {
     const int32_t n = R::NumObjects();
     int minted = 0;
+    // [MEASURE sync-order-wp5, temporary]
+    const bool pileProbe = !clumps && coop::dev::pile_key_probe::On();
+    if (pileProbe) coop::dev::pile_key_probe::BeginHostCapture();
     for (int32_t i = 0; i < n; ++i) {
         void* obj = R::ObjectAt(i);
         if (!obj) continue;
@@ -402,7 +406,9 @@ static void CollectTrackedTrashTransforms_(
         if (!ue_wrap::engine::TryGetActorLocation(obj, at)) continue;   // no read, no save-time position
         out[eid] = at;
         coop::dev::eid_lifetime_trace::RecordCaptureEid(obj, static_cast<uint32_t>(eid));  // the capture trace
+        if (pileProbe) coop::dev::pile_key_probe::NoteHostPile(static_cast<uint32_t>(eid), obj, at);  // [MEASURE sync-order-wp5, temporary]
     }
+    if (pileProbe) coop::dev::pile_key_probe::EndHostCapture();  // [MEASURE sync-order-wp5, temporary]
     if (minted > 0)
         UE_LOGI("prop_element_tracker: the capture self-seeded %d unseeded live %s (world-change re-seed "
                 "still deferred at capture) -> %zu save-time xform(s)",

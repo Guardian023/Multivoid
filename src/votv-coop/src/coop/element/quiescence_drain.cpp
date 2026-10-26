@@ -20,6 +20,7 @@
 #include "coop/props/pile_spawn_bind.h"  // AdoptOwnNative (the shared bind primitive)
 #include "coop/props/save_time_retire_util.h"  // FindExactMatch, UnmarkAndDestroy
 #include "coop/config/config.h"           // ResolveFlag
+#include "coop/dev/pile_key_probe.h"      // [MEASURE sync-order-wp5, temporary] the key against the native, per pass
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/actors/prop.h"
@@ -145,6 +146,8 @@ void NoteGaveUp(uint32_t eid, const PendingTwin& p, void* bound) {
     UE_LOGW("[PILE-1C] eid=%u GIVEN UP after %d pass(es) with NO actor -- no native ever appeared at "
             "its save-time key (%.1f,%.1f,%.1f), so this pile is absent on this client until a later "
             "join re-expresses it", eid, p.unresolvedPasses, p.x, p.y, p.z);
+    if (coop::dev::pile_key_probe::On())   // [MEASURE sync-order-wp5, temporary]
+        coop::dev::pile_key_probe::LogGaveUp(eid, ue_wrap::FVector{p.x, p.y, p.z}, p.wantClump, p.chipType);
     bind_wait::GiveUp(eid, "no native appeared at the save-time key");   // the held messages have no prop to reach
 }
 
@@ -163,6 +166,8 @@ int SweepReconcileSaveTimeTwins() {
     struct BoundNative { void* actor; float x, y, z; uint32_t eid; };
     std::vector<BoundNative> boundChip;
     const bool probe = DupProbeOn();
+    const bool keyProbe = coop::dev::pile_key_probe::On();   // [MEASURE sync-order-wp5, temporary]
+    std::vector<coop::dev::pile_key_probe::Native> keyNatives;
     const int32_t n = R::NumObjects();
     for (int32_t i = 0; i < n; ++i) {
         void* o = R::ObjectAt(i);
@@ -183,7 +188,12 @@ int SweepReconcileSaveTimeTwins() {
         ue_wrap::FVector loc{};
         if (!ue_wrap::engine::TryGetActorLocation(o, loc)) continue;   // no read, no twin candidate
         natives.push_back({o, R::InternalIndexOf(o), loc.X, loc.Y, loc.Z, ue_wrap::prop::GetChipType(o), isClump});
+        if (keyProbe) {   // [MEASURE sync-order-wp5, temporary]
+            const LiveNative& nv = natives.back();
+            keyNatives.push_back({nv.actor, nv.idx, nv.x, nv.y, nv.z, nv.chipType, nv.isClump});
+        }
     }
+    if (keyProbe) coop::dev::pile_key_probe::NoteSweepNatives(keyNatives.data(), keyNatives.size());   // [MEASURE sync-order-wp5, temporary]
 
     // The per-eid decision. Matched and confirmed: retire, no cap (positive evidence: the element
     // is bound to a live actor, the host's word for a vacate twin, bound far for an event twin).
@@ -197,6 +207,8 @@ int SweepReconcileSaveTimeTwins() {
     int confirmedRetired = 0, held = 0, lateBound = 0;
     for (auto& [eid, p] : g_pendingSaveTimeTwin) {
         const ue_wrap::FVector key{p.x, p.y, p.z};
+        if (keyProbe && !p.hostVacate)   // [MEASURE sync-order-wp5, temporary]
+            coop::dev::pile_key_probe::LogPass(eid, p.unresolvedPasses + 1, key, p.wantClump, p.chipType);
         const int idx = coop::save_time_retire_util::FindExactMatch(
             natives, consumedFlags, key,
             [&p](const LiveNative& nv) {
@@ -266,6 +278,7 @@ int SweepReconcileSaveTimeTwins() {
                 consumedFlags[idx] = true;
                 coop::pile_spawn_bind::AdoptOwnNative(natives[idx].actor, eid, /*senderSlot=*/0,
                                                       p.hostVacate ? "load tail, host-vacate key" : "load tail");
+                if (keyProbe) coop::dev::pile_key_probe::NoteAdopted(eid, p.unresolvedPasses + 1);   // [MEASURE sync-order-wp5, temporary]
                 resolvedEids.push_back(eid);
                 ++lateBound;
             } else {
