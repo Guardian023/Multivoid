@@ -507,7 +507,7 @@ DisconnectStats DisconnectAll() {
     coop::deck_play_sync::OnDisconnect();  // gen counters + ring + self-test latch
     coop::physmods_sync::OnDisconnect();  // verb snapshots + parked canonical + deny records
     coop::drive_sync::OnDisconnect();  // slot baselines + latch/dirty state + pending
-    coop::drive_payload_sync::OnDisconnect();  // held and sent rows, parked rows, notes
+    coop::drive_payload_sync::OnDisconnect();  // held and sent rows, notes
     coop::drive_rack_sync::OnDisconnect();  // rack baselines/shadow + pending + deny/taken rings
     coop::sleep_sync::OnDisconnect();
     coop::sleep_rest::OnDisconnect();  // a rest in progress goes back to factor 1
