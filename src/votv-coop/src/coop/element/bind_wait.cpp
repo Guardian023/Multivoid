@@ -21,6 +21,7 @@ namespace {
 
 constexpr size_t kMaxHoldsPerEid = 64;
 constexpr size_t kMaxHeldBytes   = 1024 * 1024;
+constexpr size_t kMaxSlotBytes   = 256 * 1024;   // one client slot's share of it; slot 0 (the host) may use all
 
 struct Held {
     uint16_t kind;
@@ -43,6 +44,8 @@ bool g_pumping = false;
 std::unordered_set<uint32_t> g_overWarned;                 // eids whose bound was already said
 std::unordered_set<uint16_t> g_neverBoundKinds;            // kinds whose first never-bound drop was said
 size_t g_heldBytes = 0;                                    // bytes in g_holds and g_due, not yet replayed
+std::unordered_map<int, size_t> g_slotBytes;               // the same bytes per sender slot, slots other than 0
+std::unordered_set<int> g_slotWarned;                      // slots whose share bound was already said
 uint32_t g_epoch = 0;                                      // bumped by Clear: a Pump in flight stops
 
 // A Drop made while a Pump runs: (eid, kind) pairs the pass checks before each replay; cleared when it ends.
@@ -79,7 +82,26 @@ uint32_t TallyOf(uint16_t kind, uint32_t Tally::*field) {
     return it == g_kinds.end() ? 0 : it->second.*field;
 }
 
-void Release(size_t n) { g_heldBytes = g_heldBytes >= n ? g_heldBytes - n : 0; }
+size_t SlotBytes(int slot) {
+    auto it = g_slotBytes.find(slot);
+    return it == g_slotBytes.end() ? 0 : it->second;
+}
+
+// Every byte kept is charged to the pool and, for a slot other than 0, to that slot's share; Release is
+// its only undo, on every path that drops a hold.
+void Charge(int slot, size_t n) {
+    g_heldBytes += n;
+    if (slot != 0) g_slotBytes[slot] += n;
+}
+
+void Release(int slot, size_t n) {
+    g_heldBytes = g_heldBytes >= n ? g_heldBytes - n : 0;
+    if (slot == 0) return;
+    auto it = g_slotBytes.find(slot);
+    if (it == g_slotBytes.end()) return;
+    if (it->second > n) it->second -= n;
+    else g_slotBytes.erase(it);
+}
 
 // Erase the holds of `kind` from one list, releasing their bytes; the count erased.
 size_t EraseKind(std::vector<Held>& v, uint16_t kind) {
@@ -87,7 +109,7 @@ size_t EraseKind(std::vector<Held>& v, uint16_t kind) {
     v.erase(std::remove_if(v.begin(), v.end(),
                            [&](const Held& h) {
                                if (h.kind != kind) return false;
-                               Release(h.bytes.size());
+                               Release(h.slot, h.bytes.size());
                                return true;
                            }),
             v.end());
@@ -105,12 +127,6 @@ bool AwaitsRebind(uint32_t eid) {
     const coop::element::Element* e = coop::element::Registry::Get().Get(eid);
     if (!e || !e->GetActor()) return false;
     return !ue_wrap::reflection::IsLiveByIndex(e->GetActor(), e->GetInternalIdx());
-}
-
-size_t BytesOf(const std::vector<Held>& v) {
-    size_t n = 0;
-    for (const Held& h : v) n += h.bytes.size();
-    return n;
 }
 
 }  // namespace
@@ -159,13 +175,23 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
                     v.size(), g_heldBytes);
         return true;
     };
+    // A client slot may keep kMaxSlotBytes of the pool (MTA bounds a latent transfer per remote, CLatentReceiver
+    // and CLatentSendQueue), so one sender cannot starve the rest; said once per slot.
+    auto overShare = [&](size_t replaced) {
+        if (senderSlot == 0 || SlotBytes(senderSlot) - replaced + n <= kMaxSlotBytes) return false;
+        ++g_refusedN;
+        if (g_slotWarned.insert(senderSlot).second)
+            UE_LOGW("[BIND-WAIT] slot %d is over its share of the hold pool (%zu of %zu B) -- hold refused", senderSlot,
+                    SlotBytes(senderSlot), kMaxSlotBytes);
+        return true;
+    };
     if (coalesce) {
         for (Held& h : v) {
-            if (h.kind != kind) continue;
+            if (h.kind != kind || h.slot != senderSlot) continue;
             if (g_heldBytes - h.bytes.size() + n > kMaxHeldBytes) return refuse();
-            Release(h.bytes.size());
-            g_heldBytes += n;
-            h.slot = senderSlot;
+            if (overShare(h.bytes.size())) return true;
+            Release(h.slot, h.bytes.size());
+            Charge(senderSlot, n);
             h.fn = fn;
             h.bytes.assign(b, b + n);
             ++g_heldN;
@@ -174,8 +200,9 @@ bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* by
         }
     }
     if (v.size() >= kMaxHoldsPerEid || g_heldBytes + n > kMaxHeldBytes) return refuse();
+    if (overShare(0)) return true;
     v.push_back(Held{kind, senderSlot, fn, std::vector<uint8_t>(b, b + n)});
-    g_heldBytes += n;
+    Charge(senderSlot, n);
     ++g_heldN;
     ++g_kinds[kind].held;
     return true;
@@ -229,7 +256,7 @@ void Pump() {
                 clearedRest(di, hi);
                 return;
             }
-            Release(h.bytes.size());
+            Release(h.slot, h.bytes.size());
             if (GenOf(d.eid) != d.gen || leftInPump(h.slot)) {   // given up, or its sender left, since it fell due
                 ++g_givenUpN;
                 ++g_kinds[h.kind].givenUp;
@@ -277,8 +304,10 @@ void GiveUp(uint32_t eid, const char* why) {
     size_t dropped = 0;
     if (auto it = g_holds.find(eid); it != g_holds.end()) {
         dropped = it->second.size();
-        for (const Held& h : it->second) ++g_kinds[h.kind].givenUp;
-        Release(BytesOf(it->second));
+        for (const Held& h : it->second) {
+            ++g_kinds[h.kind].givenUp;
+            Release(h.slot, h.bytes.size());
+        }
         g_holds.erase(it);
     }
     if (dropped == 0) {   // a mark with no hold ends silently, counted
@@ -291,6 +320,7 @@ void GiveUp(uint32_t eid, const char* why) {
 
 void OnSlotLeft(int slot) {
     UE_ASSERT_GAME_THREAD("bind_wait::OnSlotLeft");
+    g_slotWarned.erase(slot);
     if (g_pumping) g_leftInPump.push_back(slot);   // the swapped-out holds of the pass in flight skip it
     size_t dropped = 0;
     auto drop = [&](std::vector<Held>& v) {
@@ -298,7 +328,7 @@ void OnSlotLeft(int slot) {
         v.erase(std::remove_if(v.begin(), v.end(),
                                [&](const Held& h) {
                                    if (h.slot != slot) return false;
-                                   Release(h.bytes.size());
+                                   Release(h.slot, h.bytes.size());
                                    ++g_kinds[h.kind].givenUp;
                                    return true;
                                }),
@@ -329,8 +359,10 @@ void Clear(const char* why) {
     g_holds.clear();
     g_due.clear();
     g_overWarned.clear();
+    g_slotWarned.clear();
     g_gen.clear();
     g_heldBytes = 0;
+    g_slotBytes.clear();
     ++g_epoch;   // a Pump in flight stops at its next hold: the clear is its generation bump
 }
 

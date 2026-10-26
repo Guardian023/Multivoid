@@ -552,13 +552,13 @@ CFG_INT(bind_wait_red, "bind_wait_red", "dev", 0, 0, 1, "VOTVCOOP_BIND_WAIT_RED"
 CFG_FLAG(bind_wait_mark_unknown, "bind_wait_mark_unknown", "dev", false, "VOTVCOOP_BIND_WAIT_MARK_UNKNOWN",
     "Drill (the JOINER): the bind wait marks an eid this peer has no registry row for as deferred when a message "
     "for it arrives, so a seed that lands before its spawn is held and replays at the spawn's bind instead of "
-    "being dropped as never bound. Pair with join_gate_red=1 on the host.")
+    "being dropped as never bound. Pair with join_gate_red=1 on the host. Not with bind_wait_selftest, whose first check fails under it.")
 CFG_INT(bind_wait_selftest, "bind_wait_selftest", "dev", 0, 0, 1, "VOTVCOOP_BIND_WAIT_SELFTEST",
     "Selftest (a CLIENT): once its world is announced, the bind wait's rules are checked on synthetic eids: a hold for "
     "an eid not deferred is refused, holds replay in order with the coalesced one in its place, a replay that holds "
     "again does not corrupt the pump, a given-up eid and a slot that left take their holds with them (also during a "
     "pump), a row awaiting its re-bind holds, the 65th hold of one eid is refused and counted, a module's Drop voids "
-    "its stored, due and in-pass holds, and the per-kind tallies tell a coalesced hold from a distinct one. Prints [BIND-WAIT-SELFTEST] PASS or FAIL. With bind_wait_red=1 it prints RED ARM and no PASS.")
+    "its stored, due and in-pass holds, and the per-kind tallies tell a coalesced hold from a distinct one and balance, a client slot has its own share of the pool. Its last check Clears the wait, ending the session's real marks. Prints [BIND-WAIT-SELFTEST] PASS or FAIL. With bind_wait_red=1 it prints RED ARM and no PASS.")
 CFG_ENUM(prop_syncer_load_lane, "prop_syncer_load_lane", "dev", "transfer", "transfer|default", "VOTVCOOP_PROP_SYNCER_LOAD_LANE",
     "Drill knob (HOST): the lane the load arm's filler rides. transfer is the shipped lane of a payload that can "
     "exceed the blob ceiling; default puts the filler on the ordered lane the syncer's own messages ride, which is "

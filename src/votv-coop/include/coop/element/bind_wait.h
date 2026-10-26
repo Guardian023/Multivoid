@@ -8,11 +8,6 @@
 // reliable drain. A bind that gives up (or a destroy of the eid, a slot that left, a world change)
 // DROPS the holds with a named reason. A message for an eid that was never marked is not held: it is
 // counted (NoteNeverBound) and dropped by the caller. Game thread only, no mutex.
-//
-// A coalesced hold keeps its first arrival's place: across KINDS of one eid the replay is in first-arrival
-// order, within a kind the latest bytes win. Bounds: 64 holds per eid and 1 MiB of held bytes in all; past
-// either the new hold is refused, with one warning per eid. A replay that holds again lands in the next
-// Pump, not the one running.
 
 #pragma once
 
@@ -20,6 +15,19 @@
 #include <cstdint>
 
 namespace coop::element::bind_wait {
+
+// MTA drops a packet that names an element the client does not have (Client/mods/deathmatch/logic/rpc/
+// CRPCFunctions.cpp:156-164, the null GetElement returns) and keeps no queue; its elements exist from the
+// create packet and the engine object streams in later. Ours holds only for an eid whose bind is DEFERRED,
+// because a client adopts its save-loaded twin: the identity exists before any actor does. An eid that was
+// never marked is dropped as MTA does. MTA keeps the latest state on the element; the holds of a coalesced
+// kind do the same, and drive_sync alone queues (several lines per eid, each judged by its role).
+//
+// A coalesced hold keeps its first arrival's place: across KINDS of one eid the replay is in first-arrival
+// order, within a (kind, sender slot) the latest bytes win; two slots' holds of one kind are both kept.
+// Bounds: 64 holds per eid and 1 MiB of held bytes in all, of which a slot other than 0 may use 256 KiB;
+// past either the new hold is refused, with one warning per eid (per slot for the share). A replay that
+// holds again lands in the next Pump, not the one running.
 
 // A held message's replay: the bytes handed to Hold, the slot that sent them.
 using Replay = void (*)(const uint8_t* bytes, size_t n, int senderSlot);
@@ -37,7 +45,7 @@ bool Holds(uint32_t eid, uint16_t kind);
 // drill row bind_wait_mark_unknown, an eid this peer has no registry row for is marked here too (a seed that
 // lands before its spawn then waits for the spawn's bind). True when stored, and also when refused by a
 // bound (warned, counted in RefusedCount).
-// `coalesce`: an earlier hold of the same `kind` for the eid is replaced in place, latest wins.
+// `coalesce`: an earlier hold of the same `kind` and `senderSlot` for the eid is replaced in place, latest wins.
 bool Hold(uint32_t eid, uint16_t kind, int senderSlot, Replay fn, const void* bytes, size_t n, bool coalesce);
 
 // A bind took: the eid is no longer deferred and its holds become due.
