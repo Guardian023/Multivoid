@@ -165,7 +165,7 @@ const char* CheckSlotShare(uint32_t eid) {
 // has not reached; 8: a slot that leaves during a pump has its remaining holds skipped; 9: an unmarked eid whose
 // registry row holds a purged actor is held and replays at its bind; 10: a replay's Drop of a later hold of its
 // own eid voids it mid-pass; 11: a Drop of a stored hold; 12: of a due hold; 13: HeldOf against CoalescedOf on
-// two holds of a kind; 14: a GiveUp counts its holds into GivenUpOf; 15: a slot that left does, kind by kind;
+// two holds of a kind; 14: a GiveUp counts its holds into GivenUpOf, a coalesced pair once; 15: a slot that left does, kind by kind;
 // 16: so does a pump's skip of an eid a replay gave up; 17: a client slot keeps at most 256 KiB of the pool,
 // slot 0 and another slot are not limited by it, and a replay and a give-up release the bytes; 18: coalescing
 // holds of one kind from two slots are both kept; 19: a Clear made by a replay ends the pass and counts the
@@ -327,15 +327,24 @@ const char* CheckGreen() {
     if (!Calls("C") || BW::ReplayedOf(94) != replayed94 + 1) return "a coalesced hold did not replay once, latest bytes";
     g_calls.clear();
     if (const char* b = Balanced(13)) return b;
-    // 14. A GiveUp of an eid with two holds of one kind, and a flagged one, counts all into GivenUpOf.
+    // 14. A GiveUp counts every stored hold into GivenUpOf: two unflagged holds of one kind, and a flagged one of
+    // a kind of its own (a flagged hold coalesces latest-wins onto an earlier hold of its (kind, slot), so on
+    // kind 95 it would replace one of the two and the count would be two). Then the coalesced case: two flagged
+    // holds of one (kind, slot) are one stored hold, and the GiveUp counts one.
     const uint32_t e16 = kBase + 1;
-    const uint32_t givenUp95 = BW::GivenUpOf(95);
+    const uint32_t givenUp95 = BW::GivenUpOf(95), givenUp165 = BW::GivenUpOf(165), givenUp166 = BW::GivenUpOf(166);
     BW::MarkDeferred(e16, "selftest: given-up tally");
     HoldTag(e16, 95, 1, 'g', false);
     HoldTag(e16, 95, 1, 'h', false);
-    HoldFlagged(e16, 95, 1, 'i');
+    HoldFlagged(e16, 165, 1, 'i');
     BW::GiveUp(e16, "selftest");
-    if (BW::GivenUpOf(95) != givenUp95 + 3) return "a GiveUp of three holds of one kind was not counted into GivenUpOf";
+    if (BW::GivenUpOf(95) != givenUp95 + 2 || BW::GivenUpOf(165) != givenUp165 + 1)
+        return "a GiveUp of three holds of distinct kinds was not counted into GivenUpOf";
+    BW::MarkDeferred(e16, "selftest: coalesced given-up tally");
+    HoldFlagged(e16, 166, 1, 'j');
+    HoldFlagged(e16, 166, 1, 'k');
+    BW::GiveUp(e16, "selftest");
+    if (BW::GivenUpOf(166) != givenUp166 + 1) return "a GiveUp of two coalesced holds did not count one into GivenUpOf";
     if (const char* b = Balanced(14)) return b;
     // 15. A slot that left takes its holds into GivenUpOf, kind by kind; the other slot's hold replays.
     const uint32_t e17 = kBase + 16;
