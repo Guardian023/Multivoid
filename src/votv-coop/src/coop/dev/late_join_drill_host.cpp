@@ -1,8 +1,9 @@
-// coop/dev/late_join_drill_host.cpp -- see coop/dev/late_join_drill.h: the host's half. Once the first client's world is
-// ready it stages one subject of each converted lane in front of its own player, a step at a time, each step bound by
-// 60 s: an open portable PC, a floppy box, a Kerfus switched on, a drive rack with two rows, and a drive seated in
-// an empty slot with a row of its own. The client then rejoins, and that join's seeds carry all of them. Each recipe
-// is lifted from the drill that proved it (named at its function), not shared: a drill's helpers stay its own.
+// coop/dev/late_join_drill_host.cpp -- see coop/dev/late_join_drill.h: the host's half. Once the host's own world is up,
+// before any client joins, it stages one subject of each converted lane in front of its own player, a step at a time,
+// each step bound by 60 s: an open portable PC, a floppy box, a Kerfus switched on, a drive rack with two rows, and a
+// drive seated in an empty slot with a row of its own. The client that joins afterwards gets all of them in its join's
+// seeds. Each recipe is lifted from the drill that proved it (named at its function), not shared: a drill's helpers
+// stay its own.
 
 #include "late_join_drill_detail.h"  // co-located private header (src tree, not include/)
 
@@ -204,16 +205,18 @@ void ChooseSlot() {
 void HostTick(coop::net::Session& s) {
     switch (g_ph) {
     case Ph::Ready: {
-        bool anyReady = false;
-        for (int slot = 1; slot < static_cast<int>(coop::net::kMaxPeers) && !anyReady; ++slot)
-            anyReady = s.IsSlotWorldReady(slot);
-        if (!anyReady || ++g_readyTicks < 2) return;
-        UE_LOGI("[LATE-JOIN] host ARMED: a client's world is ready");
-        g_world = ue_wrap::world_identity::Generation();
+        if (!s.running() || ++g_readyTicks < 2) return;
+        UE_LOGI("[LATE-JOIN] host ARMED: the session is hosting");
         Enter(Ph::Pc);
         return;
     }
     case Ph::Pc:
+        // The host's world may still be loading: the local player resolves later, inside this step's bound.
+        if (!coop::players::Registry::Get().Local()) {
+            if (Expired()) Fail(kPc, "the local player did not resolve within 60 s");
+            return;
+        }
+        g_world = ue_wrap::world_identity::Generation();
         Stage(kPc, LoadClass(kPc, kPcPath), Ph::PcNamed);
         return;
     case Ph::PcNamed: {

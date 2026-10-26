@@ -92,6 +92,7 @@ CFG_FLAG(atv_set_break, "atv_set_break", "dev", false, "VOTVCOOP_DEV_ATV_SET_BRE
 // has settled.
 CFG_FLAG(late_join_drill, "late_join_drill", "dev", false, "VOTVCOOP_LATE_JOIN_DRILL",
     "Drill (both peers): the HOST stages a PC with its lid open, a floppy box, a Kerfus on, a rack with rows and a "
-    "seated drive once a client is world-ready; the CLIENT, once its join returns to idle, and ten seconds later, "
-    "prints the bind wait's tallies per message kind and in all (held, coalesced, replayed, dropped, given up, never "
-    "bound), then 'client DONE', and says when it sees the staged world. Lines tagged [LATE-JOIN].")
+    "seated drive once its own world is up, before any client joins; the CLIENT (one life, no rejoin), once its join "
+    "returns to idle, checks the staged world is in its world, prints the bind wait's tallies per message kind and in "
+    "all (held, coalesced, replayed, dropped, given up, never bound) then and ten seconds later, judges the staged "
+    "effects, then prints 'client DONE'. Lines tagged [LATE-JOIN].")

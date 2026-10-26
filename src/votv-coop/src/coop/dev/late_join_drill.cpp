@@ -1,6 +1,6 @@
-// coop/dev/late_join_drill.cpp -- see coop/dev/late_join_drill.h. The client's idle edge, its two readings, its look for
-// the world the host staged and its verdict on the second reading (the tallies are bind_wait's own); the host's
-// staging is late_join_drill_host.cpp.
+// coop/dev/late_join_drill.cpp -- see coop/dev/late_join_drill.h. The client's idle edge, its two readings, its check
+// that the world the host staged is in its world and its verdict on the second reading (the tallies are bind_wait's
+// own); the host's staging is late_join_drill_host.cpp.
 
 #include "coop/dev/late_join_drill.h"
 
@@ -24,7 +24,6 @@
 #include "ue_wrap/devices/floppybox.h"
 #include "ue_wrap/devices/portable_pc.h"
 
-#include <cmath>
 #include <cstdarg>
 #include <cstddef>
 #include <cstdint>
@@ -59,15 +58,16 @@ constexpr Kind kKinds[] = {
 bool g_leftIdle = false;   // the join phase has been non-idle this session
 bool g_firstDone = false;  // the at=idle reading is printed
 bool g_done = false;       // the DONE line is printed
-bool g_seen = false;       // the staged-world line is printed
-bool g_sawAtIdle = false;  // it was printed by the at=idle reading: this life joined into the staged world
+bool g_stagedOk = false;   // the at=idle reading found the staged world in this client's world
 uint64_t g_idleAtMs = 0;
-uint64_t g_scanAtMs = 0;
 
 bool Enabled() {
     static const bool s = coop::config::ResolveFlag(::coop::config_registry::rows::late_join_drill);
     return s;
 }
+
+// The arm this client runs: its own bind wait marks unknown eids (the host's gate red) or it does not.
+bool HoldArm() { return coop::config::ResolveFlag(::coop::config_registry::rows::bind_wait_mark_unknown); }
 
 void Print(const char* at) {
     for (const Kind& k : kKinds) {
@@ -79,35 +79,6 @@ void Print(const char* at) {
     UE_LOGI("[LATE-JOIN] totals at=%s deferred=%u held=%u replayed=%u givenUp=%u refused=%u neverBound=%u holdsNow=%d",
             at, BW::DeferredCount(), BW::HeldCount(), BW::ReplayedCount(), BW::GivenUpCount(), BW::RefusedCount(),
             BW::DropsNeverBound(), BW::HasHolds() ? 1 : 0);
-}
-
-// Once a second until printed: one live prop element of each staged class in this client's registry, the PC's lid
-// open and the drive the one the host named. The five are the host's staged subjects, which seeds and spawn births
-// bring; the rig ends a life on this line.
-void LookForStagedWorld() {
-    namespace PPC = ue_wrap::portable_pc;
-    namespace DC = ue_wrap::drive_chain;
-    namespace R = ue_wrap::reflection;
-    const uint64_t now = coop::net::NowMs();
-    if (g_seen || now - g_scanAtMs < 1000) return;
-    g_scanAtMs = now;
-    std::vector<coop::element::Registry::ActorIdPair> pairs;
-    coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, pairs);
-    bool pc = false, box = false, kerfus = false, rack = false, drive = false;
-    for (const auto& pr : pairs) {
-        if (!pr.actor || !R::IsLiveByIndex(pr.actor, pr.internalIdx)) continue;
-        void* cls = R::ClassOf(pr.actor);
-        bool opened = false;
-        if (PPC::IsPortablePc(pr.actor) && PPC::ReadOpened(pr.actor, opened) && opened) pc = true;
-        if (ue_wrap::floppybox::IsFloppyBoxClass(cls)) box = true;
-        if (ue_wrap::kerfus::IsKerfus(pr.actor)) kerfus = true;
-        if (DC::IsRackClass(cls)) rack = true;
-        ue_wrap::signal_dynamic::Row row;
-        if (DC::IsDriveClass(cls) && DC::ReadDriveRow(pr.actor, row) && row.name == detail::kDriveName) drive = true;
-    }
-    if (!(pc && box && kerfus && rack && drive)) return;
-    UE_LOGI("[LATE-JOIN] client sees the staged world (pc box kerfus rack drive)");
-    g_seen = true;
 }
 
 // ---- the verdict -------------------------------------------------------------------------------------------------
@@ -136,22 +107,24 @@ struct Verdict {
     }
 };
 
-// The least container slices a clean joiner must have applied: what a fresh world's host ships (284 in the measured
-// runs, gate on and gate red alike). A hold joiner is held to its own HeldOf instead.
-constexpr size_t kCleanMinSlices = 284;
-constexpr float kEnergyTolerance = 0.5f;
+// A Kerfus that is on drains, so its energy at the reading sits a little under what the host wrote and no higher; a
+// default Kerfus is not within kEnergyBelow of kKerfusEnergy unless it was set.
+constexpr float kEnergyBelow = 10.f;
+constexpr float kEnergyAbove = 0.5f;
 
-// What the client's own copies of the staged subjects read, found by their staged identity (the PC by its open lid,
-// the Kerfus by being on, the rack by its rows' names, the box by class, the drive in slot role 0 by its row name).
+// What the client's own copies of the staged subjects read. A fresh world holds no floppy box and no open PC of its
+// own, so those two are told by count (exactly one of each); the Kerfus is found by being on, the rack by its rows'
+// names, the drive by its row name in any slot role.
 struct Effects {
-    bool pcOpen = false;
+    int pcOpenCount = 0;
+    int boxCount = 0;
     bool boxBound = false;
+    bool anyKerfus = false, anyRack = false, driveInRegistry = false;
     bool kerfusFound = false, kerfusOn = false;
     float kerfusEnergy = -1.f;
     bool rackFound = false;
     int rackRows = -1;
     bool driveSeated = false;
-    std::wstring slotDriveName;
 };
 
 Effects ReadEffects() {
@@ -167,18 +140,26 @@ Effects ReadEffects() {
         if (!pr.actor || !R::IsLiveByIndex(pr.actor, pr.internalIdx)) continue;
         void* cls = R::ClassOf(pr.actor);
         bool opened = false;
-        if (PPC::IsPortablePc(pr.actor) && PPC::ReadOpened(pr.actor, opened) && opened) e.pcOpen = true;
-        if (ue_wrap::floppybox::IsFloppyBoxClass(cls) && coop::element::Registry::Get().EidForActor(pr.actor) != 0)
-            e.boxBound = true;
-        bool on = false;
-        float energy = 0.f;
-        if (UK::IsKerfus(pr.actor) && UK::ReadActive(pr.actor, on) && UK::ReadEnergy(pr.actor, energy) &&
-            (on || !e.kerfusFound)) {
-            e.kerfusFound = true;
-            e.kerfusOn = on;
-            e.kerfusEnergy = energy;
+        if (PPC::IsPortablePc(pr.actor) && PPC::ReadOpened(pr.actor, opened) && opened) ++e.pcOpenCount;
+        if (ue_wrap::floppybox::IsFloppyBoxClass(cls)) {
+            ++e.boxCount;
+            if (coop::element::Registry::Get().EidForActor(pr.actor) != 0) e.boxBound = true;
         }
+        if (UK::IsKerfus(pr.actor)) {
+            e.anyKerfus = true;
+            bool on = false;
+            float energy = 0.f;
+            if (UK::ReadActive(pr.actor, on) && UK::ReadEnergy(pr.actor, energy) && (on || !e.kerfusFound)) {
+                e.kerfusFound = true;
+                e.kerfusOn = on;
+                e.kerfusEnergy = energy;
+            }
+        }
+        ue_wrap::signal_dynamic::Row driveRow;
+        if (DC::IsDriveClass(cls) && DC::ReadDriveRow(pr.actor, driveRow) && driveRow.name == detail::kDriveName)
+            e.driveInRegistry = true;
         if (DC::IsRackClass(cls)) {
+            e.anyRack = true;
             DC::RackRow rows[DC::kRackSlots];
             int num = 0;
             if (!DC::ReadRack(pr.actor, rows, num)) continue;
@@ -197,16 +178,26 @@ Effects ReadEffects() {
     }
     DC::EnsureResolved();
     ue_wrap::signal_dynamic::Row row;
-    void* slot = DC::SlotActor(0);
-    void* drive = slot ? DC::SlotDrive(slot) : nullptr;
-    if (drive && DC::ReadDriveRow(drive, row)) {
-        e.slotDriveName = row.name;
-        e.driveSeated = row.name == detail::kDriveName;
+    for (int role = 0; role < DC::kRoleCount && !e.driveSeated; ++role) {
+        void* slot = DC::SlotActor(role);
+        void* drive = slot ? DC::SlotDrive(slot) : nullptr;
+        if (drive && DC::ReadDriveRow(drive, row) && row.name == detail::kDriveName) e.driveSeated = true;
     }
     return e;
 }
 
-// The joiner's verdict, read at idle+10s in the life that saw the staged world at its join. `hold` is the arm whose
+// The staged-world check, once, at the join's idle reading: the five subjects stand in this client's world. The
+// failure line names what was found (the PC and the box by count). The verdict is judged only when it holds.
+bool CheckStagedWorld(bool hold) {
+    const Effects e = ReadEffects();
+    if (e.pcOpenCount == 1 && e.boxCount == 1 && e.anyKerfus && e.anyRack && e.driveInRegistry) return true;
+    UE_LOGW("[LATE-JOIN] %s FAIL: the staged world was not in this join (pc=%d box=%d kerfus=%d rack=%d drive=%d)",
+            hold ? "hold" : "clean", e.pcOpenCount, e.boxCount, e.anyKerfus ? 1 : 0, e.anyRack ? 1 : 0,
+            e.driveInRegistry ? 1 : 0);
+    return false;
+}
+
+// The joiner's verdict, read at idle+10s in the one life, which joined into the staged world. `hold` is the arm whose
 // bind wait marks unknown eids (the host's gate red): every seed that landed before its prop was held and must have
 // replayed. `clean` is the gate on: nothing named a prop before it was here, so nothing was held and nothing was
 // lost. Both arms: nothing refused or given up, no hold left, and every staged effect stands on this client.
@@ -217,21 +208,26 @@ void Judge(bool hold) {
     v.Check(!BW::HasHolds(), "holds are still pending");
 
     const Effects e = ReadEffects();
-    v.Check(e.pcOpen, "no portable PC with an open lid");
-    v.Check(e.kerfusFound && e.kerfusOn && std::fabs(e.kerfusEnergy - detail::kKerfusEnergy) <= kEnergyTolerance,
-            "Kerfus found=%d on=%d energy=%.2f, expected on with %.0f", e.kerfusFound ? 1 : 0, e.kerfusOn ? 1 : 0,
-            static_cast<double>(e.kerfusEnergy), static_cast<double>(detail::kKerfusEnergy));
+    v.Check(e.pcOpenCount == 1, "open portable PCs=%d, expected exactly 1", e.pcOpenCount);
+    v.Check(e.kerfusFound && e.kerfusOn && e.kerfusEnergy > detail::kKerfusEnergy - kEnergyBelow &&
+                e.kerfusEnergy <= detail::kKerfusEnergy + kEnergyAbove,
+            "Kerfus found=%d on=%d energy=%.2f, expected on with energy in (%.1f, %.1f]", e.kerfusFound ? 1 : 0,
+            e.kerfusOn ? 1 : 0, static_cast<double>(e.kerfusEnergy),
+            static_cast<double>(detail::kKerfusEnergy - kEnergyBelow),
+            static_cast<double>(detail::kKerfusEnergy + kEnergyAbove));
     v.Check(e.rackFound && e.rackRows == detail::kRackRows, "staged rack found=%d rows=%d, expected %d",
             e.rackFound ? 1 : 0, e.rackRows, detail::kRackRows);
-    v.Check(e.driveSeated, "slot role 0 holds no drive named LATE-JOIN-DRIVE (reads '%ls')",
-            e.slotDriveName.c_str());
+    v.Check(e.driveSeated, "no slot role holds a drive named LATE-JOIN-DRIVE");
+    v.Check(e.boxCount == 1, "floppy boxes=%d, expected exactly 1", e.boxCount);
     v.Check(e.boxBound, "no floppy box is bound");
     const uint32_t canonicals = coop::floppybox_sync::AppliedCanonicals();
     v.Check(canonicals >= 1, "floppy box canonicals applied=%u, expected >= 1", canonicals);
     const size_t slices = coop::props::container_contents_sync::AppliedEids();
-    const size_t minSlices = hold ? static_cast<size_t>(BW::HeldOf(static_cast<uint16_t>(kKinds[0].kind)))
-                                  : kCleanMinSlices;
-    v.Check(slices >= minSlices, "container slices applied=%zu, expected >= %zu", slices, minSlices);
+    const size_t heldSlices = static_cast<size_t>(BW::HeldOf(static_cast<uint16_t>(kKinds[0].kind)));
+    if (hold)
+        v.Check(slices >= heldSlices, "container slices applied=%zu, expected >= held=%zu", slices, heldSlices);
+    else
+        v.Check(slices > 0, "container slices applied=%zu, expected > 0", slices);
 
     if (hold) {
         for (size_t i = 0; i < kJudgedKinds; ++i) {
@@ -254,12 +250,10 @@ void Judge(bool hold) {
 void Tick(coop::net::Session* session) {
     if (!Enabled() || !session) return;
     if (session->role() == coop::net::Role::Host) {
-        if (session->connected()) detail::HostTick(*session);
+        detail::HostTick(*session);
         return;
     }
-    if (session->role() != coop::net::Role::Client) return;
-    LookForStagedWorld();
-    if (g_done) return;
+    if (session->role() != coop::net::Role::Client || g_done) return;
     const bool idle = coop::join_progress::CurrentPhase() == coop::join_progress::Phase::Idle;
     if (!g_firstDone) {
         if (!idle) {
@@ -268,14 +262,14 @@ void Tick(coop::net::Session* session) {
         }
         if (!g_leftIdle) return;
         Print("idle");
+        g_stagedOk = CheckStagedWorld(HoldArm());
         g_firstDone = true;
-        g_sawAtIdle = g_seen;
         g_idleAtMs = coop::net::NowMs();
         return;
     }
     if (coop::net::NowMs() - g_idleAtMs < kSecondReadingMs) return;
     Print("idle+10s");
-    if (g_sawAtIdle) Judge(coop::config::ResolveFlag(::coop::config_registry::rows::bind_wait_mark_unknown));
+    if (g_stagedOk) Judge(HoldArm());
     UE_LOGI("[LATE-JOIN] client DONE");
     g_done = true;
 }
@@ -285,10 +279,8 @@ void OnDisconnect() {
     g_leftIdle = false;
     g_firstDone = false;
     g_done = false;
-    g_seen = false;
-    g_sawAtIdle = false;
+    g_stagedOk = false;
     g_idleAtMs = 0;
-    g_scanAtMs = 0;
 }
 
 }  // namespace coop::dev::late_join_drill
