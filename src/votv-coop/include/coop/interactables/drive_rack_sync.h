@@ -28,7 +28,7 @@ namespace coop::drive_rack_sync {
 void Install(coop::net::Session* session);
 
 // Per net-pump tick: connect-edge prime, the dirty-mark barrier drain, the
-// 1 Hz sweep + assembler sweep + pending-apply retries, the 60 s stats line.
+// 1 Hz sweep + assembler sweep, the 60 s stats line. A canonical for a rack not bound here waits in bind_wait.
 void Tick();
 
 // Router entry (event_dispatch_signal.cpp).
@@ -56,7 +56,7 @@ bool HostSeesRack(uint32_t rackEid);
 uint64_t HostCanonicalsSent();
 
 // Full teardown (the OnDisconnect fanout) -- baselines, shadow, dirty mark,
-// pending applies, deny + taken rings, assembler.
+// deny + taken rings, assembler.
 void OnDisconnect();
 
 }  // namespace coop::drive_rack_sync

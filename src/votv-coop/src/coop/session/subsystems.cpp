@@ -508,7 +508,7 @@ DisconnectStats DisconnectAll() {
     coop::physmods_sync::OnDisconnect();  // verb snapshots + parked canonical + deny records
     coop::drive_sync::OnDisconnect();  // slot baselines + latch/dirty state + pending
     coop::drive_payload_sync::OnDisconnect();  // held and sent rows, notes
-    coop::drive_rack_sync::OnDisconnect();  // rack baselines/shadow + pending + deny/taken rings
+    coop::drive_rack_sync::OnDisconnect();  // rack baselines/shadow + deny/taken rings
     coop::sleep_sync::OnDisconnect();
     coop::sleep_rest::OnDisconnect();  // a rest in progress goes back to factor 1
     coop::wisp_attack_sync::OnDisconnect();  // clear damage-cancel latch + handled-wisp edges + pending despawns
