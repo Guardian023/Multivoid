@@ -20,15 +20,19 @@ namespace coop::trash_native_hold {
 // What a join matches by pose, and whether it needs the hold:
 //   - chip piles (the capture map, the sweep's exact match): Static mobility, never simulate. Exempt.
 //   - clumps (the capture map, the sweep's exact match): simulate. HELD.
-//   - off-form kerfurs: matched by their portable save key, or by class within 500 cm
-//     (kerfur_prop_adoption); a loaded kerfur prop is at rest and follows the host's physics flags
-//     at the bind. Exempt.
+//   - off-form kerfurs: bound by their portable save key, or by class within 500 cm
+//     (kerfur_prop_adoption), so a settle of a few cm after the load cannot lose the match; the bind
+//     follows the host's physics flags. Exempt.
 //   - any other keyed prop: matched by its key; the 30 cm class-and-radius fuzzy match is a
 //     fallback whose bind reconciles the physics flags (prop_wire_parity). Exempt.
 
 // Hold a trash body still: tick off, physics simulation off, root Movable. Idempotent. The caller
 // has a live trash actor. Game thread.
 void Hold(void* actor);
+
+// The inverse of Hold: tick on, physics simulation on, so the game owns the body again. The one copy of
+// the release; the disconnect of a bound clump and of an unbound one both call it. Game thread.
+void Release(void* actor);
 
 // Cache the session the catch reads and, until it has taken, patch FinishSpawningActor with the load
 // catch. Called every session tick from the first one (the load watchers), since the join's load

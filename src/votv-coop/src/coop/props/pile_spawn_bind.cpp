@@ -18,7 +18,7 @@
 #include "coop/props/prop_element_tracker.h"  // IsBoundMirrorNative / GetPropElementIdForActor
 #include "coop/props/prop_wire_parity.h"  // RestoreCollisionIfNeeded
 #include "coop/props/remote_prop.h"  // RegisterPropMirror
-#include "coop/props/trash_native_hold.h"  // Hold: the one recipe that parks a trash body
+#include "coop/props/trash_native_hold.h"  // Hold and Release: the one recipe that parks a trash body and its inverse
 #include "coop/props/save_time_retire_util.h"  // kExactMatchR2Cm (the shared match radius)
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/core/log.h"
@@ -314,8 +314,7 @@ void OnDisconnect() {
     for (const ParkedClump& c : g_parkedClumps) {
         if (!R::IsLiveByIndex(c.actor, c.idx)) continue;
         coop::remote_prop::ClearAnyDriveFor(c.actor);   // before ForceRelease, which destroys a driven clump
-        ue_wrap::engine::SetActorTickEnabled(c.actor, true);
-        ue_wrap::engine::SetActorSimulatePhysics(c.actor, true);
+        coop::trash_native_hold::Release(c.actor);
         ++restored;
     }
     if (!g_parkedClumps.empty())

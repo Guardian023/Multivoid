@@ -194,6 +194,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
     };
     std::vector<void*> doomed;
     doomed.reserve(propPairs.size());
+    int unheldClumps = 0;             // unbound clumps the load catch never held (a lagging class index could miss one)
     std::vector<void*> heldUnbound;   // natives the join's load hold froze and no row bound (join with doomed after the floor)
     std::vector<std::wstring> doomedClass;  // Phase 0: class per doomed actor, parallel to `doomed`
     doomedClass.reserve(propPairs.size());
@@ -215,6 +216,7 @@ static void RunDivergenceSweep_(void* localPlayer) {
             // A body the load hold froze and no row bound by now: the host never bound it, so the host's
             // world does not have it, whatever the class count says. It leaves the floor's reckoning.
             if (coop::trash_native_hold::IsHeld(a)) { heldUnbound.push_back(a); continue; }
+            if (ue_wrap::prop::IsGarbageClump(a)) ++unheldClumps;
             doomed.push_back(a);
             doomedClass.push_back(acls);
             ++doomedByClass[acls];
@@ -397,6 +399,11 @@ static void RunDivergenceSweep_(void* localPlayer) {
             doomedClass.swap(keptDoomedClass);
         }
     }
+
+    // A diagnostic, not a filter: the load catch classifies by the class index, which can trail a world
+    // load, so a clump it missed ran free. The count changes nothing here.
+    if (unheldClumps > 0)
+        UE_LOGW("trash_native_hold: %d unbound clump(s) were never held -- the load catch missed them", unheldClumps);
 
     // The held natives rejoin the doomed after the floor, which would otherwise keep them on a class
     // count; the valve below still sees them, so a partial bracket wipes nothing.
