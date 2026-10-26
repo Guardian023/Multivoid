@@ -5,6 +5,8 @@
 
 #pragma once
 
+#include "coop/config/config.h"           // ResolveEnum, the drill knob
+#include "coop/config/config_registry.h"  // rows::prop_syncer_load_lane
 #include "coop/net/protocol.h"            // ReliableKind
 
 namespace coop::net {
@@ -59,7 +61,16 @@ inline bool IsReserveExemptKind(ReliableKind k) {
            k == ReliableKind::JoinPhaseNote;
 }
 
+// [dev] Drill knob prop_syncer_load_lane=default puts the load arm's filler on the ordered lane, the red of the
+// lane rule. Resolved once: LaneForKind runs per send.
+inline bool LoadFillerOnDefault() {
+    static const bool onDefault =
+        coop::config::ResolveEnum(coop::config_registry::rows::prop_syncer_load_lane) == "default";
+    return onDefault;
+}
+
 inline Lane LaneForKind(ReliableKind k) {
+    if (k == ReliableKind::DevLoadFiller && LoadFillerOnDefault()) return Lane::Default;
     switch (k) {
     // The link probe and its echo ride High because that is the lane whose delay the measurement
     // is about: a reading taken on Transfer would time the bulk queue instead of the path the pose
@@ -72,7 +83,8 @@ inline Lane LaneForKind(ReliableKind k) {
     // what the host is doing now.
     case ReliableKind::JoinPhaseNote:  return Lane::High;
     case ReliableKind::RestoreVitals:  return Lane::High;
-    // The save stream and the drill filler: the transfers that can exceed the blob ceiling.
+    // The save stream and the drill filler: the transfers that can exceed the blob ceiling. The filler's lane is
+    // the drill knob's (LoadFillerOnDefault above), so a red arm can stand it on Default.
     case ReliableKind::SaveTransferBegin: return Lane::Transfer;
     case ReliableKind::SaveTransferChunk: return Lane::Transfer;
     case ReliableKind::DevLoadFiller:     return Lane::Transfer;

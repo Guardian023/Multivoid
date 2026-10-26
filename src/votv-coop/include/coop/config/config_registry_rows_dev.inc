@@ -543,7 +543,11 @@ CFG_INT(join_gate_red, "join_gate_red", "dev", 0, 0, 1, "VOTVCOOP_JOIN_GATE_RED"
     "Developer red arm: never set (HOST). 1 bypasses the join gate: a joining slot's sends are not held behind its "
     "snapshot, so the receive parks catch the seeds that precede their props, and the join drills' park counts go "
     "nonzero.")
-CFG_INT(prop_syncer_load_kb,"prop_syncer_load_kb", "dev", 0, 0, 16384, "VOTVCOOP_PROP_SYNCER_LOAD_KB",
+CFG_ENUM(prop_syncer_load_lane, "prop_syncer_load_lane", "dev", "transfer", "transfer|default", "VOTVCOOP_PROP_SYNCER_LOAD_LANE",
+    "Drill knob (HOST): the lane the load arm's filler rides. transfer is the shipped lane of a payload that can "
+    "exceed the blob ceiling; default puts the filler on the ordered lane the syncer's own messages ride, which is "
+    "the red: a 4 MiB filler then stands ahead of the claim's answer and the grant misses its bound.")
+CFG_INT(prop_syncer_load_kb, "prop_syncer_load_kb", "dev", 0, 0, 16384, "VOTVCOOP_PROP_SYNCER_LOAD_KB",
     "Drill (host and the kicking client, the same value; arm kick or forge): the filler the host queues on the transfer "
     "lane to the kicking client right before it says go, in KiB (0 = none). The client waits for the filler's first "
     "message before it claims, so its claim stands behind the transfer; its DONE line carries the grant latency and "

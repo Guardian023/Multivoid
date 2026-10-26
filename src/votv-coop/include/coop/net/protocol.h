@@ -1164,7 +1164,7 @@ enum class ReliableKind : uint8_t {
     PropSyncAnswer = 202,
     // HOST->CLIENT: developer only, read by the prop syncer drill's load arm (coop/dev/prop_syncer_drill): one of N
     // messages of a filler the host queues to the kicking client, so a drill can stand a transfer the size of a join
-    // burst on the Transfer lane (the save stream's) ahead of the syncer's messages. Nothing
+    // burst on the Transfer lane (a drill knob moves it to Default) ahead of the syncer's messages. Nothing
     // reads the fill; the receiver counts. Never relayed; not pre-world. DevLoadFillerPayload.
     DevLoadFiller = 204,
     // HOST->CLIENT: one decision of a Geom Octa, to be replayed into the client's own Blueprint (coop/creatures/
