@@ -343,6 +343,10 @@ bool Session::SlotReliableIdle(int slot) {
     return st.m_cbPendingReliable == 0 && st.m_cbSentUnackedReliable == 0;
 }
 
+void Session::OpenJoinGate(int slot) { backlog_.OpenJoinGate(slot); }
+
+void Session::CloseJoinGate(int slot) { backlog_.CloseJoinGate(slot); }
+
 void Session::SampleLinkRates(uint64_t nowMs) {
     auto* sockets = SteamNetworkingSockets();
     if (!sockets) return;
@@ -700,6 +704,18 @@ void Session::NetThread() {
 
         std::this_thread::sleep_for(std::chrono::milliseconds(5));
     }
+}
+
+bool Session::IsRelayEligible(int peerSlot, uint32_t hConn) const {
+    return peerSlot >= 0 && peerSlot < kMaxPeers && hConn != 0 &&
+           relayEligible_[peerSlot].load(std::memory_order_acquire) == hConn;
+}
+
+bool Session::AnyWorldReadyPeer(int skipSlot) const {
+    for (int i = 0; i < kMaxPeers; ++i)
+        if (i != skipSlot && peerConns_[i].load() != 0 &&
+            slotWorldReady_[i].load(std::memory_order_acquire)) return true;
+    return false;
 }
 
 }  // namespace coop::net

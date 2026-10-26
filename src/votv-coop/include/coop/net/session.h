@@ -236,10 +236,7 @@ public:
     }
     // The net-thread view of the same event: relay-eligible since the ClientWorldReady receipt on
     // exactly this hConn.
-    bool IsRelayEligible(int peerSlot, uint32_t hConn) const {
-        return peerSlot >= 0 && peerSlot < kMaxPeers && hConn != 0 &&
-               relayEligible_[peerSlot].load(std::memory_order_acquire) == hConn;
-    }
+    bool IsRelayEligible(int peerSlot, uint32_t hConn) const;
 
     // Is a remote connection registered in this slot (any state)?
     bool HasPeerConn(int peerSlot) const {
@@ -249,12 +246,7 @@ public:
     // Does any live peer pass the world-ready gate? A fan-out with zero eligible receivers is a
     // vacuous success for a save-and-seed-covered lane, not a reason to re-broadcast. Game or net
     // thread. `skipSlot` leaves a slot out, as SendReliable's does: one gate for both.
-    bool AnyWorldReadyPeer(int skipSlot = -1) const {
-        for (int i = 0; i < kMaxPeers; ++i)
-            if (i != skipSlot && peerConns_[i].load() != 0 &&
-                slotWorldReady_[i].load(std::memory_order_acquire)) return true;
-        return false;
-    }
+    bool AnyWorldReadyPeer(int skipSlot = -1) const;
 
     // A receive lane parked at its flood bound pauses this session's receive loop, keyed by the kind it
     // parks (coop/net/apply_pause.h); true when the call changed it. Set on the game thread.
@@ -329,10 +321,8 @@ public:
     // thread. Not const: SendBacklog::DepthBytes is not.
     bool SlotReliableIdle(int slot);
 
-    // The slot's snapshot has completed: its held sends join the Default lane (SendBacklog::CloseJoinGate).
-    void CloseJoinGate(int slot) { backlog_.CloseJoinGate(slot); }
-    // The slot's snapshot is about to run again: its Default-lane sends wait behind it (SendBacklog::OpenJoinGate).
-    void OpenJoinGate(int slot) { backlog_.OpenJoinGate(slot); }
+    void OpenJoinGate(int slot);   // the slot's Default-lane sends wait behind its snapshot (SendBacklog::OpenJoinGate)
+    void CloseJoinGate(int slot);  // the snapshot completed: the held sends join the Default lane (SendBacklog::CloseJoinGate)
 
     // What the net thread last published about this slot's link: delivered and still-owed reliable
     // bytes, with the sample's time on the net clock. See SendRateControl::Published. Any thread.
