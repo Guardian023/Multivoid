@@ -410,6 +410,7 @@ DisconnectStats DisconnectAll() {
     coop::trash_mirror::OnDisconnect();
     coop::pile_look::OnDisconnect();
     coop::pile_spawn_bind::OnDisconnect();   // this client's own parked clumps go back to the game, before ForceRelease
+    coop::trash_native_hold::ReleaseUnbound();   // and the load hold's unbound ones, the same way
     coop::remote_prop::ForceRelease();
     // A disconnect mid-snapshot drops the armed claim set (dangling actor pointers must not survive
     // into the next session); no sweep.

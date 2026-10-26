@@ -43,7 +43,12 @@ bool IsHeld(void* actor);
 // The sweep destroyed a held body: count it and say the first and every 100th. Game thread.
 void NoteRetired(void* actor);
 
-// Drop the cached session and the held set. Game thread.
+// Drop the cached session. Game thread.
 void OnDisconnect();
+
+// The session ended: every held clump still live that the bind never took gets its tick and physics back,
+// and the held set clears. Called with pile_spawn_bind::OnDisconnect, before the bound ones' teardown.
+// Game thread.
+void ReleaseUnbound();
 
 }  // namespace coop::trash_native_hold

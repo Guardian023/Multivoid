@@ -2,6 +2,8 @@
 
 #include "coop/props/trash_native_hold.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/element.h"
 #include "coop/net/session.h"
 #include "coop/props/prop_element_tracker.h"  // GetPropElementIdForActor (a bound or minted actor is not a bare load spawn)
@@ -43,7 +45,7 @@ uint32_t g_heldCount = 0;           // game thread only; per process
 uint32_t g_retiredCount = 0;
 
 // The bodies the catch held, by pointer, each with the slot's serial, so a recycled address is not a
-// held body. Session-scoped: OnDisconnect clears it.
+// held body. Session-scoped: ReleaseUnbound and OnDisconnect clear it.
 std::unordered_map<void*, ue_wrap::CachedObjRef> g_held;
 
 uint64_t NowMs() {
@@ -69,6 +71,9 @@ void OnFinishSpawn(void* /*context*/, void* /*srcObj*/, void* result) {
     if (!result || !GT::IsGameThread()) return;
     if (!ue_wrap::prop::IsGarbageClump(result)) return;
     if (!R::IsLive(result)) return;
+    // A drill red (ini trash_hold_red=1): hold nothing, so pile_defer_drill=check must fail on orphans.
+    static const bool kRed = coop::config::ResolveInt(coop::config_registry::rows::trash_hold_red) != 0;
+    if (kRed) return;
     if (PT::GetPropElementIdForActor(result) != coop::element::kInvalidId) return;
     Hold(result);
     g_held[result].Set(result);
@@ -117,6 +122,24 @@ void NoteRetired(void* actor) {
 
 void OnDisconnect() {
     g_session.store(nullptr, std::memory_order_release);
+    g_held.clear();
+}
+
+void ReleaseUnbound() {
+    // With no session nobody authors a held clump the bind never took: left kinematic with its tick off
+    // it would be a stuck body in the single-player world, and the game's pickup wants a simulating
+    // one. A bound clump is pile_spawn_bind's parked one and goes back there; a destroyed one is dead
+    // by serial.
+    int restored = 0;
+    for (const auto& [actor, ref] : g_held) {
+        if (!ref.Is(actor) || PT::IsBoundMirrorNative(actor)) continue;
+        ue_wrap::engine::SetActorTickEnabled(actor, true);
+        ue_wrap::engine::SetActorSimulatePhysics(actor, true);
+        ++restored;
+    }
+    if (!g_held.empty())
+        UE_LOGI("trash_native_hold: ReleaseUnbound gave %d of %zu held clump(s) back to the game (tick and "
+                "physics on)", restored, g_held.size());
     g_held.clear();
 }
 
