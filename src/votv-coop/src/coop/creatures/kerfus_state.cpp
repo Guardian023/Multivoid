@@ -192,6 +192,12 @@ void OnState(const coop::net::KerfusStatePayload& payload) {
         coop::element::bind_wait::NoteNeverBound(kStateKind, payload.elementId);
 }
 
+bool HostKnows(uint32_t eid) {
+    for (const auto& kv : g_host)
+        if (kv.second.eid == eid) return true;
+    return false;
+}
+
 void OnDisconnect() {
     g_host.clear();
     g_wrongClassSaid.clear();

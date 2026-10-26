@@ -34,6 +34,10 @@ void Tick();
 // HOST: a peer's world came up -- send it every Kerfus's state. Game thread.
 void OnPeerWorldReady(int slot);
 
+// HOST: whether the tick watch has entered the Kerfus with this eid in its table, which a connect seed
+// reads; a read-only question for the drills. Game thread.
+bool HostKnows(uint32_t eid);
+
 // CLIENT: the host's state for one Kerfus. From the event feed, game thread.
 void OnState(const coop::net::KerfusStatePayload& payload);
 

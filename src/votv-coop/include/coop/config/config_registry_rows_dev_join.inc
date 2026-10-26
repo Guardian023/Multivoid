@@ -88,8 +88,10 @@ CFG_FLAG(atv_adopt_break, "atv_adopt_break", "dev", false, "VOTVCOOP_DEV_ATV_ADO
 CFG_FLAG(atv_set_break, "atv_set_break", "dev", false, "VOTVCOOP_DEV_ATV_SET_BREAK",
     "Red arm: the host's complete ATV set removes nothing on this client.")
 
-// The late-join drill's row: the bind wait's per-kind tallies, read on a client once its join has settled.
+// The late-join drill's row: the host's staged world, and the bind wait's per-kind tallies on a client once its join
+// has settled.
 CFG_FLAG(late_join_drill, "late_join_drill", "dev", false, "VOTVCOOP_LATE_JOIN_DRILL",
-    "Drill (CLIENT): once the join returns to idle, and ten seconds later, print the bind wait's tallies per "
-    "message kind and in all (held, coalesced, replayed, dropped, given up, never bound), then 'client DONE'. "
-    "Lines tagged [LATE-JOIN]. It changes nothing; the host needs no row.")
+    "Drill (both peers): the HOST stages a PC with its lid open, a floppy box, a Kerfus on, a rack with rows and a "
+    "seated drive once a client is world-ready; the CLIENT, once its join returns to idle, and ten seconds later, "
+    "prints the bind wait's tallies per message kind and in all (held, coalesced, replayed, dropped, given up, never "
+    "bound), then 'client DONE', and says when it sees the staged world. Lines tagged [LATE-JOIN].")
