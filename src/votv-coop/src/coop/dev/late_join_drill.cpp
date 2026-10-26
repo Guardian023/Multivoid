@@ -116,7 +116,7 @@ constexpr float kEnergyAbove = 0.5f;
 // own, so those two are told by count (exactly one of each); the Kerfus is found by being on, the rack by its rows'
 // names, the drive by its row name in any slot role.
 struct Effects {
-    int pcOpenCount = 0;
+    int pcCount = 0, pcOpenCount = 0;
     int boxCount = 0;
     bool boxBound = false;
     bool anyKerfus = false, anyRack = false, driveInRegistry = false;
@@ -140,7 +140,10 @@ Effects ReadEffects() {
         if (!pr.actor || !R::IsLiveByIndex(pr.actor, pr.internalIdx)) continue;
         void* cls = R::ClassOf(pr.actor);
         bool opened = false;
-        if (PPC::IsPortablePc(pr.actor) && PPC::ReadOpened(pr.actor, opened) && opened) ++e.pcOpenCount;
+        if (PPC::IsPortablePc(pr.actor)) {
+            ++e.pcCount;
+            if (PPC::ReadOpened(pr.actor, opened) && opened) ++e.pcOpenCount;
+        }
         if (ue_wrap::floppybox::IsFloppyBoxClass(cls)) {
             ++e.boxCount;
             if (coop::element::Registry::Get().EidForActor(pr.actor) != 0) e.boxBound = true;
@@ -186,13 +189,15 @@ Effects ReadEffects() {
     return e;
 }
 
-// The staged-world check, once, at the join's idle reading: the five subjects stand in this client's world. The
-// failure line names what was found (the PC and the box by count). The verdict is judged only when it holds.
+// The staged-world check, once, at the join's idle reading: the five subjects stand in this client's world. It asks
+// only that each is here, never what state it holds: the PC's open lid is a seed the verdict judges, so a lost seed
+// fails there, beside the count of drops that lost it. The failure line names what was found (the PC and the box by
+// count). The verdict is judged only when it holds.
 bool CheckStagedWorld(bool hold) {
     const Effects e = ReadEffects();
-    if (e.pcOpenCount == 1 && e.boxCount == 1 && e.anyKerfus && e.anyRack && e.driveInRegistry) return true;
+    if (e.pcCount >= 1 && e.boxCount == 1 && e.anyKerfus && e.anyRack && e.driveInRegistry) return true;
     UE_LOGW("[LATE-JOIN] %s FAIL: the staged world was not in this join (pc=%d box=%d kerfus=%d rack=%d drive=%d)",
-            hold ? "hold" : "clean", e.pcOpenCount, e.boxCount, e.anyKerfus ? 1 : 0, e.anyRack ? 1 : 0,
+            hold ? "hold" : "clean", e.pcCount, e.boxCount, e.anyKerfus ? 1 : 0, e.anyRack ? 1 : 0,
             e.driveInRegistry ? 1 : 0);
     return false;
 }
