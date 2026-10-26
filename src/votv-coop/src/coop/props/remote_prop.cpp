@@ -12,6 +12,7 @@
 #include "coop/props/active_drive.h"   // the fixed-delay snapshot interp, shared with the trash carry stream
 #include "coop/props/prop_sound.h"
 #include "coop/props/trash_mirror.h"   // Retire (a trash mirror retires whole, pin released after the destroy)
+#include "coop/element/bind_wait.h"  // OnBound / MarkDeferred: the bind funnel releases and marks
 #include "coop/element/mirror_manager.h"
 #include "coop/element/mirror_managers.h"  // PropMirrors
 #include "coop/element/prop.h"
@@ -395,9 +396,15 @@ void RegisterPropMirror(coop::element::ElementId eid,
     // A pile bound after its look arrived takes the look here (coop/props/pile_look.h) -- when the
     // bind took: the create path can refuse one (a steal across rows, a 1:1 conflict, the host
     // authority wall), and then `actor` is not this eid's and must not wear its look.
-    if (auto* row = coop::element::Registry::Get().Get(eid); row && row->GetActor() == actor) {
+    auto* row = coop::element::Registry::Get().Get(eid);
+    if (row && row->GetActor() == actor) {
         coop::pile_look::OnBound(static_cast<uint32_t>(eid), actor);
         coop::drive_payload_sync::OnBound(static_cast<uint32_t>(eid), actor, senderSlot);  // a data drive's row, by its author
+        coop::element::bind_wait::OnBound(static_cast<uint32_t>(eid));  // messages held for this eid replay at the next Pump
+    } else if (!row && actor && eid != 0 && eid != coop::element::kInvalidId) {
+        // Refused and rowless: no retry runs inside the create path, so messages for the eid wait here until a
+        // later bind, a destroy of it, or the world change.
+        coop::element::bind_wait::MarkDeferred(static_cast<uint32_t>(eid), "the create path refused the bind");
     }
 }
 

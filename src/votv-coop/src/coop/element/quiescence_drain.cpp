@@ -7,6 +7,7 @@
 #include "coop/element/quiescence_drain.h"
 
 #include "coop/creatures/kerfur_reconcile.h"   // SweepReconcileSaveTimeKerfurs, HasPendingRetire
+#include "coop/element/bind_wait.h"            // GiveUp: a pile that never found its native
 #include "coop/element/registry.h"             // Registry
 #include "coop/props/prop_element_tracker.h"   // IsBoundMirrorNative, InPurgeEpisode
 #include "coop/props/remote_prop.h"            // TryApplyDestroy, KeyToWString, IsActorUnderAnyDrive
@@ -144,6 +145,7 @@ void NoteGaveUp(uint32_t eid, const PendingTwin& p, void* bound) {
     UE_LOGW("[PILE-1C] eid=%u GIVEN UP after %d pass(es) with NO actor -- no native ever appeared at "
             "its save-time key (%.1f,%.1f,%.1f), so this pile is absent on this client until a later "
             "join re-expresses it", eid, p.unresolvedPasses, p.x, p.y, p.z);
+    bind_wait::GiveUp(eid, "no native appeared at the save-time key");   // the held messages have no prop to reach
 }
 
 int SweepReconcileSaveTimeTwins() {

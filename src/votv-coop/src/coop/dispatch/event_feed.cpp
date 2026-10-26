@@ -24,6 +24,7 @@
 #include "coop/session/join_progress.h"
 #include "coop/element/mirror_defer.h"  // deferred hide, armed at Begin and revealed at the lift
 #include "coop/net/session.h"
+#include "coop/element/bind_wait.h"  // Pump: the replay of the messages held for a bind that has since taken
 #include "coop/session/subsystems.h"
 #include "coop/creatures/npc_adoption.h"
 #include "coop/creatures/kerfur_prop_adoption.h"  // OnSnapshotComplete
@@ -125,6 +126,8 @@ void OnSessionStart() {
 }
 
 void Update(net::Session& session, void* localPlayer) {
+    // A bind that took between ticks (the sweep, an adoption) has its held messages replayed first.
+    coop::element::bind_wait::Pump();
     // Order matters: the reconcile runs before the drain, so a peer's row exists by the time its
     // Join is dispatched (a Join arrives over a configured lane, the reconcile's birth condition);
     // reversed, the first Join's nickname would land on a slot the ledger did not consider occupied
@@ -170,6 +173,8 @@ void Update(net::Session& session, void* localPlayer) {
     // is the single membership declaration).
     net::Session::ReliableMessage msg;
     while (session.TryGetReliable(msg)) {
+        // The previous message may have bound a prop: its held messages run before this one.
+        coop::element::bind_wait::Pump();
         if (msg.senderPeerSlot >= 0 && msg.senderPeerSlot < net::kMaxPeers)
             ++g_drained[msg.senderPeerSlot][static_cast<uint8_t>(msg.kind)];
         switch (msg.kind) {
@@ -478,6 +483,7 @@ void Update(net::Session& session, void* localPlayer) {
         }
         }
     }
+    coop::element::bind_wait::Pump();   // the last message's bind
 }
 
 uint32_t DrainedFrom(int slot, net::ReliableKind kind) {

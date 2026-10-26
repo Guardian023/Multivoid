@@ -63,6 +63,7 @@
 #include "coop/items/player_inventory_sync.h"  // per-player inventory (host file scaffold)
 #include "coop/player/stat_orders.h"  // an admin's orders to a player's stats: the kept session, the tokens answered Left
 #include "coop/voice/voice_chat.h"
+#include "coop/element/bind_wait.h"  // OnSlotLeft / Clear: the messages held for a deferred bind
 #include "coop/element/death_seam.h"  // an element's end of play, handed to the lanes that subscribed
 #include "coop/props/host_spawn_watcher.h"  // HOST mirror of those ambient spawner outputs (the pinecone scare)
 #include "coop/props/prop_drop_intent.h"  // client-place -> host-auth keyed-prop DROP INTENT
@@ -380,6 +381,7 @@ void DisconnectSlot(coop::net::Session& session, int slot) {
     coop::wisp_grab_hold::OnPeerLeft(static_cast<uint8_t>(slot));  // drop the leaver's grab-window puppet hold
     coop::remote_prop::OnDisconnectForSlot(slot);
     coop::prop_syncer_host::OnSlotLeft(static_cast<uint8_t>(slot));  // the rows the leaver synced end, with no word to it
+    coop::element::bind_wait::OnSlotLeft(slot);  // and the messages it sent that wait for a prop to bind
     coop::item_activate::OnDisconnectForSlot(slot);
     coop::device_occupancy::OnDisconnectForSlot(slot);  // release a leaver's device claims
     coop::desk_input_sync::OnPeerLeft(slot);  // clear a leaver's dangling coordIsPing (its ping would swallow every peer's desk keys)
@@ -533,6 +535,7 @@ DisconnectStats DisconnectAll() {
     coop::trash_sweep::OnDisconnect();  // drop the swept clumps still rolling
     coop::trash_clump_pose_stream::OnDisconnect();  // drop all client per-eid carry drives
     coop::prop_drive_host::OnDisconnect();  // drop the host's driven-prop set and the client syncers' table (prop_syncer_host)
+    coop::element::bind_wait::Clear("disconnect");  // the messages waiting for a bind go with the session
     coop::prop_drive_stream::OnDisconnect();  // every driven prop here gets its physics back
     coop::prop_park::OnDisconnect();  // after both receivers gave their props back: the holds a park still has
     coop::rider_hold::OnDisconnect();  // last: any movement still held ticks again

@@ -8,6 +8,7 @@
 
 #include "coop/props/pile_spawn_bind.h"
 
+#include "coop/element/bind_wait.h"  // MarkDeferred: messages for the unbound eid wait for the sweep's bind
 #include "coop/element/quiescence_drain.h"  // ArmPendingSaveTimeTwin (the spawn mechanism CAPTURES into the order owner)
 #include "coop/config/config.h"  // ResolveFlag -- the [PILE-DELTA] probe flag (multivoid.ini [dev], not bats/env)
 #include "coop/element/registry.h"  // Element::SetSaveNative on the bound native
@@ -185,12 +186,18 @@ void* BindOwnSavePile(const coop::net::PropSpawnPayload& payload,
     // comment, and an unarmed one leaves the eid with no actor for the rest of the session: the
     // host has a pile the client can neither see nor aim at.
     auto armAndFail = [&](const char* why) -> void* {
-        if (isSaveTimeKey && payload.elementId != 0)
+        if (isSaveTimeKey && payload.elementId != 0) {
             coop::element::quiescence_drain::ArmPendingSaveTimeTwin(payload.elementId, matchPos, payload.chipType,
                                                                     wantClump);
-        else
+            // Messages for the eid wait for the sweep's bind only while it owns no actor: the same twin is
+            // also armed for a bound eid (a land, a dup retire), which has nothing to wait for.
+            coop::element::Element* row = coop::element::Registry::Get().Get(payload.elementId);
+            if (!row || !row->GetActor() || !R::IsLiveByIndex(row->GetActor(), row->GetInternalIdx()))
+                coop::element::bind_wait::MarkDeferred(payload.elementId, why);
+        } else {
             UE_LOGW("[PILE] BIND eid=%u at (%.1f,%.1f,%.1f) -- %s, and the expression carries no "
                     "save-time key to retry from", payload.elementId, matchPos.X, matchPos.Y, matchPos.Z, why);
+        }
         return nullptr;
     };
     if (matchCount > 1) {
