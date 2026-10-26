@@ -694,6 +694,8 @@ bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol) {
     return true;
 }
 
+size_t AppliedEids() { return g_appliedHash.size(); }
+
 void OnDisconnect() {
     g_wrongClassSaid.clear();
     g_dirty.clear();

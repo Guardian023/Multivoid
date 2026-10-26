@@ -76,4 +76,8 @@ bool VerbWatchEntered();
 // live world container here.
 bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol);
 
+// How many containers this peer holds an applied host slice for (the size of its applied-hash map); the late-join
+// drill reads it. Game thread.
+size_t AppliedEids();
+
 }  // namespace coop::props::container_contents_sync

@@ -108,6 +108,7 @@ uint64_t g_nextSweep = 0;
 std::set<uint32_t> g_canonRetry;  // eids whose canonical send was refused
 std::set<uint32_t> g_wrongClassSaid;  // eids a canonical named that are no box here (said once)
 bool g_announced = false;
+uint32_t g_canonicalsApplied = 0;  // canonicals a client's ClientBlob took to a bound box
 
 bool IsHost() {
     auto* s = g_session.load(std::memory_order_acquire);
@@ -370,6 +371,7 @@ void ClientBlob(const uint8_t* bytes, size_t n, uint8_t senderSlot) {
         return;
     }
     ApplyCanonicalTo(actor, eid, a);
+    ++g_canonicalsApplied;
 }
 
 void ReplayClientBlob(const uint8_t* bytes, size_t n, int senderSlot) {
@@ -500,7 +502,10 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
         UE_LOGI("floppybox: connect canonicals -> slot %d (%d box(es))", peerSlot, shipped);
 }
 
+uint32_t AppliedCanonicals() { return g_canonicalsApplied; }
+
 void OnDisconnect() {
+    g_canonicalsApplied = 0;
     g_shadow.clear();
     g_wrongClassSaid.clear();
     for (auto& t : g_takenRing) t = Taken{};

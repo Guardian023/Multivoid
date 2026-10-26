@@ -40,8 +40,6 @@ using Clock = std::chrono::steady_clock;
 constexpr auto kStepBound = std::chrono::seconds(60);
 constexpr float kSideCm = 120.f;  // the staged props stand this far apart, sideways from the player's line
 constexpr uint8_t kActionOpen = 0xA;  // the PC's own lid-open action
-constexpr float kKerfusEnergy = 37.f;  // not the Kerfus's default
-constexpr int kRackRows = 2;
 
 constexpr const wchar_t* kPcPath = L"/Game/objects/prop_portablePc.prop_portablePc_C";
 constexpr const wchar_t* kBoxPath = L"/Game/objects/prop_floppyBox.prop_floppyBox_C";
@@ -147,7 +145,7 @@ bool UseAction(void* pc, void* player, uint8_t action) {
 DC::RackRow MakeRackRow(int k) {
     DC::RackRow r;
     r.has = true;
-    r.row.name = L"LATE-JOIN-RACK-" + std::to_wstring(k);
+    r.row.name = std::wstring(kRackRowPrefix) + std::to_wstring(k);
     r.row.id = L"LJ-" + std::to_wstring(k);
     r.row.object = L"latejoin";
     r.row.signal = L"latejoin";

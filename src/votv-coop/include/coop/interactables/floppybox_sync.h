@@ -37,4 +37,8 @@ void QueueConnectBroadcastForSlot(int peerSlot);
 
 void OnDisconnect();
 
+// [dev] how many host canonicals this peer has applied to a bound box since its session began; a read-only
+// question for the late-join drill. Game thread.
+uint32_t AppliedCanonicals();
+
 }  // namespace coop::floppybox_sync
