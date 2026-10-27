@@ -107,6 +107,7 @@ struct RefusedFifo {
     uint16_t At(size_t i) const { return seq[(head + i) % kRefusedCap]; }
 };
 coop::roster_ledger::PerSlotState<RefusedFifo> g_refused;
+coop::roster_ledger::PerSlotState<bool> g_overfullWarned;  // a sender past the claim bound, said once per occupant
 struct Waiting { FuseTowerPayload p; uint64_t arrivedMs; };
 std::deque<Waiting> g_waiting[coop::net::kMaxPeers];
 coop::net::IntentBucket g_rate[coop::net::kMaxPeers];
@@ -188,9 +189,19 @@ bool IsUse(uint8_t op) {
            op == coop::net::kFuseTowerOpRetract || op == coop::net::kFuseTowerOpReset;
 }
 
-// A claim refused to `slot`: its seq joins the queue its answers drain.
+// A claim refused to `slot`: its seq joins the queue its answers drain. An honest client never has more claims
+// unanswered than the queue holds (its own gate stops at kMaxUnansweredClaims); a full queue means a sender past
+// that bound, whose further refusals are not queued, so the queue never overruns.
 void PushRefused(uint8_t slot, uint16_t seq) {
     RefusedFifo& f = g_refused[slot];
+    if (f.count >= kRefusedCap) {
+        if (!g_overfullWarned[slot]) {
+            g_overfullWarned[slot] = true;
+            UE_LOGW("fuse_tower: slot %u has more refused claims unanswered than any client keeps -- the rest go "
+                    "unanswered", slot);
+        }
+        return;
+    }
     f.seq[(f.head + f.count) % kRefusedCap] = seq;
     ++f.count;
 }
