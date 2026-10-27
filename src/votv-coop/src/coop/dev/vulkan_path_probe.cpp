@@ -2,8 +2,13 @@
 //
 // The structs below are the few the probe reads, declared at the layout the Vulkan specification
 // gives them on a 64-bit target (VkPresentInfoKHR, VkSwapchainCreateInfoKHR, VkDeviceCreateInfo,
-// VkDeviceQueueCreateInfo); every handle is an opaque 64-bit value. No SDK header is included and
-// vulkan-1.dll is reached with GetModuleHandleW and GetProcAddress only.
+// VkDeviceQueueCreateInfo, VkInstanceCreateInfo, VkApplicationInfo); every handle is an opaque
+// 64-bit value. No SDK header is included and vulkan-1.dll is reached with GetModuleHandleW and
+// GetProcAddress only.
+//
+// The hooks go in at the earliest point our code runs (Start): at once when the module is already
+// mapped, else from a one-shot detour on KernelBase!LoadLibraryExW that installs them on the loading
+// thread the moment the loader returns, before the renderer can use the library.
 //
 // A detour may fire on any thread. The present detours touch atomics and the rate-limited log
 // alone, with no allocation; the summary lines are printed from the game thread's tick.
@@ -96,6 +101,32 @@ struct DeviceCreateInfo {
 static_assert(sizeof(DeviceCreateInfo) == 72 && offsetof(DeviceCreateInfo, pQueueCreateInfos) == 24 &&
               offsetof(DeviceCreateInfo, enabledExtensionCount) == 48);
 
+struct ApplicationInfo {
+    std::uint32_t sType;
+    const void*   pNext;
+    const char*   pApplicationName;
+    std::uint32_t applicationVersion;
+    const char*   pEngineName;
+    std::uint32_t engineVersion;
+    std::uint32_t apiVersion;
+};
+static_assert(sizeof(ApplicationInfo) == 48 && offsetof(ApplicationInfo, pEngineName) == 32 &&
+              offsetof(ApplicationInfo, apiVersion) == 44);
+
+struct InstanceCreateInfo {
+    std::uint32_t          sType;
+    const void*            pNext;
+    std::uint32_t          flags;
+    const ApplicationInfo* pApplicationInfo;
+    std::uint32_t          enabledLayerCount;
+    const char* const*     ppEnabledLayerNames;
+    std::uint32_t          enabledExtensionCount;
+    const char* const*     ppEnabledExtensionNames;
+};
+static_assert(sizeof(InstanceCreateInfo) == 64 && offsetof(InstanceCreateInfo, pApplicationInfo) == 24 &&
+              offsetof(InstanceCreateInfo, enabledExtensionCount) == 48 &&
+              offsetof(InstanceCreateInfo, ppEnabledExtensionNames) == 56);
+
 constexpr std::uint32_t kUsageColorAttachment = 0x10;  // VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT
 
 using GetProcAddrFn     = PfnVoid (*)(Handle, const char*);
@@ -103,19 +134,30 @@ using CreateDeviceFn    = VkResult (*)(Handle, const DeviceCreateInfo*, const vo
 using GetDeviceQueueFn  = void (*)(Handle, std::uint32_t, std::uint32_t, Handle*);
 using CreateSwapchainFn = VkResult (*)(Handle, const SwapchainCreateInfo*, const void*, Handle*);
 using PresentFn         = VkResult (*)(Handle, const PresentInfo*);
+using CreateInstanceFn  = VkResult (*)(const InstanceCreateInfo*, const void*, Handle*);
+using EnumPhysicalFn    = VkResult (*)(Handle, std::uint32_t*, Handle*);
+using LoadLibraryExWFn  = HMODULE(WINAPI*)(LPCWSTR, HANDLE, DWORD);
 
-// The entries the design needs; the first two get detours on every address the renderer is handed.
+// The entries the design needs; the present, swapchain-create, device-create and queue-fetch ones get
+// detours on every address the renderer is handed, the instance ones only on their export.
 constexpr const char* kQueried[] = {
     "vkQueuePresentKHR",     "vkCreateSwapchainKHR", "vkDestroySwapchainKHR", "vkGetSwapchainImagesKHR",
-    "vkAcquireNextImageKHR", "vkCreateDevice",       "vkGetDeviceQueue",      "vkQueueSubmit"};
+    "vkAcquireNextImageKHR", "vkCreateDevice",       "vkGetDeviceQueue",      "vkQueueSubmit",
+    "vkCreateInstance",      "vkEnumeratePhysicalDevices"};
 constexpr int kQueriedCount = static_cast<int>(sizeof(kQueried) / sizeof(kQueried[0]));
-constexpr int kQPresent = 0, kQCreateSwapchain = 1;
+constexpr int kQPresent = 0, kQCreateSwapchain = 1, kQCreateDevice = 5, kQGetDeviceQueue = 6;
+
+bool HookedByAnswer(int q) {
+    return q == kQPresent || q == kQCreateSwapchain || q == kQCreateDevice || q == kQGetDeviceQueue;
+}
 
 enum Route : int { kRouteExport = 0, kRouteInstance = 1, kRouteDevice = 2 };
 constexpr const char* kRouteName[] = {"export", "instance", "device"};
 
 constexpr int kSlots = 4;  // distinct addresses hooked per entry
 constexpr int kMaxQueues = 16;
+constexpr int kMaxPhysical = 8;
+constexpr std::uint32_t kMaxNames = 64;  // extension names logged per create call
 constexpr int kSummarySeconds = 10;
 constexpr std::uint64_t kLogEvery = 300;
 constexpr std::uint64_t kLogFirst = 5;
@@ -132,14 +174,18 @@ struct Family {
     int   route[kSlots]  = {};
     int   used           = 0;
 };
-Family g_fam[2];  // indexed by kQPresent, kQCreateSwapchain
+Family g_fam[kQueriedCount];  // used for the entries HookedByAnswer names
 
 PresentFn         g_presentTramp[kSlots];
 CreateSwapchainFn g_createTramp[kSlots];
-CreateDeviceFn    g_createDeviceTramp;
-GetDeviceQueueFn  g_queueTramp;
+CreateDeviceFn    g_createDeviceTramp[kSlots];
+GetDeviceQueueFn  g_queueTramp[kSlots];
+CreateInstanceFn  g_createInstanceTramp;
+EnumPhysicalFn    g_enumPhysicalTramp;
 GetProcAddrFn     g_instanceTramp;
 GetProcAddrFn     g_deviceTramp;
+LoadLibraryExWFn  g_loadTramp;
+void*             g_loadTarget = nullptr;
 
 struct PresentStat {
     std::atomic<std::uint64_t> count{0};
@@ -165,9 +211,15 @@ struct SwapchainFacts {
 SwapchainFacts             g_sc;
 std::atomic<std::uint32_t> g_scCreates{0};
 std::atomic<bool>          g_deviceSeen{false};
+std::atomic<bool>          g_instanceSeen{false};
+std::atomic<std::uint32_t> g_enumCalls{0};
 
-bool          g_installed = false;
-std::uint64_t g_ticks     = 0;
+Handle g_phys[kMaxPhysical];  // the physical devices the renderer was handed, under g_mu
+int    g_physCount = 0;
+
+std::atomic<bool> g_armed{false};
+std::atomic<bool> g_hooksIn{false};  // claimed by the one thread that installs the export hooks
+std::uint64_t     g_ticks = 0;
 
 unsigned long long U(Handle h) { return static_cast<unsigned long long>(h); }
 
@@ -248,9 +300,20 @@ VkResult OnCreateSwapchain(Handle device, const SwapchainCreateInfo* ci, const v
 
 // ---- the device detours ---------------------------------------------------------------------
 
+// The index of `physical` in the list vkEnumeratePhysicalDevices handed out, or -1.
+int PhysicalIndex(Handle physical) {
+    std::lock_guard<std::mutex> lk(g_mu);
+    for (int i = 0; i < g_physCount; ++i)
+        if (g_phys[i] == physical) return i;
+    return -1;
+}
+
+template <int I>
 VkResult OnCreateDevice(Handle physical, const DeviceCreateInfo* ci, const void* alloc, Handle* out) {
     if (ci) {
-        UE_LOGI("[VK-PATH] vkCreateDevice queue_infos=%u extensions=%u layers=%u tid=%lu game_thread=%d",
+        UE_LOGI("[VK-PATH] vkCreateDevice slot=%d route=%s physical=0x%llx enumerated_index=%d queue_infos=%u "
+                "extensions=%u layers=%u tid=%lu game_thread=%d",
+                I, kRouteName[g_fam[kQCreateDevice].route[I]], U(physical), PhysicalIndex(physical),
                 ci->queueCreateInfoCount, ci->enabledExtensionCount, ci->enabledLayerCount,
                 static_cast<unsigned long>(::GetCurrentThreadId()), IsGame());
         for (std::uint32_t i = 0; ci->pQueueCreateInfos && i < ci->queueCreateInfoCount && i < kMaxQueues; ++i)
@@ -260,14 +323,15 @@ VkResult OnCreateDevice(Handle physical, const DeviceCreateInfo* ci, const void*
             UE_LOGI("[VK-PATH] vkCreateDevice extension[%u]=%s", i,
                     ci->ppEnabledExtensionNames[i] ? ci->ppEnabledExtensionNames[i] : "(null)");
     }
-    const VkResult r = g_createDeviceTramp(physical, ci, alloc, out);
+    const VkResult r = g_createDeviceTramp[I](physical, ci, alloc, out);
     g_deviceSeen.store(true, std::memory_order_relaxed);
     UE_LOGI("[VK-PATH] vkCreateDevice result=%d device=0x%llx", r, U((r == 0 && out) ? *out : 0));
     return r;
 }
 
+template <int I>
 void OnGetDeviceQueue(Handle device, std::uint32_t family, std::uint32_t index, Handle* out) {
-    g_queueTramp(device, family, index, out);
+    g_queueTramp[I](device, family, index, out);
     const Handle queue = out ? *out : 0;
     {
         std::lock_guard<std::mutex> lk(g_mu);
@@ -277,8 +341,59 @@ void OnGetDeviceQueue(Handle device, std::uint32_t family, std::uint32_t index, 
             g_queueCount.store(n + 1, std::memory_order_release);
         }
     }
-    UE_LOGI("[VK-PATH] vkGetDeviceQueue device=0x%llx family=%u index=%u queue=0x%llx", U(device), family, index,
-            U(queue));
+    UE_LOGI("[VK-PATH] vkGetDeviceQueue slot=%d route=%s device=0x%llx family=%u index=%u queue=0x%llx", I,
+            kRouteName[g_fam[kQGetDeviceQueue].route[I]], U(device), family, index, U(queue));
+}
+
+// ---- the instance detours -------------------------------------------------------------------
+
+// A Vulkan version word as major.minor.patch (the variant bits above the major are dropped).
+void LogApiVersion(std::uint32_t v) {
+    UE_LOGI("[VK-PATH] vkCreateInstance apiVersion=%u.%u.%u (0x%08x)", (v >> 22) & 0x7Fu, (v >> 12) & 0x3FFu,
+            v & 0xFFFu, v);
+}
+
+VkResult OnCreateInstance(const InstanceCreateInfo* ci, const void* alloc, Handle* out) {
+    if (ci) {
+        const ApplicationInfo* app = ci->pApplicationInfo;
+        UE_LOGI("[VK-PATH] vkCreateInstance extensions=%u layers=%u app=%s engine=%s tid=%lu game_thread=%d",
+                ci->enabledExtensionCount, ci->enabledLayerCount,
+                (app && app->pApplicationName) ? app->pApplicationName : "(none)",
+                (app && app->pEngineName) ? app->pEngineName : "(none)",
+                static_cast<unsigned long>(::GetCurrentThreadId()), IsGame());
+        if (app) LogApiVersion(app->apiVersion);
+        else UE_LOGI("[VK-PATH] vkCreateInstance apiVersion=(no application info)");
+        for (std::uint32_t i = 0; ci->ppEnabledExtensionNames && i < ci->enabledExtensionCount && i < kMaxNames; ++i)
+            UE_LOGI("[VK-PATH] vkCreateInstance extension[%u]=%s", i,
+                    ci->ppEnabledExtensionNames[i] ? ci->ppEnabledExtensionNames[i] : "(null)");
+        for (std::uint32_t i = 0; ci->ppEnabledLayerNames && i < ci->enabledLayerCount && i < kMaxNames; ++i)
+            UE_LOGI("[VK-PATH] vkCreateInstance layer[%u]=%s", i,
+                    ci->ppEnabledLayerNames[i] ? ci->ppEnabledLayerNames[i] : "(null)");
+    }
+    const VkResult r = g_createInstanceTramp(ci, alloc, out);
+    g_instanceSeen.store(true, std::memory_order_relaxed);
+    UE_LOGI("[VK-PATH] vkCreateInstance result=%d instance=0x%llx", r, U((r == 0 && out) ? *out : 0));
+    return r;
+}
+
+VkResult OnEnumeratePhysical(Handle instance, std::uint32_t* count, Handle* out) {
+    const VkResult r = g_enumPhysicalTramp(instance, count, out);
+    const std::uint32_t nth = g_enumCalls.fetch_add(1, std::memory_order_relaxed) + 1;
+    const int n = count ? static_cast<int>(*count) : 0;
+    if (out && count && (r == 0 || r == 5 /* VK_INCOMPLETE */)) {
+        std::lock_guard<std::mutex> lk(g_mu);
+        for (int i = 0; i < n && i < kMaxPhysical; ++i) {
+            bool known = false;
+            for (int k = 0; k < g_physCount; ++k) known = known || g_phys[k] == out[i];
+            if (!known && g_physCount < kMaxPhysical) g_phys[g_physCount++] = out[i];
+        }
+    }
+    if (nth <= kLogFirst)
+        UE_LOGI("[VK-PATH] vkEnumeratePhysicalDevices #%u instance=0x%llx result=%d count=%d list=%s dev0=0x%llx "
+                "dev1=0x%llx tid=%lu game_thread=%d",
+                nth, U(instance), r, n, out ? "yes" : "count-only", U((out && n > 0) ? out[0] : 0),
+                U((out && n > 1) ? out[1] : 0), static_cast<unsigned long>(::GetCurrentThreadId()), IsGame());
+    return r;
 }
 
 // ---- hooking an address ---------------------------------------------------------------------
@@ -289,9 +404,33 @@ void* const kPresentDetours[kSlots] = {
 void* const kCreateDetours[kSlots] = {
     reinterpret_cast<void*>(&OnCreateSwapchain<0>), reinterpret_cast<void*>(&OnCreateSwapchain<1>),
     reinterpret_cast<void*>(&OnCreateSwapchain<2>), reinterpret_cast<void*>(&OnCreateSwapchain<3>)};
+void* const kDeviceDetours[kSlots] = {
+    reinterpret_cast<void*>(&OnCreateDevice<0>), reinterpret_cast<void*>(&OnCreateDevice<1>),
+    reinterpret_cast<void*>(&OnCreateDevice<2>), reinterpret_cast<void*>(&OnCreateDevice<3>)};
+void* const kQueueDetours[kSlots] = {
+    reinterpret_cast<void*>(&OnGetDeviceQueue<0>), reinterpret_cast<void*>(&OnGetDeviceQueue<1>),
+    reinterpret_cast<void*>(&OnGetDeviceQueue<2>), reinterpret_cast<void*>(&OnGetDeviceQueue<3>)};
 
-// Hook `target` once for entry `q` (kQPresent or kQCreateSwapchain), each distinct address on a slot
-// of its own so the trampolines never mix. A second sight of an address is silent. Any thread.
+// The detour and the trampoline cell of slot `slot` of entry `q` (a HookedByAnswer entry).
+void* DetourOf(int q, int slot) {
+    switch (q) {
+        case kQPresent: return kPresentDetours[slot];
+        case kQCreateSwapchain: return kCreateDetours[slot];
+        case kQCreateDevice: return kDeviceDetours[slot];
+        default: return kQueueDetours[slot];
+    }
+}
+void** TrampolineOf(int q, int slot) {
+    switch (q) {
+        case kQPresent: return reinterpret_cast<void**>(&g_presentTramp[slot]);
+        case kQCreateSwapchain: return reinterpret_cast<void**>(&g_createTramp[slot]);
+        case kQCreateDevice: return reinterpret_cast<void**>(&g_createDeviceTramp[slot]);
+        default: return reinterpret_cast<void**>(&g_queueTramp[slot]);
+    }
+}
+
+// Hook `target` once for entry `q` (a HookedByAnswer entry), each distinct address on a slot of its
+// own so the trampolines never mix. A second sight of an address is silent. Any thread.
 void HookFamily(int q, void* target, int route) {
     int slot = -1;
     bool full = false;
@@ -312,10 +451,7 @@ void HookFamily(int q, void* target, int route) {
         UE_LOGW("[VK-PATH] hook %s: no free slot for %p (route=%s)", kQueried[q], target, kRouteName[route]);
         return;
     }
-    void* detour = q == kQPresent ? kPresentDetours[slot] : kCreateDetours[slot];
-    void** tramp = q == kQPresent ? reinterpret_cast<void**>(&g_presentTramp[slot])
-                                  : reinterpret_cast<void**>(&g_createTramp[slot]);
-    const bool ok = ue_wrap::hook::Install(target, detour, tramp);
+    const bool ok = ue_wrap::hook::Install(target, DetourOf(q, slot), TrampolineOf(q, slot));
     UE_LOGI("[VK-PATH] hook %s slot=%d route=%s target=%p %s", kQueried[q], slot, kRouteName[route], target,
             ok ? "installed" : "FAILED");
 }
@@ -333,7 +469,7 @@ void OnProcQuery(int via, const char* name, PfnVoid answer) {
             UE_LOGI("[VK-PATH] proc-addr via=%s name=%s answer=%p export=%p %s tid=%lu game_thread=%d",
                     kRouteName[via], name, ptr, g_export[i], same ? "same-as-export" : "DIFFERS-from-export",
                     static_cast<unsigned long>(::GetCurrentThreadId()), IsGame());
-        if (ptr && !same && (i == kQPresent || i == kQCreateSwapchain)) HookFamily(i, ptr, via);
+        if (ptr && !same && HookedByAnswer(i)) HookFamily(i, ptr, via);
         return;
     }
 }
@@ -360,10 +496,27 @@ void HookExport(HMODULE mod, const char* name, void* detour, void** tramp) {
     UE_LOGI("[VK-PATH] hook export %s target=%p %s", name, addr, ok ? "installed" : "FAILED");
 }
 
-void InstallAll(HMODULE mod) {
-    g_installed = true;  // latched first: a failed install is not retried every tick
-    UE_LOGI("[VK-PATH] vulkan-1.dll mapped at %p, first seen on probe tick %llu, game window subclassed=%d", mod,
-            static_cast<unsigned long long>(g_ticks), coop::input::game_window_proc::Hwnd() ? 1 : 0);
+// Milliseconds since this process was created, the time base of the load-order lines.
+unsigned long long MsSinceProcessStart() {
+    FILETIME create{}, exit_{}, kernel{}, user{}, now{};
+    if (!::GetProcessTimes(::GetCurrentProcess(), &create, &exit_, &kernel, &user)) return 0;
+    ::GetSystemTimeAsFileTime(&now);
+    ULARGE_INTEGER a{}, b{};
+    a.LowPart  = create.dwLowDateTime;
+    a.HighPart = create.dwHighDateTime;
+    b.LowPart  = now.dwLowDateTime;
+    b.HighPart = now.dwHighDateTime;
+    return (b.QuadPart - a.QuadPart) / 10000ull;
+}
+
+// The export hooks, in the order that leaves no window: the lookups first, then the creates, then
+// the two entries that hand out the rest. `how` and `requested` say what brought us here. The caller
+// has claimed g_hooksIn; any thread (the loading thread of vulkan-1.dll, or Start's).
+void InstallAll(HMODULE mod, const char* how, const char* requested) {
+    UE_LOGI("[VK-PATH] vulkan-1.dll mapped at %p, hooks installed %s requested=%s ms_since_process_start=%llu "
+            "tid=%lu game_thread=%d window_subclassed=%d",
+            mod, how, requested, MsSinceProcessStart(), static_cast<unsigned long>(::GetCurrentThreadId()), IsGame(),
+            coop::input::game_window_proc::Hwnd() ? 1 : 0);
     if (!ue_wrap::hook::Init()) {
         UE_LOGE("[VK-PATH] hook engine unavailable -- probe idle");
         return;
@@ -372,16 +525,59 @@ void InstallAll(HMODULE mod) {
         g_export[i] = reinterpret_cast<void*>(::GetProcAddress(mod, kQueried[i]));
         UE_LOGI("[VK-PATH] export %s=%p", kQueried[i], g_export[i]);
     }
-    if (g_export[kQPresent]) HookFamily(kQPresent, g_export[kQPresent], kRouteExport);
-    if (g_export[kQCreateSwapchain]) HookFamily(kQCreateSwapchain, g_export[kQCreateSwapchain], kRouteExport);
-    HookExport(mod, "vkCreateDevice", reinterpret_cast<void*>(&OnCreateDevice),
-               reinterpret_cast<void**>(&g_createDeviceTramp));
-    HookExport(mod, "vkGetDeviceQueue", reinterpret_cast<void*>(&OnGetDeviceQueue),
-               reinterpret_cast<void**>(&g_queueTramp));
-    HookExport(mod, "vkGetDeviceProcAddr", reinterpret_cast<void*>(&OnGetDeviceProcAddr),
-               reinterpret_cast<void**>(&g_deviceTramp));
     HookExport(mod, "vkGetInstanceProcAddr", reinterpret_cast<void*>(&OnGetInstanceProcAddr),
                reinterpret_cast<void**>(&g_instanceTramp));
+    HookExport(mod, "vkGetDeviceProcAddr", reinterpret_cast<void*>(&OnGetDeviceProcAddr),
+               reinterpret_cast<void**>(&g_deviceTramp));
+    HookExport(mod, "vkCreateInstance", reinterpret_cast<void*>(&OnCreateInstance),
+               reinterpret_cast<void**>(&g_createInstanceTramp));
+    HookExport(mod, "vkEnumeratePhysicalDevices", reinterpret_cast<void*>(&OnEnumeratePhysical),
+               reinterpret_cast<void**>(&g_enumPhysicalTramp));
+    for (int q = 0; q < kQueriedCount; ++q)
+        if (HookedByAnswer(q) && g_export[q]) HookFamily(q, g_export[q], kRouteExport);
+}
+
+// ---- the module-load capture ----------------------------------------------------------------
+
+// A wide name as printable ASCII for the log (anything else becomes '?').
+void NarrowName(const wchar_t* in, char* out, std::size_t cap) {
+    std::size_t i = 0;
+    for (; in && in[i] && i + 1 < cap; ++i) out[i] = (in[i] > 0x20 && in[i] < 0x7F) ? static_cast<char>(in[i]) : '?';
+    out[i] = '\0';
+}
+
+// The funnel LoadLibraryW/A and LoadLibraryExA end in. After the loader returns, the first call that
+// finds vulkan-1.dll mapped installs the export hooks on this thread and lifts the detour. Any thread.
+HMODULE WINAPI OnLoadLibraryExW(LPCWSTR name, HANDLE file, DWORD flags) {
+    const HMODULE r = g_loadTramp(name, file, flags);
+    if (g_hooksIn.load(std::memory_order_acquire)) return r;
+    const DWORD lastError = ::GetLastError();
+    HMODULE mod = ::GetModuleHandleW(L"vulkan-1.dll");
+    if (mod && !g_hooksIn.exchange(true)) {
+        char shown[260];
+        NarrowName(name, shown, sizeof(shown));
+        InstallAll(mod, "at map time", shown);
+        UE_LOGI("[VK-PATH] LoadLibraryExW detour lifted (one-shot) tid=%lu",
+                static_cast<unsigned long>(::GetCurrentThreadId()));
+        ue_wrap::hook::Disable(g_loadTarget);
+    }
+    ::SetLastError(lastError);
+    return r;
+}
+
+// kernelbase.dll's LoadLibraryExW, detoured. False when it cannot be found or hooked.
+bool InstallLoadDetour() {
+    HMODULE kb = ::GetModuleHandleW(L"kernelbase.dll");
+    void* target = kb ? reinterpret_cast<void*>(::GetProcAddress(kb, "LoadLibraryExW")) : nullptr;
+    if (!target) {
+        UE_LOGE("[VK-PATH] KernelBase!LoadLibraryExW not found -- no map-time capture");
+        return false;
+    }
+    g_loadTarget = target;
+    const bool ok = ue_wrap::hook::Install(target, reinterpret_cast<void*>(&OnLoadLibraryExW),
+                                           reinterpret_cast<void**>(&g_loadTramp));
+    UE_LOGI("[VK-PATH] hook KernelBase!LoadLibraryExW target=%p %s", target, ok ? "installed" : "FAILED");
+    return ok;
 }
 
 // ---- the summary ----------------------------------------------------------------------------
@@ -409,8 +605,10 @@ void Summary() {
         g_sum.started = true;
         g_sum.next    = now + std::chrono::seconds(1);
         for (int i = 0; i < kSlots; ++i) g_sum.prev[i] = counts[i];
-        UE_LOGI("[VK-PATH] first present seen on probe tick %llu, device create seen=%d, swapchain creates seen=%u",
-                static_cast<unsigned long long>(g_ticks), g_deviceSeen.load() ? 1 : 0, g_scCreates.load());
+        UE_LOGI("[VK-PATH] first present seen on probe tick %llu, device create seen=%d, instance seen=%d, "
+                "swapchain creates seen=%u",
+                static_cast<unsigned long long>(g_ticks), g_deviceSeen.load() ? 1 : 0, g_instanceSeen.load() ? 1 : 0,
+                g_scCreates.load());
         return;
     }
     if (now < g_sum.next) return;
@@ -418,6 +616,7 @@ void Summary() {
 
     SwapchainFacts sc;
     int routes[kSlots];
+    int presentFamily = -1;  // the family of the first presenting queue whose fetch was seen; -1 = unknown
     {
         std::lock_guard<std::mutex> lk(g_mu);
         sc = g_sc;
@@ -427,38 +626,63 @@ void Summary() {
         if (counts[i] == 0) continue;
         const std::uint64_t perSecond = counts[i] - g_sum.prev[i];
         g_sum.prev[i] = counts[i];
+        int family = -1, index = -1;
+        FindQueue(g_pres[i].queue.load(), &family, &index);
+        if (presentFamily < 0) presentFamily = family;
         if (sc.seen) {
-            UE_LOGI("[VK-PATH] presents=%llu/s route=%s queue=0x%llx swapchains=%u fmt=%d extent=%ux%u "
+            UE_LOGI("[VK-PATH] presents=%llu/s route=%s queue=0x%llx family=%d swapchains=%u fmt=%d extent=%ux%u "
                     "images=%u usage=0x%x",
                     static_cast<unsigned long long>(perSecond), kRouteName[routes[i]], U(g_pres[i].queue.load()),
-                    g_pres[i].swapchains.load(), sc.format, sc.width, sc.height, sc.minImages, sc.usage);
+                    family, g_pres[i].swapchains.load(), sc.format, sc.width, sc.height, sc.minImages, sc.usage);
         } else {
-            UE_LOGI("[VK-PATH] presents=%llu/s route=%s queue=0x%llx swapchains=%u fmt=unseen extent=unseen "
-                    "images=unseen usage=unseen",
+            UE_LOGI("[VK-PATH] presents=%llu/s route=%s queue=0x%llx family=%d swapchains=%u fmt=unseen "
+                    "extent=unseen images=unseen usage=unseen",
                     static_cast<unsigned long long>(perSecond), kRouteName[routes[i]], U(g_pres[i].queue.load()),
-                    g_pres[i].swapchains.load());
+                    family, g_pres[i].swapchains.load());
         }
     }
     if (++g_sum.printed < kSummarySeconds) return;
     g_sum.done = true;
-    UE_LOGI("[VK-PATH] DONE presents_total=%llu swapchain_creates=%u device_create_seen=%d queues_seen=%d "
-            "instance_proc_queries=%llu device_proc_queries=%llu",
-            static_cast<unsigned long long>(total), g_scCreates.load(), g_deviceSeen.load() ? 1 : 0,
-            g_queueCount.load(), static_cast<unsigned long long>(g_queries[0].load()),
+    UE_LOGI("[VK-PATH] DONE presents_total=%llu swapchain_creates=%u device_create_seen=%d present_family=%d "
+            "instance_seen=%d queues_seen=%d instance_proc_queries=%llu device_proc_queries=%llu",
+            static_cast<unsigned long long>(total), g_scCreates.load(), g_deviceSeen.load() ? 1 : 0, presentFamily,
+            g_instanceSeen.load() ? 1 : 0, g_queueCount.load(), static_cast<unsigned long long>(g_queries[0].load()),
             static_cast<unsigned long long>(g_queries[1].load()));
 }
 
 }  // namespace
 
-void Tick() {
-    static const bool s_on = coop::config::ResolveFlag(::coop::config_registry::rows::vulkan_path_probe);
-    if (!s_on) return;
-    ++g_ticks;
-    if (!g_installed) {
-        HMODULE mod = ::GetModuleHandleW(L"vulkan-1.dll");
-        if (!mod) return;
-        InstallAll(mod);
+void Start() {
+    // The registry is readable here (boot reads it before harness::Start); the env twin is read
+    // directly beside it, and a disagreement is logged and arms the probe.
+    const bool row = coop::config::ResolveFlag(::coop::config_registry::rows::vulkan_path_probe);
+    char env[8] = {};
+    const bool twin = ::GetEnvironmentVariableA("VOTVCOOP_VULKAN_PATH_PROBE", env, sizeof(env)) != 0 && env[0] == '1';
+    if (!row && !twin) return;
+    g_armed.store(true, std::memory_order_release);
+
+    HMODULE mod = ::GetModuleHandleW(L"vulkan-1.dll");
+    UE_LOGI("[VK-PATH] earliest point (Start): vulkan-1.dll mapped=%d row=%d env_twin=%d "
+            "ms_since_process_start=%llu tid=%lu game_thread=%d window_subclassed=%d",
+            mod ? 1 : 0, row ? 1 : 0, twin ? 1 : 0, MsSinceProcessStart(),
+            static_cast<unsigned long>(::GetCurrentThreadId()), IsGame(),
+            coop::input::game_window_proc::Hwnd() ? 1 : 0);
+    if (!row) UE_LOGW("[VK-PATH] the config row read off at the earliest point; armed from the env twin");
+    if (mod) {
+        g_hooksIn.store(true, std::memory_order_release);
+        InstallAll(mod, "at the earliest point", "(already mapped)");
+        return;
     }
+    if (!ue_wrap::hook::Init()) {
+        UE_LOGE("[VK-PATH] hook engine unavailable -- probe idle");
+        return;
+    }
+    InstallLoadDetour();
+}
+
+void Tick() {
+    if (!g_armed.load(std::memory_order_acquire)) return;
+    ++g_ticks;
     Summary();
 }
 

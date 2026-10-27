@@ -762,11 +762,12 @@ CFG_FLAG(key_parity_probe, "key_parity_probe", "dev", false, "VOTVCOOP_KEY_PARIT
     "props; logs the props each lacks or holds under another key, with examples per world. Holds the "
     "gate; read-only but for the slot serials it assigns.")
 CFG_FLAG(vulkan_path_probe, "vulkan_path_probe", "dev", false, "VOTVCOOP_VULKAN_PATH_PROBE",
-    "Probe (run the game with the Vulkan renderer): when vulkan-1.dll is mapped against our boot, which "
-    "entry points the renderer queries and by which route, whether a detour on the address it calls "
-    "sees one present per frame, and the swapchain, device and queue behind it. Lines tagged [VK-PATH], "
+    "Probe (run the game with the Vulkan renderer): when vulkan-1.dll is mapped against our boot (hooks "
+    "go in at the earliest point, or as the library maps), which entry points the renderer queries and by "
+    "which route, the instance, physical device, device and queue it creates, whether a detour on the "
+    "address it calls sees one present per frame, and the swapchain behind it. Lines tagged [VK-PATH], "
     "a per-second summary for the first 10 s of presents, then DONE. Observation only; installs "
-    "detours on the Vulkan loader while on.")
+    "detours on the Vulkan loader, and on KernelBase LoadLibraryExW until the library maps, while on.")
 CFG_FLAG(key_index_forget_one, "key_index_forget_one", "dev", false, "VOTVCOOP_KEY_INDEX_FORGET_ONE",
     "Red arm of the prop key index's parity pass: once a session, after the seed, one filed prop of the "
     "current world is dropped from the index. The pass must name it as a filing the feeds missed and file "
