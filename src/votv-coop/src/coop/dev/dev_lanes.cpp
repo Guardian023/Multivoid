@@ -7,6 +7,7 @@
 #include "coop/dev/atv_probe.h"
 #include "coop/dev/blackout_drill.h"  // [dev] a blackout on both peers, for the lanes' dev probe
 #include "coop/dev/client_model_probe.h"  // kel-vs-scientist side-by-side visual check (ini client_model_probe=1)
+#include "coop/dev/container_join_drill.h"  // [dev] an edit no world-ready peer could take reaches the joiner
 #include "coop/dev/container_opener_probe.h"  // [dev] the actors far containers open through, on real objects
 #include "coop/dev/container_selftest.h"  // [dev] container-lane e2e circle (organic addLoot)
 #include "coop/dev/container_view_drill.h"  // [dev] a container view closes as its opener leaves reach
@@ -268,6 +269,7 @@ void EndSession() {
 
 void RearmSelftests() {
     coop::dev::container_selftest::OnDisconnect();  // [dev] re-arm the circle on reconnect
+    coop::dev::container_join_drill::OnDisconnect();  // [dev] a later session's joiners start over
     coop::dev::floppy_selftest::OnDisconnect();  // [dev] re-arm the disc episodes on reconnect
     coop::dev::hookdrag_selftest::OnDisconnect();  // [dev] re-arm the drag on reconnect
     coop::dev::hand_drop_selftest::OnDisconnect();  // [dev] re-arm the hand episodes on reconnect
@@ -319,6 +321,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::recycled_slot_drill::Tick();  // [dev] the recycled-slot drill (a single read when off)
     coop::dev::spawn_match_probe::Tick();  // [dev] periodic fuzzy-match totals (a single bool read when off)
     coop::dev::container_selftest::Tick();  // [dev] the container-lane e2e circle (a single bool read when off)
+    coop::dev::container_join_drill::Tick(&session);  // [dev] the container join drill (a single bool read when off)
     coop::dev::container_opener_probe::Tick(&session);  // [dev] far containers' openers and the reach to them (latched read when off)
     coop::dev::container_view_drill::Tick(&session);  // [dev] the view-close drill (a single bool read when off)
     coop::dev::physmods_drill::Tick(&session);  // [dev] the module-plug drill (a single bool read when off)

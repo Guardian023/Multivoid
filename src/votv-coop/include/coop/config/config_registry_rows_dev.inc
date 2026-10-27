@@ -118,6 +118,10 @@ CFG_FLAG(desk_snd_selftest, "desk_snd_selftest", "dev", false, nullptr,
 CFG_FLAG(container_selftest, "container_selftest", "dev", false, "VOTVCOOP_CONTAINER_SELFTEST",
     "Autonomous selftest: container contents sync. It MUTATES the world -- it extracts an item on"
     " each peer -- so it is armed per run from the environment, like the hand-drop one.")
+CFG_FLAG(container_join_drill, "container_join_drill", "dev", false, "VOTVCOOP_CONTAINER_JOIN_DRILL",
+    "Drill (BOTH peers): the host extracts an item while a joiner is connected but not world-ready; the joiner "
+    "then reports a content hash per world container and the host judges it. Lines tagged [CONTAINER-JOIN] and "
+    "[CONTAINER-PARITY]; the host's DONE line ends it. It MUTATES the world.")
 CFG_FLAG(container_retry_red, "container_retry_red", "dev", false, "VOTVCOOP_CONTAINER_RETRY_RED",
     "Red arm for the container join drill: a container send refused with no world-ready peer is re-armed "
     "every sweep, as before the fix, and counted.")

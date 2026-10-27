@@ -91,6 +91,8 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/kerfur_serve_drill.cpp
     src/coop/dev/load_reroll_watch.cpp
     src/coop/dev/container_selftest.cpp
+    src/coop/dev/container_poke.cpp
+    src/coop/dev/container_join_drill.cpp
     src/coop/dev/drive_selftest.cpp
     src/coop/dev/rack_birth_drill.cpp
     src/coop/dev/burn_revive_drill.cpp
