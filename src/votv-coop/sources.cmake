@@ -72,6 +72,7 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/engine/engine_audio.cpp
     src/ue_wrap/engine/engine_bones.cpp
     src/ue_wrap/engine/engine_component.cpp
+    src/ue_wrap/engine/engine_timeline.cpp
     src/ue_wrap/engine/hit_result.cpp
     src/ue_wrap/engine/engine_hurt_flash.cpp
     src/ue_wrap/engine/screen_state.cpp
@@ -108,6 +109,7 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/devices/windturbine.cpp
     src/ue_wrap/devices/door_box.cpp
     src/ue_wrap/devices/coord_tower.cpp
+    src/ue_wrap/devices/radio_tower.cpp
     src/ue_wrap/desk/device_screen.cpp
     src/ue_wrap/desk/space_renderer.cpp
     src/ue_wrap/desk/console_desk.cpp
