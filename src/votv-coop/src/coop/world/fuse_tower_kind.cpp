@@ -413,6 +413,28 @@ bool ReadFuseLook(Kind kind, void* tower, int32_t& slot) {
     return kind == Kind::Radio ? RT::ReadFuseLook(tower, slot) : CT::ReadFuseLook(tower, slot);
 }
 
+const char* CanUse(Kind kind, void* tower, uint8_t op) {
+    if (kind == Kind::Radio) {
+        // radiotower actionOptionIndex :510, :4027-:4259: ignored while a lever runs; a whole tower answers a press
+        // with a hint and does nothing.
+        RT::State st;
+        if (!RT::Read(tower, st)) return "the tower does not read";
+        if (st.animation) return "its lever is moving";
+        if (!st.isBroken) return "the tower is not broken";
+        return nullptr;
+    }
+    // coordRadarDish actionOptionIndex @2885..@3958: nothing while the panel moves; the retract is then free; the
+    // rest needs the panel open, the lever at rest and the tower broken.
+    CT::State st;
+    if (!CT::Read(tower, st)) return "the tower does not read";
+    if (st.isAnim) return "its panel is moving";
+    if (op == coop::net::kFuseTowerOpRetract) return nullptr;
+    if (!st.opened) return "its panel is closed";
+    if (st.leverMoving) return "its lever is moving";
+    if (!st.isBroken) return "the tower is not broken";
+    return nullptr;
+}
+
 const char* CanPull(Kind kind, void* tower, const View& view, int32_t slot) {
     if (kind == Kind::Radio) {
         // The pull's own gates (radiotower actionOptionIndex :510, :524-540), on the host's copy: no lever runs.

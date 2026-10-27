@@ -210,8 +210,7 @@ bool HandleWorldEvent(const net::Session::ReliableMessage& msg) {
         // a fuse it moved (client to host). Role, reach and trust gates live in the two modules; the rows are
         // admitted here (a row no tower sends is dropped), and an op's kind, op and index are judged at the host.
         if (msg.payloadLen < sizeof(net::FuseTowerPayload)) {
-            UE_LOGW("event_feed: FuseTowerState payload too short (%zu < %zu)",
-                    static_cast<size_t>(msg.payloadLen), sizeof(net::FuseTowerPayload));
+            coop::fuse_tower_ops::OnShortPayload(static_cast<size_t>(msg.payloadLen));
             break;
         }
         net::FuseTowerPayload tp{};

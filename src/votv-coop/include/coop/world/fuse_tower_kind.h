@@ -99,6 +99,11 @@ Look ReadUse(Kind kind, void* tower, uint8_t& op, int32_t& index);
 // CLIENT: the fuse slot an insert fills, which the tower's own insert reads.
 bool ReadFuseLook(Kind kind, void* tower, int32_t& slot);
 
+// HOST: nullptr when the tower's own use of the part op `op` strikes (a button, a lever, the retract, the reset
+// lever) would act on the host's copy, else why not: the use's own gates, which otherwise leave a hint on the
+// host's screen and nothing else.
+const char* CanUse(Kind kind, void* tower, uint8_t op);
+
 // HOST: nullptr when the move is allowed on the host's copy, else why not.
 const char* CanPull(Kind kind, void* tower, const View& view, int32_t slot);
 const char* CanInsert(Kind kind, const View& view, int32_t slot);

@@ -39,6 +39,10 @@ void Tick();
 // HOST: a client's op (router: event_dispatch_world.cpp).
 void OnOp(const coop::net::FuseTowerPayload& p, uint8_t sender);
 
+// A FuseTowerState payload shorter than the struct, from any sender (router: event_dispatch_world.cpp): dropped
+// there, said here once a session.
+void OnShortPayload(size_t got);
+
 // HOST: each slot's acknowledgement and last refused claim, into the rows.
 void FillAcks(coop::net::FuseTowerPayload& p);
 

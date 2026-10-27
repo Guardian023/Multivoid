@@ -87,6 +87,7 @@ const char* OpName(uint8_t op) {
 FK::Kind KindOf(const FuseTowerPayload& p) { return static_cast<FK::Kind>(p.kind); }
 
 uint64_t g_rollsRefused = 0;
+bool     g_shortWarned = false;
 
 // ---- the host ------------------------------------------------------------------------------------------------
 
@@ -99,7 +100,7 @@ coop::net::IntentBucket g_rate[coop::net::kMaxPeers];
 struct Spend { int32_t tower = -1; FK::Kind kind = FK::Kind::Coordinate; uint64_t ms = 0; };
 struct Spends { Spend ring[kSpendsPerSlot]; uint8_t next = 0; };
 coop::roster_ledger::PerSlotState<Spends> g_spends;
-uint64_t g_taken = 0, g_refusedCount = 0, g_refunds = 0, g_queuesFull = 0, g_outOfReach = 0;
+uint64_t g_taken = 0, g_refusedCount = 0, g_refunds = 0, g_queuesFull = 0, g_outOfReach = 0, g_staleSeqs = 0;
 
 // A client's destroy this host applies: a good fuse its sender spent within reach of a tower's fuses is a spend
 // there, judged from the host's puppet of the sender with the lane's own reach.
@@ -153,15 +154,39 @@ void Refund(uint8_t slot, FK::Kind kind, void* tower) {
             fuse ? "a fuse spawned where it stands" : "NOT spawned (the fuse is lost)");
 }
 
-// The faults in an op that no client sends: each is warned once, however many ops carry it.
-enum class Fault : uint8_t { Op, Kind, OpKind, Button, Fuse, Count };
-bool g_faultSeen[static_cast<int>(Fault::Count)] = {};
+// The kinds of fault in an op the host drops or refuses: each is warned once per slot, however many ops carry it
+// (the totals are in the session-end line). The first five are the receive boundary's and no client sends them.
+enum class Fault : uint8_t { Op, Kind, OpKind, Stale, Dead, NoTower, Button, Fuse, NoPart, Reach, Unread, Rule, NoUse,
+                             Count };
+static_assert(static_cast<int>(Fault::Count) <= 16, "a slot's faults seen are one 16-bit mask");
+coop::roster_ledger::PerSlotState<uint16_t> g_faultsSeen;
 
-bool FirstOfFault(Fault f) {
-    bool& seen = g_faultSeen[static_cast<int>(f)];
-    if (seen) return false;
-    seen = true;
+bool FirstOfFault(Fault f, uint8_t slot) {
+    uint16_t& seen = g_faultsSeen[slot];
+    const auto bit = static_cast<uint16_t>(1u << static_cast<int>(f));
+    if (seen & bit) return false;
+    seen = static_cast<uint16_t>(seen | bit);
     return true;
+}
+
+bool IsUse(uint8_t op) {
+    return op == coop::net::kFuseTowerOpButton || op == coop::net::kFuseTowerOpLever ||
+           op == coop::net::kFuseTowerOpRetract || op == coop::net::kFuseTowerOpReset;
+}
+
+// A refused op: counted, warned once per kind of fault per slot, a claim named in the rows, a spent fuse given
+// back, and the answer owed to the sender alone (the rows carry no news for the others).
+void Refused(uint8_t sender, const FuseTowerPayload& p, const char* refusal, Fault why,
+             const EL::IntentSubject& reach, bool spent, void* tower) {
+    ++g_refusedCount;
+    if (why == Fault::Reach) ++g_outOfReach;
+    if (FirstOfFault(why, sender))
+        UE_LOGW("fuse_tower: host refused slot %u's %s of tower %d (seq %u) -- %s (%.0f uu, allowed %.0f); "
+                "the rest of this kind from this slot are counted, not said", sender, OpName(p.op), p.tower, p.seq,
+                refusal, reach.distUU, reach.reachUU);
+    if (IsClaim(p.op)) g_refused[sender] = p.seq;
+    if (spent) Refund(sender, KindOf(p), tower);
+    coop::fuse_tower_rows::HostAnswerOwed(sender);
 }
 
 enum class Take : uint8_t { Done, Wait };
@@ -172,10 +197,14 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     const FK::Kind kind = KindOf(p);
     if (!FK::Resolved(kind) && !waited) return Take::Wait;
     if (!SeqAfter(p.seq, g_ack[sender])) {
-        UE_LOGW("fuse_tower: host dropped slot %u's %s seq %u (last taken %u)", sender, OpName(p.op), p.seq,
-                g_ack[sender]);
+        ++g_staleSeqs;
+        if (FirstOfFault(Fault::Stale, sender))
+            UE_LOGW("fuse_tower: host dropped slot %u's %s seq %u (last taken %u); the rest of this kind from this "
+                    "slot are counted, not said", sender, OpName(p.op), p.seq, g_ack[sender]);
         return Take::Done;
     }
+    // A dead sender's act is refused as the other intent lanes refuse it (coop/player/players_registry LifeOf).
+    const bool dead = coop::players::Registry::Get().LifeOf(sender) == coop::players::PuppetLife::Dead;
     void* tower = FK::Find(kind, p.tower);
     ue_wrap::FVector at{};
     const bool located = tower && FK::PartLocation(kind, tower, p.op, p.index, at);
@@ -190,37 +219,39 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     bool spent = false;
     if (needSpend) {
         spent = TakeSpend(sender, kind, p.tower);
-        if (!spent && !waited) return Take::Wait;
+        if (!spent && !waited && !dead) return Take::Wait;
     }
     FK::View st;
     const bool viewed = tower && FK::ReadView(kind, tower, st);
-    // A button or a fuse the host's copy of the tower does not have: one warning for the kind of fault, however
-    // many ops carry it.
-    const bool badButton = viewed && p.op == coop::net::kFuseTowerOpButton && p.index >= st.lightCount;
-    const bool badFuse = viewed && IsClaim(p.op) && p.index >= st.fuseCount;
-    const char* refusal = !tower ? "no tower of that id"
-                        : badButton ? "that button is outside the puzzle"
-                        : badFuse ? "that fuse is outside the tower's fuses"
-                        : !located ? "that part is not there"
-                        : !reach ? EL::OutcomeName(reach.outcome) : !viewed ? "the tower does not read" : nullptr;
+    // The first reason found, in this order: the sender, the tower, the part, the reach, then the tower's own gates
+    // on its copy. A button or a fuse the copy does not have is a fault of its own kind.
+    const char* refusal = nullptr;
+    Fault why = Fault::Rule;
+    auto refuse = [&](const char* reason, Fault f) {
+        if (!refusal) { refusal = reason; why = f; }
+    };
+    if (dead) refuse("its sender is dead", Fault::Dead);
+    if (!tower) refuse("no tower of that id", Fault::NoTower);
+    if (viewed && p.op == coop::net::kFuseTowerOpButton && p.index >= st.lightCount)
+        refuse("that button is outside the puzzle", Fault::Button);
+    if (viewed && IsClaim(p.op) && p.index >= st.fuseCount)
+        refuse("that fuse is outside the tower's fuses", Fault::Fuse);
+    if (!located) refuse("that part is not there", Fault::NoPart);
+    if (!reach) refuse(EL::OutcomeName(reach.outcome), Fault::Reach);
+    if (!viewed) refuse("the tower does not read", Fault::Unread);
     if (!refusal && p.op == coop::net::kFuseTowerOpPull) {
-        refusal = FK::CanPull(kind, tower, st, p.index);
+        refuse(FK::CanPull(kind, tower, st, p.index), Fault::Rule);
     } else if (!refusal && p.op == coop::net::kFuseTowerOpInsert) {
-        refusal = (needSpend && !spent) ? "no fuse of the inserter's was spent at it"
-                                        : FK::CanInsert(kind, st, p.index);
+        if (needSpend && !spent) refuse("no fuse of the inserter's was spent at it", Fault::Rule);
+        else refuse(FK::CanInsert(kind, st, p.index), Fault::Rule);
+    } else if (!refusal && IsUse(p.op)) {
+        refuse(FK::CanUse(kind, tower, p.op), Fault::Rule);
     }
+    // A claim's refusal overwrites the sender's last refused seq, so an answer still unsent goes first.
+    if (refusal && IsClaim(p.op)) coop::fuse_tower_rows::HostAnswerFlush(sender);
     g_ack[sender] = p.seq;
     if (refusal) {
-        ++g_refusedCount;
-        // A client standing out of reach presses often: said at first and then now and then.
-        bool quiet = reach.outcome == EL::IntentOutcome::OutOfReach && ++g_outOfReach > 3 && g_outOfReach % 20 != 0;
-        if (badButton || badFuse) quiet = !FirstOfFault(badButton ? Fault::Button : Fault::Fuse);
-        if (!quiet)
-            UE_LOGW("fuse_tower: host refused slot %u's %s of tower %d (seq %u) -- %s (%.0f uu, allowed %.0f)",
-                    sender, OpName(p.op), p.tower, p.seq, refusal, reach.distUU, reach.reachUU);
-        if (IsClaim(p.op)) g_refused[sender] = p.seq;
-        if (spent) Refund(sender, kind, tower);
-        coop::fuse_tower_rows::HostSendNow();  // answered before the sender's next op is taken
+        Refused(sender, p, refusal, why, reach, spent, tower);
         return Take::Done;
     }
     coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(sender);
@@ -230,8 +261,11 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     case coop::net::kFuseTowerOpLever:
     case coop::net::kFuseTowerOpRetract:
     case coop::net::kFuseTowerOpReset:
-        // The tower's own use, on its own gates: the panel open, the lever at rest, the tower broken.
-        FK::Use(kind, tower, puppet, p.op, p.index);
+        // The tower's own use, its gates checked on the host's copy above; one that did not run is no taken op.
+        if (!FK::Use(kind, tower, puppet, p.op, p.index)) {
+            Refused(sender, p, "the tower's use did not run", Fault::NoUse, reach, false, tower);
+            return Take::Done;
+        }
         break;
     case coop::net::kFuseTowerOpPull:
         FK::TakePull(kind, tower, p.index);
@@ -266,7 +300,7 @@ void HostOffer(coop::net::Session* s, const FuseTowerPayload& p, uint8_t sender)
                 "the radio tower's)";
     }
     if (fault) {
-        if (FirstOfFault(which)) UE_LOGW("fuse_tower: host dropped slot %u's op %u -- %s", sender, p.op, fault);
+        if (FirstOfFault(which, sender)) UE_LOGW("fuse_tower: host dropped slot %u's op %u -- %s", sender, p.op, fault);
         return;
     }
     auto& q = g_waiting[sender];
@@ -276,8 +310,9 @@ void HostOffer(coop::net::Session* s, const FuseTowerPayload& p, uint8_t sender)
         g_rate[sender].Refund(kOpBudget);  // a wait runs nothing
     }
     if (q.size() >= kMaxQueued) {
-        // Every waiting op refused with the newest, in order, as a refusal of each would answer it: a claim's own
-        // rows name it refused, so a pull's fuse is reaped, and an insert's spend is refunded.
+        // Every waiting op refused with the newest, in order: a claim's own rows name it refused, so a pull's fuse is
+        // reaped, and an insert's spend is refunded. One answer, to the sender alone, once the loop has run.
+        coop::fuse_tower_rows::HostAnswerFlush(sender);
         const size_t n = q.size();
         q.push_back(w);
         for (const Waiting& r : q) {
@@ -287,14 +322,13 @@ void HostOffer(coop::net::Session* s, const FuseTowerPayload& p, uint8_t sender)
             if (r.p.op == coop::net::kFuseTowerOpInsert && TakeSpend(sender, KindOf(r.p), r.p.tower))
                 if (void* tower = FK::Find(KindOf(r.p), r.p.tower))
                     Refund(sender, KindOf(r.p), tower);
-            coop::fuse_tower_rows::HostSendNow();
         }
         q.clear();
         g_refusedCount += n + 1;
         if (++g_queuesFull <= 3 || g_queuesFull % 100 == 0)
             UE_LOGE("fuse_tower: host refused slot %u's %zu waiting ops and seq %u -- its queue is full", sender, n,
                     p.seq);
-        coop::fuse_tower_rows::HostSendNow();
+        coop::fuse_tower_rows::HostAnswerOwed(sender);
         return;
     }
     q.push_back(w);
@@ -585,13 +619,22 @@ bool RedOpen() {
     return red;
 }
 
+void OnShortPayload(size_t got) {
+    if (g_shortWarned) return;
+    g_shortWarned = true;
+    UE_LOGW("fuse_tower: a FuseTowerState payload is too short (%zu < %zu) -- dropped; said once a session", got,
+            sizeof(FuseTowerPayload));
+}
+
 void OnDisconnect() {
     if (g_sent || g_taken || g_refusedCount || g_rollsRefused)
-        UE_LOGI("fuse_tower: session end -- ops sent %llu, taken %llu, refused %llu, refunds %llu, reaped %llu, "
-                "rolls refused %llu", static_cast<unsigned long long>(g_sent),
+        UE_LOGI("fuse_tower: session end -- ops sent %llu, taken %llu, refused %llu (out of reach %llu), dropped "
+                "seqs %llu, refunds %llu, reaped %llu, rolls refused %llu", static_cast<unsigned long long>(g_sent),
                 static_cast<unsigned long long>(g_taken), static_cast<unsigned long long>(g_refusedCount),
+                static_cast<unsigned long long>(g_outOfReach), static_cast<unsigned long long>(g_staleSeqs),
                 static_cast<unsigned long long>(g_refunds), static_cast<unsigned long long>(g_reaped),
                 static_cast<unsigned long long>(g_rollsRefused));
+    g_shortWarned = false;
     for (auto& q : g_waiting) q.clear();
     for (auto& b : g_rate) b.Reset();
     for (int slot = 0; slot < g_spends.size(); ++slot) g_spends[slot] = Spends{};
@@ -599,6 +642,7 @@ void OnDisconnect() {
     g_seq = g_lastAck = 0;
     g_pullTower = g_insertTower = nullptr;
     g_sent = g_reaped = g_taken = g_refusedCount = g_refunds = g_queuesFull = g_outOfReach = g_rollsRefused = 0;
+    g_staleSeqs = 0;
 }
 
 }  // namespace coop::fuse_tower_ops

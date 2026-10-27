@@ -35,9 +35,15 @@ void OnRows(const coop::net::FuseTowerPayload& p);
 // HOST: every tower's row to a joiner at its world-ready, or as soon as the towers resolve.
 void QueueConnectBroadcastForSlot(int slot);
 
-// HOST: an acknowledgement changed. The rows go now, when a tower or an acknowledgement changed since the last
-// ones: a claim's refusal is answered before the sender's next op is taken.
+// HOST: an op was taken and its acknowledgement changed. The rows go to every peer now, as the taken op changed a
+// tower for all of them. A refusal changes none, and is answered by HostAnswerOwed.
 void HostSendNow();
+
+// HOST: a refusal's answer is owed to its sender alone (the rows hold no news for the others). It is sent once at
+// the next tick, however many refusals came; Flush sends it now, when a claim's refusal is about to overwrite the
+// refused seq the unsent answer carries.
+void HostAnswerOwed(uint8_t slot);
+void HostAnswerFlush(uint8_t slot);
 
 // CLIENT: the rows are being run on this client's towers; a use then is theirs, not a player's.
 bool Applying();
