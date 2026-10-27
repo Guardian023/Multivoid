@@ -294,8 +294,8 @@ left, scrambles the puzzle and breaks the tower; three callers reach it -- the d
 generators' saboteur runs, an explosion nearby, and the tower's own load when it was saved broken
 -- and the lever's end judges the puzzle. A client refuses both at the script gate on every route,
 its world's load included, so the host's world is the towers' only author
-(`coop/world/coord_tower_ops`). The host reads its towers each tick and sends every tower's row
-whenever one changes (`coop/world/coord_tower_rows`); a client applies each change as the tower's
+(`coop/world/fuse_tower_ops`). The host reads its towers each tick and sends every tower's row
+whenever one changes (`coop/world/fuse_tower_rows`); a client applies each change as the tower's
 own graph makes it: the painters for the state, `solvePuzzle` for a repair with its success sound,
 `moveLever` for the lever, and its own retract for the panel once its own montage is idle; a press,
 a pull, an insert and a failed lever play their own sounds. The lever's end, refused on a client, is
@@ -403,7 +403,7 @@ removed from its author's hand -- and a joiner gets every box's count at its wor
 | `KeypadIntent` | a client to the host | a keypad's key and the entry: a digit, a submit, a cancel, a keycard's verdict, a reset |
 | `PowerControlState` | a client to the host; the host to all | the breakers a press flipped; the breakers, the lockout, a lever's click and each slot's last press taken |
 | `PowerGridState` | the host to all; a client to the host | every generator's row and each slot's last op taken; a repair, a service, an upgrade install or a hit |
-| `CoordTowerState` | the host to all; a client to the host | every tower's row (broken, fuses, puzzle, panel, lever), each slot's last op taken and last claim refused; a press of a puzzle button, the lever or the retract, a fuse pulled or inserted |
+| `FuseTowerState` | the host to all; a client to the host | every tower's row (broken, fuses, puzzle, panel, lever), each slot's last op taken and last claim refused; a press of a puzzle button, the lever or the retract, a fuse pulled or inserted |
 | `TurbineState`, `WindowCleanState`, `GrimeState` | each peer or the host | the driver floats; a decrease |
 | `DroneState` | the host to all | the drone's transform and flags, among them its leave timer |
 | `DroneFlyIntent` | a client to the host | the face pressed, the keyboard or the leave timer; the host finds the console by the sender's reach |
@@ -436,7 +436,7 @@ state it shows, and the first rows a world takes play no sound.
 | security cameras | `coop/interactables/camera_toggle_intent`, `coop/interactables/toggle_verbs`, `coop/interactables/interactable_sync`, `ue_wrap/devices/security_camera` |
 | keypads | `coop/interactables/keypad_sync`, `ue_wrap/devices/passwordlock` |
 | power, turbine, windows, grime | `coop/world/power_panel`, `coop/world/power_grid`, `ue_wrap/devices/generator`, `coop/interactables/turbine_sync`, `coop/interactables/window_sync`, `coop/interactables/grime_sync`, `ue_wrap/devices/power_control`, `ue_wrap/devices/windturbine`, `ue_wrap/devices/base_window`, `ue_wrap/devices/grime` |
-| the coordinate towers | `coop/world/coord_tower_rows`, `coop/world/coord_tower_ops`, `ue_wrap/devices/coord_tower` |
+| the coordinate towers | `coop/world/fuse_tower_rows`, `coop/world/fuse_tower_ops`, `ue_wrap/devices/coord_tower` |
 | the drone | `coop/interactables/drone_sync`, `coop/interactables/drone_call_intent`, `ue_wrap/devices/drone`, `ue_wrap/devices/drone_console` |
 | the signal servers | `coop/interactables/serverbox_sync`, `coop/interactables/server_upgrade_sync`, `ue_wrap/devices/serverbox` |
 | identity | `coop/element/portable_identity` |

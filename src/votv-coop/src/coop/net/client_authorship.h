@@ -124,7 +124,7 @@ constexpr ClientAuthorship AuthorshipOf(ReliableKind k) {
     case ReliableKind::PowerGridState:
     case ReliableKind::DeskVerb:
     case ReliableKind::EraserPressIntent:
-    case ReliableKind::CoordTowerState:
+    case ReliableKind::FuseTowerState:
     case ReliableKind::DeskPingVerdict:
     case ReliableKind::ServerRepair:
     case ReliableKind::CommandRequest:

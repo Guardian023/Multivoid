@@ -44,7 +44,7 @@
 #include "coop/interactables/upgrade_sync.h"
 #include "coop/interactables/turbine_sync.h"
 #include "coop/interactables/keypad_sync.h"
-#include "coop/world/coord_tower_rows.h"
+#include "coop/world/fuse_tower_rows.h"
 #include "coop/world/power_grid.h"
 #include "coop/world/power_panel.h"
 #include "coop/world/sky_sync.h"
@@ -112,7 +112,7 @@ void ConnectReplayForSlot(int slot) {
     coop::sky_sync::QueueConnectBroadcastForSlot(slot);  // night-sky orientation, moon phase, eye
     coop::power_grid::QueueConnectBroadcastForSlot(slot);  // the generators' rows, before the panel they gate
     coop::power_panel::QueueConnectBroadcastForSlot(slot);  // the panel's canonical
-    coop::coord_tower_rows::QueueConnectBroadcastForSlot(slot);  // every tower's row
+    coop::fuse_tower_rows::QueueConnectBroadcastForSlot(slot);  // every tower's row
     coop::atv_sync::QueueConnectBroadcastForSlot(slot);  // ATV body pose, stamped with the host's seat and syncer (adopt=1)
     coop::drone_sync::QueueConnectBroadcastForSlot(slot);  // delivery drone pose (adopt=1)
     coop::order_queue_sync::QueueConnectBroadcastForSlot(slot);  // the delivery order queue: a reset + every queued order

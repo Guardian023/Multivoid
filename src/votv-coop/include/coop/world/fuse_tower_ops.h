@@ -1,7 +1,7 @@
-// coop/world/coord_tower_ops.h -- what a player does at a coordinate tower, and the one roll a tower makes. A
+// coop/world/fuse_tower_ops.h -- what a player does at a coordinate tower, and the one roll a tower makes. A
 // client never rolls a tower: its Scramble Radar Dish and its lever's judgement are refused at the script gate on
 // every route (the fuckuper's timer, an explosion, its own load), so the host's world is the towers' author and
-// its rows (coop/world/coord_tower_rows) the client's. A client's press of a puzzle button, the lever or the
+// its rows (coop/world/fuse_tower_rows) the client's. A client's press of a puzzle button, the lever or the
 // panel's retract is refused there too and sent to the host, which runs the tower's own use with the look-at
 // answered. A pull or an insert moves a fuse into or out of the player's own hand, so the client's own game makes
 // it and claims the slot; the host takes the claim when its own copy allows the move, and refuses it otherwise:
@@ -19,7 +19,7 @@
 
 namespace coop::net { class Session; }
 
-namespace coop::coord_tower_ops {
+namespace coop::fuse_tower_ops {
 
 // A player's act at a tower is judged within this reach of the part it acts on: twice the default armLength,
 // the door, keypad and generator lanes' reach.
@@ -33,16 +33,16 @@ void Install(coop::net::Session* session);
 void Tick();
 
 // HOST: a client's op (router: event_dispatch_world.cpp).
-void OnOp(const coop::net::CoordTowerPayload& p, uint8_t sender);
+void OnOp(const coop::net::FuseTowerPayload& p, uint8_t sender);
 
 // HOST: each slot's acknowledgement and last refused claim, into the rows.
-void FillAcks(coop::net::CoordTowerPayload& p);
+void FillAcks(coop::net::FuseTowerPayload& p);
 
 // CLIENT: the rows' answer to my ops: the claims they acknowledge leave, and a refused pull's fuse is reaped.
 void OnAcks(uint16_t ack, uint16_t refused);
 
 // CLIENT: the host's row with my untaken claims on it, the row the host will send once it takes them.
-void Overlay(coop::net::CoordTowerRow& row);
+void Overlay(coop::net::FuseTowerRow& row);
 
 // HOST: a leaver's waiting ops and spends go with it. Game thread.
 void OnPeerLeft(uint8_t slot);
@@ -64,4 +64,4 @@ bool RedOpen();
 
 void OnDisconnect();
 
-}  // namespace coop::coord_tower_ops
+}  // namespace coop::fuse_tower_ops

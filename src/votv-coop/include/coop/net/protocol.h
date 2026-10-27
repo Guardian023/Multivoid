@@ -925,8 +925,8 @@ enum class ReliableKind : uint8_t {
     // its id whenever one changes, and at a joiner's world-ready; a client never rolls a tower and shows the rows
     // through the tower's own painters and verbs. Client to host: my player's press of a puzzle button, the
     // lever or the panel's retract, which the host runs, and a fuse my player pulled or inserted, which the
-    // host takes or refuses. Never relayed. CoordTowerPayload.
-    CoordTowerState = 162,
+    // host takes or refuses. Never relayed. FuseTowerPayload.
+    FuseTowerState = 162,
 
     // The ping's verdict on the main desk. Client to host: the client's own ping, or its cheat menu's insta-catch,
     // reached its verdict, which its gate refused, with the view and the aim the verdict's circle and the dishes'
@@ -2670,25 +2670,25 @@ static_assert(sizeof(PowerGridRow) == 38, "PowerGridRow must be 38 bytes");
 static_assert(sizeof(PowerGridPayload) == 172, "PowerGridPayload must be 172 bytes");
 static_assert(sizeof(PowerGridPayload) <= 256 - 20 - 8, "PowerGridPayload must fit one reliable datagram");
 
-// The coordinate towers (CoordTowerState) by their id; a row past `count` is unused. Op 0, the host's rows, with
+// The coordinate towers (FuseTowerState) by their id; a row past `count` is unused. Op 0, the host's rows, with
 // `ack` per slot the last op it took and `refused` the last claim it refused. A client's ops name tower `tower`
 // and are counted by `seq` per session: 1 a press of puzzle button `index`, 2 the lever, 3 the panel's retract,
 // which the host runs through the tower's own use; 4 a pull of fuse `index` and 5 an insert into fuse slot
 // `index`, which its own game made, the host takes or refuses, and its rows answer.
-inline constexpr int kCoordTowers = 4;
-inline constexpr uint8_t kCoordTowerOpRows = 0;
-inline constexpr uint8_t kCoordTowerOpButton = 1;
-inline constexpr uint8_t kCoordTowerOpLever = 2;
-inline constexpr uint8_t kCoordTowerOpRetract = 3;
-inline constexpr uint8_t kCoordTowerOpPull = 4;
-inline constexpr uint8_t kCoordTowerOpInsert = 5;
+inline constexpr int kFuseTowers = 4;
+inline constexpr uint8_t kFuseTowerOpRows = 0;
+inline constexpr uint8_t kFuseTowerOpButton = 1;
+inline constexpr uint8_t kFuseTowerOpLever = 2;
+inline constexpr uint8_t kFuseTowerOpRetract = 3;
+inline constexpr uint8_t kFuseTowerOpPull = 4;
+inline constexpr uint8_t kFuseTowerOpInsert = 5;
 // A row's flags.
-inline constexpr uint8_t kCoordTowerBroken = 0x01;
-inline constexpr uint8_t kCoordTowerOpened = 0x02;       // the panel stands open
-inline constexpr uint8_t kCoordTowerAnim = 0x04;         // the panel moves; its end flips kCoordTowerOpened
-inline constexpr uint8_t kCoordTowerLeverMoving = 0x08;
-inline constexpr uint8_t kCoordTowerLeverUp = 0x10;      // the lever stands up or heads up
-struct CoordTowerRow {
+inline constexpr uint8_t kFuseTowerBroken = 0x01;
+inline constexpr uint8_t kFuseTowerOpened = 0x02;       // the panel stands open
+inline constexpr uint8_t kFuseTowerAnim = 0x04;         // the panel moves; its end flips kFuseTowerOpened
+inline constexpr uint8_t kFuseTowerLeverMoving = 0x08;
+inline constexpr uint8_t kFuseTowerLeverUp = 0x10;      // the lever stands up or heads up
+struct FuseTowerRow {
     int32_t  id;          // 4
     uint8_t  flags;       // 1
     uint8_t  fuseCount;   // 1  -- 0..8
@@ -2697,7 +2697,7 @@ struct CoordTowerRow {
     uint16_t lights;      // 2  -- bit i: puzzle light i lit
     uint8_t  fuses[8];    // 8  -- 0 empty, 1 good, 2 blown
 };
-struct CoordTowerPayload {
+struct FuseTowerPayload {
     uint8_t       op;          // 1
     uint8_t       count;       // 1  -- op 0: rows
     uint8_t       index;       // 1  -- ops 1, 4, 5: the button or the fuse slot
@@ -2707,11 +2707,11 @@ struct CoordTowerPayload {
     uint16_t      ack[4];      // 8  -- op 0, by slot (kMaxPeers)
     uint16_t      refused[4];  // 8  -- op 0, by slot
     uint16_t      _pad2;       // 2
-    CoordTowerRow rows[kCoordTowers];  // 72
+    FuseTowerRow rows[kFuseTowers];  // 72
 };
-static_assert(sizeof(CoordTowerRow) == 18, "CoordTowerRow must be 18 bytes");
-static_assert(sizeof(CoordTowerPayload) == 100, "CoordTowerPayload must be 100 bytes");
-static_assert(sizeof(CoordTowerPayload) <= 256 - 20 - 8, "CoordTowerPayload must fit one reliable datagram");
+static_assert(sizeof(FuseTowerRow) == 18, "FuseTowerRow must be 18 bytes");
+static_assert(sizeof(FuseTowerPayload) == 100, "FuseTowerPayload must be 100 bytes");
+static_assert(sizeof(FuseTowerPayload) <= 256 - 20 - 8, "FuseTowerPayload must fit one reliable datagram");
 
 // The ATV's rig pose, velocity and condition (AtvState), keyed by its Key. A receiver keeps its own
 // physics running and is corrected: the velocity is written from the wire every packet, the

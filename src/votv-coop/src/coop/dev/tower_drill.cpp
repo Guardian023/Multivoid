@@ -9,8 +9,8 @@
 #include "coop/player/players_registry.h"
 #include "coop/session/join_progress.h"
 #include "coop/session/net_pump.h"  // HasAnnouncedWorldReady
-#include "coop/world/coord_tower_ops.h"
-#include "coop/world/coord_tower_rows.h"
+#include "coop/world/fuse_tower_ops.h"
+#include "coop/world/fuse_tower_rows.h"
 
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/devices/coord_tower.h"
@@ -28,8 +28,8 @@ namespace coop::dev::tower_drill {
 namespace {
 
 namespace CT = ue_wrap::coord_tower;
-using coop::net::CoordTowerPayload;
-using coop::net::CoordTowerRow;
+using coop::net::FuseTowerPayload;
+using coop::net::FuseTowerRow;
 using ue_wrap::FVector;
 
 enum class Mode : uint8_t { Off, Run, Join };
@@ -62,8 +62,8 @@ float Dist(const FVector& a, const FVector& b) {
 }
 
 void* DrillTower() {
-    void* towers[coop::net::kCoordTowers];
-    const int32_t n = CT::ReadAll(towers, coop::net::kCoordTowers);
+    void* towers[coop::net::kFuseTowers];
+    const int32_t n = CT::ReadAll(towers, coop::net::kFuseTowers);
     void* best = nullptr;
     float bestD = 0.f;
     for (int32_t i = 0; i < n; ++i) {
@@ -82,7 +82,7 @@ std::string Digits(const CT::State& st, bool fuses) {
     return s;
 }
 
-std::string RowDigits(const CoordTowerRow& w, bool fuses) {
+std::string RowDigits(const FuseTowerRow& w, bool fuses) {
     std::string s;
     const int n = fuses ? w.fuseCount : w.lightCount;
     for (int i = 0; i < n; ++i)
@@ -90,25 +90,25 @@ std::string RowDigits(const CoordTowerRow& w, bool fuses) {
     return s;
 }
 
-bool RowBroken(const CoordTowerRow& w) { return (w.flags & coop::net::kCoordTowerBroken) != 0; }
+bool RowBroken(const FuseTowerRow& w) { return (w.flags & coop::net::kFuseTowerBroken) != 0; }
 
-bool HostRow(int32_t id, CoordTowerRow& out) {
-    CoordTowerPayload rows{};
-    if (!coop::coord_tower_rows::LastRows(rows)) return false;
-    for (int i = 0; i < rows.count && i < coop::net::kCoordTowers; ++i)
+bool HostRow(int32_t id, FuseTowerRow& out) {
+    FuseTowerPayload rows{};
+    if (!coop::fuse_tower_rows::LastRows(rows)) return false;
+    for (int i = 0; i < rows.count && i < coop::net::kFuseTowers; ++i)
         if (rows.rows[i].id == id) { out = rows.rows[i]; return true; }
     return false;
 }
 
 // Whether this copy of a tower reads the host's break, fuses and puzzle.
-bool SameState(const CT::State& l, const CoordTowerRow& w) {
+bool SameState(const CT::State& l, const FuseTowerRow& w) {
     return l.isBroken == RowBroken(w) && Digits(l, true) == RowDigits(w, true) &&
            Digits(l, false) == RowDigits(w, false);
 }
 
 void Census(const char* side) {
-    void* towers[coop::net::kCoordTowers];
-    const int32_t n = CT::ReadAll(towers, coop::net::kCoordTowers);
+    void* towers[coop::net::kFuseTowers];
+    const int32_t n = CT::ReadAll(towers, coop::net::kFuseTowers);
     for (int32_t i = 0; i < n; ++i) {
         CT::State st;
         FVector p{};
@@ -203,7 +203,7 @@ void HostTick(coop::net::Session& s) {
         return;
     case HostStep::AwaitFar:
         // The client's two acts from out of reach come first: a press and a pull, both refused here.
-        if (coop::coord_tower_ops::OpsRefused() >= 2) { HostSays("refused the client's two far acts", st); HostGo(HostStep::Pull); return; }
+        if (coop::fuse_tower_ops::OpsRefused() >= 2) { HostSays("refused the client's two far acts", st); HostGo(HostStep::Pull); return; }
         if (NowMs() - g_hostMs > 3 * kCrossMs) { HostSays("the client's far acts never came; repairing anyway", st); HostGo(HostStep::Pull); }
         return;
     case HostStep::Pull:
@@ -300,12 +300,12 @@ void Go(Step s) {
 
 void Done(const char* verdict) {
     g_step = Step::Done;
-    const auto e = coop::coord_tower_rows::AppliedEdges();
+    const auto e = coop::fuse_tower_rows::AppliedEdges();
     UE_LOGI("[TOWER-DRILL] client DONE %s (ops sent %llu, claims unanswered %zu, reaped %llu, rolls refused %llu; "
             "applied: breaks %u repairs %u presses %u pulls %u inserts %u levers %u fails %u panels %u)", verdict,
-            static_cast<unsigned long long>(coop::coord_tower_ops::OpsSent()), coop::coord_tower_ops::PendingClaims(),
-            static_cast<unsigned long long>(coop::coord_tower_ops::Reaped()),
-            static_cast<unsigned long long>(coop::coord_tower_ops::RollsRefused()), e.breaks, e.repairs, e.presses,
+            static_cast<unsigned long long>(coop::fuse_tower_ops::OpsSent()), coop::fuse_tower_ops::PendingClaims(),
+            static_cast<unsigned long long>(coop::fuse_tower_ops::Reaped()),
+            static_cast<unsigned long long>(coop::fuse_tower_ops::RollsRefused()), e.breaks, e.repairs, e.presses,
             e.pulls, e.inserts, e.levers, e.fails, e.panels);
 }
 
@@ -321,7 +321,7 @@ void Abandon(const char* why) {
 
 bool Overdue(uint64_t bound = kCrossMs) { return NowMs() - g_stepMs > bound; }
 
-void FailDiverged(const char* what, const CT::State& l, const CoordTowerRow& w) {
+void FailDiverged(const char* what, const CT::State& l, const FuseTowerRow& w) {
     char why[320];
     std::snprintf(why, sizeof(why), "%s: the host's broken %d fuses %s lights %s, here broken %d fuses %s lights %s",
                   what, RowBroken(w) ? 1 : 0, RowDigits(w, true).c_str(), RowDigits(w, false).c_str(),
@@ -337,12 +337,12 @@ void Pass(const char* leg, const CT::State& l) {
 
 // The rows have answered my last op.
 bool Answered() {
-    return static_cast<int16_t>(static_cast<uint16_t>(coop::coord_tower_ops::LastAck() - g_actSeq)) >= 0;
+    return static_cast<int16_t>(static_cast<uint16_t>(coop::fuse_tower_ops::LastAck() - g_actSeq)) >= 0;
 }
 
 void ClientTick(void* player) {
     CT::State l;
-    CoordTowerRow w{};
+    FuseTowerRow w{};
     const bool have = g_tower && CT::Read(g_tower, l) && HostRow(g_id, w);
     switch (g_step) {
     case Step::Arm:
@@ -376,7 +376,7 @@ void ClientTick(void* player) {
             g_acted = true;
             g_lightsBefore = Digits(l, false);
             CT::Use(g_tower, player, CT::LookAt{CT::Part::Button, 0});
-            g_actSeq = coop::coord_tower_ops::LastSentSeq();
+            g_actSeq = coop::fuse_tower_ops::LastSentSeq();
             UE_LOGI("[TOWER-DRILL] client pressed puzzle button 0 from where it stands (seq %u)", g_actSeq);
             return;
         }
@@ -395,23 +395,23 @@ void ClientTick(void* player) {
             if (g_slot < 0 || g_slot >= w.fuseCount || w.fuses[g_slot] != 2) { Abandon("no fuse is blown on both peers"); return; }
             g_acted = true;
             CT::Use(g_tower, player, CT::LookAt{CT::Part::Fuse, g_slot});
-            g_actSeq = coop::coord_tower_ops::LastSentSeq();
+            g_actSeq = coop::fuse_tower_ops::LastSentSeq();
             CT::Read(g_tower, l);
             UE_LOGI("[TOWER-DRILL] client pulled fuse %d from where it stands (seq %u): here it reads %d, claims "
-                    "unanswered %zu", g_slot, g_actSeq, l.fuses[g_slot], coop::coord_tower_ops::PendingClaims());
+                    "unanswered %zu", g_slot, g_actSeq, l.fuses[g_slot], coop::fuse_tower_ops::PendingClaims());
             return;
         }
-        if (Answered() && coop::coord_tower_ops::PendingClaims() == 0) {
+        if (Answered() && coop::fuse_tower_ops::PendingClaims() == 0) {
             ue_wrap::engine::MainPlayerGrabState gs{};
             void* held = ue_wrap::engine::ReadMainPlayerGrabState(player, gs)
                              ? (gs.grabbingActor ? gs.grabbingActor : gs.holdingActor) : nullptr;
             const bool heldPulled = held && CT::IsPulledFuse(held);
             UE_LOGI("[TOWER-DRILL] client's pull answered: slot %d reads %d (the host's %d), reaped %llu, the hand "
                     "holds %s", g_slot, l.fuses[g_slot], w.fuses[g_slot],
-                    static_cast<unsigned long long>(coop::coord_tower_ops::Reaped()),
+                    static_cast<unsigned long long>(coop::fuse_tower_ops::Reaped()),
                     !held ? "nothing it grabs or carries" : heldPulled ? "a pulled fuse" : "another prop");
             if (l.fuses[g_slot] != 2) { Fail("a pull from out of reach kept its slot empty"); return; }
-            if (coop::coord_tower_ops::Reaped() == 0) { Fail("a refused pull's fuse was not reaped"); return; }
+            if (coop::fuse_tower_ops::Reaped() == 0) { Fail("a refused pull's fuse was not reaped"); return; }
             Pass("a pull from out of reach was refused, its fuse reaped, the slot blown again", l);
             Go(Step::Repair);
             return;
@@ -421,9 +421,9 @@ void ClientTick(void* player) {
     case Step::Repair: {
         // The lever stands up after a lever's repair; on the two easiest difficulties the insert repairs, and the
         // lever never moves.
-        const bool leverUp = (w.flags & coop::net::kCoordTowerLeverUp) != 0;
+        const bool leverUp = (w.flags & coop::net::kFuseTowerLeverUp) != 0;
         if (have && !RowBroken(w) && SameState(l, w) && l.leverUp == leverUp) {
-            const auto e = coop::coord_tower_rows::AppliedEdges();
+            const auto e = coop::fuse_tower_rows::AppliedEdges();
             Pass("the host's repair crossed", l);
             if (e.pulls < 1 || e.inserts < 1 || e.repairs < 1 || e.panels < 1 ||
                 (leverUp && (e.levers < 3 || e.fails < 1 || e.presses < 1))) {
@@ -445,7 +445,7 @@ void ClientTick(void* player) {
     }
     case Step::JoinCheck:
         if (have && RowBroken(w) && SameState(l, w)) {
-            if (coop::coord_tower_ops::RollsRefused() == 0) {
+            if (coop::fuse_tower_ops::RollsRefused() == 0) {
                 Fail("this joiner's tower reads the host's, but it rolled on its own");
                 return;
             }
