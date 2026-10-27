@@ -17,7 +17,8 @@ namespace coop::input::game_window_proc {
 // Find the game window and subclass it; follow it when the engine destroys and recreates it.
 // Called once from harness::Start so the menu is covered from the first frame, then from every frame
 // tail of the pump (the play loop posts it at the main menu too). Game thread afterwards: one
-// IsWindow call while a window is held, an enumeration at most every 250 ms while none is.
+// IsWindow call while a window is held, plus one enumeration a second to follow a larger visible
+// window that appeared; an enumeration at most every 250 ms while none is.
 void Tick();
 
 // The subclassed window, or null before one was found (an HWND, as void* so the header stays

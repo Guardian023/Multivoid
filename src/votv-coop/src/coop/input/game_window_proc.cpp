@@ -23,7 +23,8 @@ std::atomic<WNDPROC> g_origProc{nullptr};
 // Tick's pacing; one writer at a time (harness::Start before the timeline thread exists, then the
 // pump on the game thread).
 ULONGLONG g_nextFindMs = 0;
-constexpr ULONGLONG kFindEveryMs = 250;
+constexpr ULONGLONG kFindEveryMs = 250;      // while no window is held
+constexpr ULONGLONG kRecheckEveryMs = 1000;  // while one is: is there a larger visible window?
 
 // The best candidate among the top-level visible windows of class UnrealWindow that belong to
 // THIS process, by client area. UE4.27 destroys and recreates the main game window during world
@@ -91,21 +92,55 @@ void Subclass(HWND best) {
             best, title, r.left, r.top, r.right - r.left, r.bottom - r.top, orig);
 }
 
+long long ClientArea(HWND h) {
+    RECT r{};
+    if (!::GetClientRect(h, &r)) return 0;
+    return static_cast<long long>(r.right - r.left) * (r.bottom - r.top);
+}
+
+// Hand a still-living window its original procedure back. False when something subclassed it
+// after us (our procedure is no longer the outermost), which cannot be undone from here; the
+// caller then stays on this window.
+bool Release(HWND h) {
+    if (::GetWindowLongPtrW(h, GWLP_WNDPROC) != reinterpret_cast<LONG_PTR>(&GameWindowProc)) {
+        static HWND sRefused = nullptr;
+        if (sRefused != h) {
+            sRefused = h;
+            UE_LOGW("game_window_proc: HWND=%p was subclassed again after ours -- staying on it", h);
+        }
+        return false;
+    }
+    ::SetWindowLongPtrW(h, GWLP_WNDPROC,
+                        reinterpret_cast<LONG_PTR>(g_origProc.load(std::memory_order_acquire)));
+    g_hwnd.store(nullptr, std::memory_order_release);
+    UE_LOGI("game_window_proc: released HWND=%p for a larger window", h);
+    return true;
+}
+
 }  // namespace
 
 void Tick() {
     HWND held = g_hwnd.load(std::memory_order_acquire);
-    if (held) {
-        if (::IsWindow(held)) return;
+    if (held && !::IsWindow(held)) {
         // A destroyed window takes its subclass with it, so there is nothing to restore.
         UE_LOGI("game_window_proc: HWND=%p was destroyed -- looking for its successor", held);
         g_hwnd.store(nullptr, std::memory_order_release);
         g_nextFindMs = 0;
+        held = nullptr;
     }
     const ULONGLONG now = ::GetTickCount64();
     if (now < g_nextFindMs) return;
-    g_nextFindMs = now + kFindEveryMs;
-    if (HWND best = FindBestUnrealWindow()) Subclass(best);
+    g_nextFindMs = now + (held ? kRecheckEveryMs : kFindEveryMs);
+    HWND best = FindBestUnrealWindow();
+    if (!best || best == held) return;
+    // A window is held: move only to a larger visible one (the engine can create the real window
+    // while a smaller one lives), and only if the held window can be given its own procedure back,
+    // since this subclass forwards to ONE original.
+    if (held) {
+        if (ClientArea(best) <= (::IsWindowVisible(held) ? ClientArea(held) : 0)) return;
+        if (!Release(held)) return;
+    }
+    Subclass(best);
 }
 
 void* Hwnd() {
