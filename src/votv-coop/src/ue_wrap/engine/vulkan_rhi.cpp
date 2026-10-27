@@ -234,6 +234,58 @@ ProcAddr GetDeviceProcAddr(Handle instance, Handle device, const char* name) {
     return fn ? fn(device, name) : nullptr;
 }
 
+namespace {
+
+// The lookups themselves; a wrong device handle faults inside the loader. Plain values only, so the SEH
+// frame below holds no object with a destructor.
+bool FillUnguarded(Handle instance, Handle device, DeviceFns& out, const char** missing) {
+    if (!GetInstanceProcAddr(instance, "vkGetDeviceProcAddr")) {
+        *missing = "vkGetDeviceProcAddr";
+        return false;
+    }
+#define UE_WRAP_VK_FILL(name)                                                           \
+    out.name = reinterpret_cast<PFN_##name>(GetDeviceProcAddr(instance, device, #name)); \
+    if (!out.name) {                                                                    \
+        *missing = #name;                                                               \
+        return false;                                                                   \
+    }
+    UE_WRAP_VK_DEVICE_FNS(UE_WRAP_VK_FILL)
+#undef UE_WRAP_VK_FILL
+    return true;
+}
+
+bool FillGuarded(Handle instance, Handle device, DeviceFns& out, const char** missing) {
+    __try {
+        return FillUnguarded(instance, device, out, missing);
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        *missing = "a fault inside the loader";
+        return false;
+    }
+}
+
+}  // namespace
+
+bool FillDeviceFns(Handle instance, Handle device, DeviceFns& out, const char** missing) {
+    const char* unused = nullptr;
+    const char** why = missing ? missing : &unused;
+    *why = nullptr;
+    std::memset(&out, 0, sizeof out);
+    if (!instance || !device) {
+        *why = "a null instance or device";
+        return false;
+    }
+    return FillGuarded(instance, device, out, why);
+}
+
+ProcAddr LoaderExport(const char* name) {
+    HMODULE mod = ::GetModuleHandleW(L"vulkan-1.dll");
+    return mod ? reinterpret_cast<ProcAddr>(::GetProcAddress(mod, name)) : nullptr;
+}
+
+void* ReadSlot(std::uintptr_t slot) {
+    return *reinterpret_cast<void* const volatile*>(slot);
+}
+
 void* SwapSlot(std::uintptr_t slot, void* ours) {
     return ::InterlockedExchangePointer(reinterpret_cast<void* volatile*>(slot), ours);
 }

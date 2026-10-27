@@ -19,7 +19,19 @@ namespace ui::overlay_backend {
 // Which RHI is presenting; set by the engine seam that fired.
 enum class Rhi : uint8_t { None, Dx11, Dx12, Vulkan };
 
-struct VulkanFrame;  // defined with the Vulkan backend
+// What the Vulkan seam hands one overlay frame; it lives on the stack of whoever fills it. `viewport` is
+// the FVulkanViewport* the engine's Present received. `presentInfo` is the VkPresentInfoKHR of the
+// swapped vkQueuePresentKHR (null at bring-up). `queue` is the engine's FVulkanQueue* (Present's fifth
+// argument) at bring-up and the present's VkQueue in a frame. `imageIndex` is the image the present
+// shows. `waitOut` is written by the backend's render with the VkSemaphore the present must wait on
+// instead of the engine's own (null: the present goes through untouched).
+struct VulkanFrame {
+    void*    viewport;
+    void*    presentInfo;
+    void*    queue;
+    uint32_t imageIndex;
+    void*    waitOut;
+};
 
 // What one overlay frame draws into. The DX seams fill dxgi, and hwnd only until the overlay is up
 // (the bring-up is its one reader); Vulkan fills vk.

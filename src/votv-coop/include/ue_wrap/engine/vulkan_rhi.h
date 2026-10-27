@@ -11,9 +11,11 @@
 //
 // The renderer calls vkQueuePresentKHR, vkQueueSubmit and vkDestroySwapchainKHR through slots in the
 // game image that the engine's loader fills once at start; ResolveLoaderSlot finds one by the function's
-// name, and SwapSlot / RestoreSlot put a replacement in and take it out. No SDK header is used: the few
-// Vulkan types are local aliases, laid out as the Vulkan specification gives them on a 64-bit target.
+// name, and SwapSlot / RestoreSlot put a replacement in and take it out. Vulkan types come from the Khronos
+// headers; VK_NO_PROTOTYPES keeps every function undeclared, so each is fetched at run time.
 #pragma once
+
+#include <vulkan/vulkan_core.h>
 
 #include <cstddef>
 #include <cstdint>
@@ -83,6 +85,41 @@ ProcAddr GetInstanceProcAddr(Handle instance, const char* name);
 
 // vkGetDeviceProcAddr(device, name), itself fetched through vkGetInstanceProcAddr(instance, ...).
 ProcAddr GetDeviceProcAddr(Handle instance, Handle device, const char* name);
+
+// The loader's own export of `name`; null when vulkan-1.dll is not mapped or does not export it.
+ProcAddr LoaderExport(const char* name);
+
+// The pointer a loader slot holds right now (a plain aligned read; the slot comes from ResolveLoaderSlot).
+void* ReadSlot(std::uintptr_t slot);
+
+// The device-level entry points the overlay calls itself (the ImGui backend loads its own), listed once.
+// Fetched from vkGetDeviceProcAddr on the engine's device, so a call goes straight to the driver.
+// VK_NOT_READY from vkGetFenceStatus is a success code, so a caller reads the result rather than treating
+// every non-zero value as an error.
+#define UE_WRAP_VK_DEVICE_FNS(X) \
+    X(vkGetDeviceQueue) X(vkGetSwapchainImagesKHR) X(vkQueueSubmit) \
+    X(vkCreateRenderPass) X(vkDestroyRenderPass) \
+    X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
+    X(vkCreateSemaphore) X(vkDestroySemaphore) \
+    X(vkCreateFence) X(vkDestroyFence) X(vkResetFences) X(vkGetFenceStatus) X(vkWaitForFences) \
+    X(vkCreateCommandPool) X(vkDestroyCommandPool) X(vkAllocateCommandBuffers) X(vkResetCommandBuffer) \
+    X(vkBeginCommandBuffer) X(vkEndCommandBuffer) \
+    X(vkCmdBeginRenderPass) X(vkCmdEndRenderPass) X(vkCmdCopyImageToBuffer) \
+    X(vkCreateImage) X(vkDestroyImage) X(vkGetImageMemoryRequirements) \
+    X(vkAllocateMemory) X(vkFreeMemory) X(vkBindImageMemory) \
+    X(vkCreateBuffer) X(vkDestroyBuffer) X(vkGetBufferMemoryRequirements) X(vkBindBufferMemory) \
+    X(vkMapMemory) X(vkUnmapMemory)
+
+struct DeviceFns {
+#define UE_WRAP_VK_DECLARE(name) PFN_##name name;
+    UE_WRAP_VK_DEVICE_FNS(UE_WRAP_VK_DECLARE)
+#undef UE_WRAP_VK_DECLARE
+};
+
+// Fills `out` from vkGetDeviceProcAddr(device, ...), the latter itself taken from the instance. False when
+// any entry is missing or the lookup faults; `*missing` (when non-null) then names the first one. `out` is
+// then not to be used. Resolved once per device, never on a per-frame path.
+bool FillDeviceFns(Handle instance, Handle device, DeviceFns& out, const char** missing);
 
 // Stores `ours` into the slot and returns the pointer it held (InterlockedExchangePointer). A caller
 // that replaces a slot keeps the returned pointer and calls it from its replacement.
