@@ -31,6 +31,12 @@ bool PostKeyPress(unsigned vk) {
     return down && up;
 }
 
+bool PostChar(wchar_t c) {
+    HWND hwnd = GameWindow();
+    if (!hwnd) return false;
+    return ::PostMessageW(hwnd, WM_CHAR, static_cast<WPARAM>(c), 1) != 0;
+}
+
 unsigned VirtualKeyOf(const std::wstring& displayName) {
     if (displayName.size() == 1) {
         const wchar_t c = displayName[0];

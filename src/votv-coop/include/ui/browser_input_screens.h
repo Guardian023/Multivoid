@@ -47,6 +47,10 @@ void Open(Kind kind);
 void Close();
 bool IsOpen();
 
+// The text in the first box of `kind`'s screen right now, empty before the screen is built.
+// What the selftest reads back after typing into the window. Game thread.
+std::string FieldText(Kind kind);
+
 // Driven from the main-menu tick observer, beside the browser's own.
 void OnMenuTick(void* menu, void* switcher);
 

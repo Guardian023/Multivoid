@@ -22,6 +22,7 @@
 #include "coop/net/lobby_client.h"        // LobbyRow -- the rows a tab click must bring
 #include "coop/net/lobby_password.h"      // kGeneratedLength -- what a minted password measures
 #include "coop/net/master_slots.h"
+#include "coop/dev/game_window.h"          // PostChar / PostKeyPress -- the keys the typing phase sends
 #include "coop/session/session_manager.h"  // CopyRows
 #include "ue_wrap/core/call.h"
 #include "ue_wrap/core/reflection.h"
@@ -148,6 +149,8 @@ constexpr int kHostEscVerify  = 348;
 // holds long enough to be photographed.
 constexpr int kInputDirectShot = 354;
 constexpr int kInputDirectHold = 355;
+constexpr int kInputTypePost   = 356;   // kInputDirectHold + 1, since the counter advances by one after a break
+constexpr int kInputTypeVerify = 357;
 constexpr int kInputNameOpen   = 362;
 constexpr int kInputNameShot   = 368;
 constexpr int kInputNameHold   = 369;
@@ -176,6 +179,7 @@ constexpr int kSessBackVerify = 454;
 constexpr float    kHugeOffset   = 1.0e6f;
 constexpr uint64_t kRowWaitMs    = 30000;  // rows arrive over HTTP; 30 s covers a cold fetch at the 5 s cadence
 constexpr uint64_t kShotHoldMs   = 6000;   // mp.py polls the log every 3 s
+constexpr uint64_t kTypeWaitMs   = 5000;   // how long posted keys may take to reach the field before the verdict is FAIL
 constexpr uint64_t kWindowWaitMs = 15000;  // how long a null active window is a WAIT, not a fault
 
 // The precondition takes two terms: an empty UScrollBox one tick after Show() reports offsetOfEnd
@@ -201,6 +205,9 @@ bool g_lockWasLockedBefore = false;
 uint64_t g_windowWaitStartMs = 0;
 uint64_t g_scrollWaitStartMs = 0;
 uint64_t g_holdUntilMs       = 0;
+// The Direct connect address as the typing phase found it, so the expected text is the prefill plus
+// what was typed rather than a literal.
+std::string g_typePrefill;
 // The ini's net.master before a tab click, which a list from the environment must leave as it was.
 std::string g_tabIniBefore;
 // A skin shot's aim has been checked on this hold (the first tick after the aim, see kSkinHoldOther).
@@ -1138,8 +1145,42 @@ void Tick(void* scrim, void* list, void* exitBtn) {
             // Holding: a window for the rig's 3 s capture poll. Returning without advancing is how
             // every hold here works; the counter increments after the switch.
             if (nowMs < g_holdUntilMs) return;
+            break;   // the typing phases below act on this same window
+        case kInputTypePost: {
+            // Real window messages, the way a keyboard delivers them, so the whole route is measured:
+            // the window procedure seam, then the focused native field. "1.2" and one Backspace leave
+            // "1." appended to the prefill.
+            namespace GW = coop::dev::game_window;
+            g_typePrefill = ui::browser_input_screens::FieldText(
+                ui::browser_input_screens::Kind::DirectConnect);
+            if (!(GW::PostChar(L'1') && GW::PostChar(L'.') && GW::PostChar(L'2') &&
+                  GW::PostKeyPress(VK_BACK))) {
+                UE_LOGE("server_browser_native: INPUT TYPE FAIL -- there is no game window to post "
+                        "the keys to.");
+                g_selfCheckStep = -1;
+                return;
+            }
+            g_holdUntilMs = nowMs + kTypeWaitMs;
+            break;
+        }
+        case kInputTypeVerify: {
+            const std::string want = g_typePrefill + "1.";
+            const std::string got = ui::browser_input_screens::FieldText(
+                ui::browser_input_screens::Kind::DirectConnect);
+            // Ready when the field holds the expected text; until then the keys are still in the
+            // window's queue, bounded so a seam that never delivers them ends in a verdict.
+            if (got != want && nowMs < g_holdUntilMs) return;
+            if (got == want)
+                UE_LOGW("server_browser_native: INPUT TYPE PASS -- three characters and a Backspace "
+                        "posted to the game window reached the direct-connect address field.");
+            else
+                UE_LOGE("server_browser_native: INPUT TYPE FAIL -- read '%s', expected '%s' after "
+                        "posting three characters and a Backspace to the game window. No key reaches "
+                        "a native text field, so no address can be typed.",
+                        got.c_str(), want.c_str());
             ui::browser_input_screens::Open(ui::browser_input_screens::Kind::ChangeName);
             break;
+        }
         case kInputNameOpen:
             // One phase of slack: the open is deferred to the next menu tick, and the shot must not
             // fire on the window it is replacing.
