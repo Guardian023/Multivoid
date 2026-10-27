@@ -179,6 +179,8 @@ struct Kept {
     bool                  pending = false;   // a row the tower has not taken yet
     bool                  applied = false;   // a row has been applied to this tower
     uint8_t               appliedFlags = 0;  // the flags of the row last applied
+    bool                  firstApplied = false;  // the first row this tower took: its flags are kept in firstFlags
+    uint8_t               firstFlags = 0;
     ue_wrap::CachedObjRef tower;             // the object the row last went to
     FuseTowerRow          row{};
 };
@@ -204,6 +206,8 @@ void ApplyOne(FK::Kind kind, void* tower, Kept& k) {
         k.tower.Set(tower);
         k.applied = false;
         k.appliedFlags = 0;
+        k.firstApplied = false;
+        k.firstFlags = 0;
     }
     FuseTowerRow c = k.row;
     coop::fuse_tower_ops::Overlay(c);
@@ -216,6 +220,10 @@ void ApplyOne(FK::Kind kind, void* tower, Kept& k) {
     k.applied = true;
     k.pending = false;
     k.appliedFlags = c.flags;
+    if (!k.firstApplied) {
+        k.firstApplied = true;
+        k.firstFlags = c.flags;
+    }
 }
 
 void ApplyAll() {
@@ -365,6 +373,15 @@ bool LastRows(FuseTowerPayload& out) {
 }
 
 Edges AppliedEdges(uint8_t kind) { return kind < coop::net::kFuseTowerKinds ? g_edges[kind] : Edges{}; }
+
+bool FirstAppliedFlags(uint8_t kind, int32_t id, uint8_t& flags) {
+    for (const Kept& k : g_kept)
+        if (k.used && k.row.kind == kind && k.row.id == id && k.firstApplied) {
+            flags = k.firstFlags;
+            return true;
+        }
+    return false;
+}
 
 void ReapplyKept(uint8_t kind, int32_t id) {
     if (!g_haveRows) return;

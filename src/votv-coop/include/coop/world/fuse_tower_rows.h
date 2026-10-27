@@ -56,6 +56,10 @@ struct Edges {
 };
 Edges AppliedEdges(uint8_t kind);
 
+// [dev] CLIENT: the flags of the first row the tower (kind, id) took, which is what a joiner's tower read on its
+// arrival; false while no row has gone onto it. A new object of that tower starts over.
+bool FirstAppliedFlags(uint8_t kind, int32_t id, uint8_t& flags);
+
 // CLIENT: the kept row of the tower (kind, id) goes onto it again, as the tower's first and so silently, at the next
 // tick: the tower generated its puzzle or its fuses afresh (the generators are watched in fuse_tower_ops).
 void ReapplyKept(uint8_t kind, int32_t id);
