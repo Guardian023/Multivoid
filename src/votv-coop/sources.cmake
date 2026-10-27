@@ -610,6 +610,7 @@ set(VOTVCOOP_SOURCES
     src/coop/input/input_owner.cpp
     src/coop/session/teleport_client.cpp
     src/ui/imgui_overlay.cpp
+    src/ui/overlay_seams.cpp
     src/ui/overlay_diag.cpp
     src/ui/overlay_test_arm.cpp
     src/ui/overlay_cursor.cpp

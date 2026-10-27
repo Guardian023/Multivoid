@@ -52,7 +52,7 @@ One folder, one concept, named after it. `src/votv-coop/src/` holds the implemen
 | the server browser | `server_browser_native` with `server_browser_rows`, `server_browser_actions`, `server_browser_panels`, `server_browser_surface` (which browser is open) and `server_browser_selftest`; `server_browser` is the ImGui fallback |
 | the native UI kit | `native_screen`, `native_text_field`, `style`, `scale`, `link_format` |
 | in-game surfaces | `hud` (nameplates, chat, the event feed), `chat_input`, `chat_view`, `scoreboard`, `loading_screen`, `join_curtain`, `voice_icons` |
-| the F1 overlay | `imgui_overlay`, `overlay_backend` with `overlay_backend_dx11`, `overlay_backend_dx12`, `overlay_backend_dx12_capture`, `overlay_cursor`, `overlay_diag`, `overlay_test_arm`, `fonts`, `atlas_watch`, `input_focus` |
+| the F1 overlay | `imgui_overlay`, `overlay_seams`, `overlay_backend` with `overlay_backend_dx11`, `overlay_backend_dx12`, `overlay_backend_dx12_capture`, `overlay_cursor`, `overlay_diag`, `overlay_test_arm`, `fonts`, `atlas_watch`, `input_focus` |
 | overlay panels | `dev_menu` (its developer panes in `dev_panes`), `admin_panel`, `skins_panel`, `voice_panel`, `world_rules_panel`, `server_settings_pane`, `bug_report_pane`, `config_review_panel`, `net_stats_panel`, `console` |
 
 ## `l10n/` — the player's language
