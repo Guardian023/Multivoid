@@ -117,6 +117,22 @@ and no listing, and it is shorter than what follows.
 4. Start the game. The main menu now has a **Multiplayer** entry showing the
    Multivoid version -- that is how you know the mod loaded.
 
+## Linux (Steam Proton)
+
+The game runs under Proton with Multivoid installed either way above. Wine prefers its own
+built-in `dwmapi.dll` over the one UE4SS puts beside the game, so tell it to load the
+native one first. In Steam: the game's Properties, Launch Options:
+
+```
+WINEDLLOVERRIDES="dwmapi.dll,main.dll,UE4SS=n,b" %command%
+```
+
+The names do not change between Multivoid builds, so this line survives updates. Players
+reported it working in [#4](https://github.com/VOTV-MP/Multivoid/issues/4); the overlay is
+not built for the Vulkan renderer yet, so if the chat, the name tags or the F1 menu are
+missing, or you cannot type in Multivoid's text fields, start the game on DirectX 11
+(add `-dx11` after `%command%`).
+
 ## Upgrading from an old (pre-mod-folder) install
 
 Older Multivoid builds were two DLLs sitting next to the game's executable.
