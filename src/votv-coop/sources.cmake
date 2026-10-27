@@ -41,6 +41,7 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/core/pe_diag.cpp
     src/ue_wrap/engine/spawn_gate.cpp
     src/ue_wrap/engine/actor_end_play.cpp
+    src/ue_wrap/engine/vulkan_rhi.cpp
     src/ue_wrap/core/ufunction_hook.cpp
     src/ue_wrap/facts/function_row.cpp
     src/ue_wrap/core/script_bytecode.cpp

@@ -18,6 +18,8 @@ constexpr const char* kNames[] = {
     "the overlay's draw seam (D3D11 PresentChecked or D3D12 PresentInternal)",
     "the overlay's resize bracket (D3D11 Resize or D3D12 ResizeInternal)",
     "AActor::EndPlay (by code)",
+    "the Vulkan renderer's Present (FVulkanViewport::Present, by a stretch of its body)",
+    "the Vulkan renderer's pixel-format table (GPixelFormats)",
 };
 static_assert(sizeof kNames / sizeof kNames[0] == static_cast<size_t>(Scan::kCount), "a name per Scan");
 

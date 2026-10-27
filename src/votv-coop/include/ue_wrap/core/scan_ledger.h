@@ -28,6 +28,8 @@ enum class Scan : uint8_t {
     OverlayDraw,     // imgui_overlay::Init: D3D11 PresentChecked or D3D12 PresentInternal
     OverlayResize,   // imgui_overlay::Init: D3D11 Resize or D3D12 ResizeInternal
     ActorEndPlay,    // actor_end_play::Patch, by code
+    VulkanPresent,   // vulkan_rhi::ResolvePresent: FVulkanViewport::Present, by a stretch of its body
+    VulkanPixelFormats,  // vulkan_rhi::ResolvePixelFormatTable: GPixelFormats, by the swapchain constructor's read of it
     kCount
 };
 
