@@ -150,7 +150,9 @@ constexpr int kHostEscVerify  = 348;
 constexpr int kInputDirectShot = 354;
 constexpr int kInputDirectHold = 355;
 constexpr int kInputTypePost   = 356;   // kInputDirectHold + 1, since the counter advances by one after a break
-constexpr int kInputTypeVerify = 357;
+constexpr int kInputTypeCharsVerify = 357;
+constexpr int kInputTypeBackPost    = 358;
+constexpr int kInputTypeVerify      = 359;
 constexpr int kInputNameOpen   = 362;
 constexpr int kInputNameShot   = 368;
 constexpr int kInputNameHold   = 369;
@@ -1148,13 +1150,12 @@ void Tick(void* scrim, void* list, void* exitBtn) {
             break;   // the typing phases below act on this same window
         case kInputTypePost: {
             // Real window messages, the way a keyboard delivers them, so the whole route is measured:
-            // the window procedure seam, then the focused native field. "1.2" and one Backspace leave
-            // "1." appended to the prefill.
-            namespace GW = coop::dev::game_window;
+            // the window procedure seam, then the focused native field. The characters and the
+            // Backspace go in two steps, each verified, so a passing verdict proves both arrived.
             g_typePrefill = ui::browser_input_screens::FieldText(
                 ui::browser_input_screens::Kind::DirectConnect);
-            if (!(GW::PostChar(L'1') && GW::PostChar(L'.') && GW::PostChar(L'2') &&
-                  GW::PostKeyPress(VK_BACK))) {
+            namespace GW = coop::dev::game_window;
+            if (!(GW::PostChar(L'1') && GW::PostChar(L'.') && GW::PostChar(L'2'))) {
                 UE_LOGE("server_browser_native: INPUT TYPE FAIL -- there is no game window to post "
                         "the keys to.");
                 g_selfCheckStep = -1;
@@ -1163,20 +1164,44 @@ void Tick(void* scrim, void* list, void* exitBtn) {
             g_holdUntilMs = nowMs + kTypeWaitMs;
             break;
         }
-        case kInputTypeVerify: {
-            const std::string want = g_typePrefill + "1.";
+        case kInputTypeCharsVerify: {
+            const std::string want = g_typePrefill + "1.2";
             const std::string got = ui::browser_input_screens::FieldText(
                 ui::browser_input_screens::Kind::DirectConnect);
             // Ready when the field holds the expected text; until then the keys are still in the
             // window's queue, bounded so a seam that never delivers them ends in a verdict.
             if (got != want && nowMs < g_holdUntilMs) return;
+            if (got != want) {
+                UE_LOGE("server_browser_native: INPUT TYPE FAIL -- the characters did not arrive: "
+                        "read '%s', expected '%s' after posting \"1.2\" to the game window. No key "
+                        "reaches a native text field, so no address can be typed.",
+                        got.c_str(), want.c_str());
+                ui::browser_input_screens::Open(ui::browser_input_screens::Kind::ChangeName);
+                g_selfCheckStep = kInputTypeVerify;   // past the Backspace steps
+            }
+            break;
+        }
+        case kInputTypeBackPost:
+            if (!coop::dev::game_window::PostKeyPress(VK_BACK)) {
+                UE_LOGE("server_browser_native: INPUT TYPE FAIL -- there is no game window to post "
+                        "the Backspace to.");
+                g_selfCheckStep = -1;
+                return;
+            }
+            g_holdUntilMs = nowMs + kTypeWaitMs;
+            break;
+        case kInputTypeVerify: {
+            const std::string want = g_typePrefill + "1.";
+            const std::string got = ui::browser_input_screens::FieldText(
+                ui::browser_input_screens::Kind::DirectConnect);
+            if (got != want && nowMs < g_holdUntilMs) return;
             if (got == want)
-                UE_LOGW("server_browser_native: INPUT TYPE PASS -- three characters and a Backspace "
-                        "posted to the game window reached the direct-connect address field.");
+                UE_LOGW("server_browser_native: INPUT TYPE PASS -- \"1.2\" and a Backspace posted to "
+                        "the game window left the direct-connect address field at its prefill plus "
+                        "\"1.\".");
             else
-                UE_LOGE("server_browser_native: INPUT TYPE FAIL -- read '%s', expected '%s' after "
-                        "posting three characters and a Backspace to the game window. No key reaches "
-                        "a native text field, so no address can be typed.",
+                UE_LOGE("server_browser_native: INPUT TYPE FAIL -- the Backspace did not arrive: "
+                        "read '%s', expected '%s' after the characters had arrived.",
                         got.c_str(), want.c_str());
             ui::browser_input_screens::Open(ui::browser_input_screens::Kind::ChangeName);
             break;
