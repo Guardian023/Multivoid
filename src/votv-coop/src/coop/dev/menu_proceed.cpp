@@ -12,12 +12,6 @@
 // teardown, where our detour otherwise hangs on the EndPlay storm (autotest_menutravel_probe is
 // what shows that); it auto-expires, so the observers re-engage at the loaded menu.
 //
-// Nothing here waits on a clock. Gameplay is ready when the world reads "Untitled" AND a
-// mainGamemode_C is live (the name alone is true before the gamemode exists); the transition is
-// retried until it dispatches; the menu is up when the old world is gone, a ui_menu_C is live and
-// the bypass has expired; the shot is ready once the MULTIPLAYER inject is confirmed on that menu.
-// A bound that runs out prints "menu_proceed FAIL: <step>" and never "MENU-SHOT READY".
-//
 // Requires the launch to boot gameplay (scenario=play, ideally fresh_boot=1).
 
 #include "coop/dev/menu_proceed.h"
