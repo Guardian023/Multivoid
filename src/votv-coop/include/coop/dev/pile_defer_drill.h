@@ -38,6 +38,9 @@ void NoteBound(uint32_t eid);
 // CLIENT, quiescence_drain: the sweep gave up on `eid` with no native.
 void NoteGivenUp(uint32_t eid);
 
+// CLIENT, trash_mirror: a mirror was stood up for `eid` (a spawn, or a form change); counted for a deferred eid.
+void NoteMaterialised(uint32_t eid);
+
 // CLIENT, remote_prop_convert: a convert met a deferred eid with no actor; `held` says bind_wait took it.
 void NoteConvertAtDeferred(bool held);
 

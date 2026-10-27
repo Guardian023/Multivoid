@@ -53,6 +53,17 @@ void LogGaveUp(uint32_t eid, const ue_wrap::FVector& key, bool wantClump, uint8_
 // A twin adopted by the sweep at `pass`; says so only for an eid whose miss was logged.
 void NoteAdopted(uint32_t eid, int pass);
 
+// ---- the turn of a trash element, so a drill's "turn off" names its cause ----
+// HOST, the join snapshot's row of `eid` (a trash element): the root's rotation it sends and the child mesh's
+// turn (the row's look yaw, degrees). Once per eid.
+void LogRowRot(uint32_t eid, const ue_wrap::FRotator& root, float lookYawDeg);
+// HOST, the drill's read of `eid`, which failed on turn: the root's rotation now.
+void LogHostNowRot(uint32_t eid, float pitch, float yaw, float roll);
+// HOST, the land-settle commit of `eid`: the settled pile's root, the rotation the convert carries, and whether
+// that rotation came from the root (read) or is the clump's fallback. Nothing writes the root here.
+void LogLandRot(uint32_t eid, const ue_wrap::FRotator& settledRoot, const ue_wrap::FRotator& convertRot,
+                bool fromRoot);
+
 // The session ended: the first-seen records belong to one world.
 void OnDisconnect();
 

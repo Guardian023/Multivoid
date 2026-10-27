@@ -11,6 +11,7 @@
 #include <cmath>
 #include <cstdio>
 #include <unordered_map>
+#include <unordered_set>
 #include <vector>
 
 namespace coop::dev::pile_key_probe {
@@ -33,6 +34,7 @@ struct Seen {
 std::unordered_map<void*, Seen> g_firstSeen;
 std::vector<Native> g_sweepNatives;                  // the latest pass's walk
 std::unordered_map<uint32_t, int> g_missed;          // eid -> the last pass a line was logged for it (0 = the bind)
+std::unordered_set<uint32_t> g_rowRotLogged;         // HOST: the eids whose snapshot row turn was logged
 
 float Dist(float ax, float ay, float az, const ue_wrap::FVector& b) {
     const float dx = ax - b.X, dy = ay - b.Y, dz = az - b.Z;
@@ -147,7 +149,25 @@ void NoteAdopted(uint32_t eid, int pass) {
     UE_LOGI("[PILE-KEY] eid=%u adopted at pass %d", eid, pass);
 }
 
+void LogRowRot(uint32_t eid, const ue_wrap::FRotator& root, float lookYawDeg) {
+    if (!g_rowRotLogged.insert(eid).second) return;
+    UE_LOGI("[ROT-PROBE] row eid=%u root=(%.1f,%.1f,%.1f) look=%.1f", eid, root.Pitch, root.Yaw, root.Roll,
+            lookYawDeg);
+}
+
+void LogHostNowRot(uint32_t eid, float pitch, float yaw, float roll) {
+    UE_LOGI("[ROT-PROBE] host now eid=%u root=(%.1f,%.1f,%.1f)", eid, pitch, yaw, roll);
+}
+
+void LogLandRot(uint32_t eid, const ue_wrap::FRotator& settledRoot, const ue_wrap::FRotator& convertRot,
+                bool fromRoot) {
+    UE_LOGI("[ROT-PROBE] land eid=%u settled root=(%.1f,%.1f,%.1f) crot=(%.1f,%.1f,%.1f) crot read from the root=%d "
+            "(the root itself is not written here)", eid, settledRoot.Pitch, settledRoot.Yaw, settledRoot.Roll,
+            convertRot.Pitch, convertRot.Yaw, convertRot.Roll, fromRoot ? 1 : 0);
+}
+
 void OnDisconnect() {
+    g_rowRotLogged.clear();
     g_firstSeen.clear();
     g_sweepNatives.clear();
     g_missed.clear();

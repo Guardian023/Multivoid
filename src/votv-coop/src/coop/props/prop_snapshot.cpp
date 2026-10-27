@@ -25,6 +25,7 @@
 #include "coop/net/snapshot_send_scope.h"  // SnapshotBegin and each drained prop pass the slot's join gate
 #include "coop/props/snapshot_census.h"  // the per-class completeness census on SnapshotComplete
 #include "coop/dev/eid_lifetime_trace.h"  // read-only: capture-eid vs wire-eid
+#include "coop/dev/pile_key_probe.h"  // [MEASURE sync-order-wp5, temporary] the trash row's turn
 #include "coop/dev/force_overdestroy_test.h"  // dev only: inject the over-destroy to prove the floor
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/core/log.h"
@@ -372,6 +373,11 @@ bool BuildPropSpawnPayload_(void* obj, coop::element::ElementId eid, int32_t int
     p.rotPitch = ue_wrap::NormalizeAxis(rot.Pitch);
     p.rotYaw   = ue_wrap::NormalizeAxis(rot.Yaw);
     p.rotRoll  = ue_wrap::NormalizeAxis(rot.Roll);
+    if (coop::dev::pile_key_probe::On() && ue_wrap::prop::IsTrashActor(obj)) {   // [MEASURE sync-order-wp5, temporary]
+        coop::dev::pile_key_probe::LogRowRot(static_cast<uint32_t>(eid),
+                                             ue_wrap::FRotator{p.rotPitch, p.rotYaw, p.rotRoll},
+                                             static_cast<float>(p.look.relYaw) * (360.f / 65536.f));
+    }
     // The real scale, part of the saved transform single-player restores.
     const auto scl = ue_wrap::engine::GetActorScale3D(obj);
     p.scaleX = scl.X; p.scaleY = scl.Y; p.scaleZ = scl.Z;

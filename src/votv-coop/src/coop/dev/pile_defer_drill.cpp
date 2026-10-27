@@ -46,6 +46,7 @@ struct Deferred {
     uint64_t deferredAt = 0;
     uint64_t boundAt = 0;     // the sweep adopted its native
     uint64_t gaveUpAt = 0;    // the sweep gave up with no native
+    uint32_t materialised = 0;   // mirrors trash_mirror stood up for the eid
 };
 std::unordered_map<uint32_t, Deferred> g_deferred;
 
@@ -115,13 +116,27 @@ void Window(coop::net::Session& session) {
         fails.Add("arm giveup needs pile_late_load=1, which destroys the native that never loads");
     }
     if (LateLoad::On() && !chosen) fails.Add("the late-load seam's clump never deferred");
-    if (LateLoad::On() && chosen && Rep::ArmOf() == Rep::Arm::Giveup) {
+    if (LateLoad::On() && chosen) {
         const auto it = g_deferred.find(chosen);
-        const bool gaveUpIt = it != g_deferred.end() && it->second.gaveUpAt != 0;
-        const bool materialised = coop::element::LivePropActor(static_cast<coop::element::ElementId>(chosen)) != nullptr;
-        if (!gaveUpIt) fails.Add("eid=%u was destroyed but the sweep did not give up on it", chosen);
+        const bool known = it != g_deferred.end();
+        const bool gaveUpIt = known && it->second.gaveUpAt != 0;
+        const bool boundIt = known && it->second.boundAt != 0;
+        const bool live = coop::element::LivePropActor(static_cast<coop::element::ElementId>(chosen)) != nullptr;
         if (BW::Holds(chosen, kConvertKind)) fails.Add("eid=%u converts did not replay", chosen);
-        if (!materialised) fails.Add("eid=%u ends with no mirror bound to it", chosen);
+        if (Rep::ArmOf() == Rep::Arm::Check) {
+            // The native came back at its key: the sweep binds it, and its held converts replay on the bind.
+            if (deferred < 1) fails.Add("the late-load seam's eid=%u deferred, but deferred=%u", chosen, deferred);
+            if (!boundIt || !live) fails.Add("eid=%u was put back but is not bound to its native", chosen);
+            if (held != replayed) fails.Add("held=%u != replayed=%u in arm check with the seam", held, replayed);
+            if (heldGivenUp != 0) fails.Add("heldGivenUp=%u in arm check with the seam, expected 0", heldGivenUp);
+        } else {
+            // The native never loaded: the sweep gives up, the held converts replay unbound, and the host's
+            // clump materialises once.
+            if (!gaveUpIt) fails.Add("eid=%u was destroyed but the sweep did not give up on it", chosen);
+            if (!live) fails.Add("eid=%u ends with no mirror bound to it", chosen);
+            const uint32_t made = known ? it->second.materialised : 0;
+            if (made != 1) fails.Add("eid=%u materialised %u times, expected exactly 1", chosen, made);
+        }
     }
     UE_LOGI("[PILE-DEFER] client DONE deferred=%u bound=%u gaveup=%u held=%u replayed=%u heldGivenUp=%u coalesced=%u "
             "neverBound=%u orphans=%u", deferred, bound, gaveUp, held, replayed, heldGivenUp, coalesced, neverBound, orphans);
@@ -203,6 +218,12 @@ void NoteGivenUp(uint32_t eid) {
     it->second.gaveUpAt = coop::net::NowMs();
     UE_LOGI("[PILE-DEFER] client gave up eid=%u, %llu ms after its deferral", eid,
             static_cast<unsigned long long>(it->second.gaveUpAt - it->second.deferredAt));
+}
+
+void NoteMaterialised(uint32_t eid) {
+    if (!Armed()) return;
+    const auto it = g_deferred.find(eid);
+    if (it != g_deferred.end()) ++it->second.materialised;
 }
 
 void NoteConvertAtDeferred(bool held) {

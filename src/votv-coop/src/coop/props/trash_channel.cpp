@@ -9,6 +9,7 @@
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
+#include "coop/dev/pile_key_probe.h"  // [MEASURE sync-order-wp5, temporary] the land's settled turn
 #include "coop/element/registry.h"    // EidForActor (birth prune) + Get(eid) (carry termination)
 #include "coop/player/puppet_carry_drive.h"  // OnTakenOver: a taker ends a client's carry drive
 #include "coop/props/pile_look.h"
@@ -480,6 +481,8 @@ void TickCarry(coop::net::Session& s, void* localHeldActor) {
                 crot   = settledRot;
                 cscale = ue_wrap::engine::GetActorScale3D(ls.pileActor);
             }
+            if (coop::dev::pile_key_probe::On())   // [MEASURE sync-order-wp5, temporary]
+                coop::dev::pile_key_probe::LogLandRot(static_cast<uint32_t>(E), settledRot, crot, settledRead);
             BroadcastConvert(s, E, coop::net::propconvert_kind::kToPile, cloc, crot, cscale, ls.chipType,
                              ls.cls, ls.carried ? "LAND COMMIT" : "LAND COMMIT (not carrying)");
             UE_LOGI("[TRASH-CH] HOST LAND COMMIT eid=%u -- %s (transform %s)", static_cast<unsigned>(E),

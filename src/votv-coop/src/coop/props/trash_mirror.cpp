@@ -3,6 +3,7 @@
 #include "ue_wrap/core/gc_pin.h"
 #include "coop/props/trash_mirror.h"
 
+#include "coop/dev/pile_defer_drill.h"  // [dev] the pile deferral drill counts a deferred eid's mirrors
 #include "coop/element/element.h"
 #include "coop/element/element_deleter.h"
 #include "coop/element/mirror_manager.h"
@@ -143,6 +144,7 @@ void* Materialize(coop::element::ElementId eid, const std::wstring& className, u
         coop::remote_prop::RegisterPropMirror(eid, native, L"", className, senderSlot, rebindInPlace);
         if (auto* el = coop::element::Registry::Get().Get(eid)) el->SetSaveNative(true);  // mark bound-native
     }
+    coop::dev::pile_defer_drill::NoteMaterialised(static_cast<uint32_t>(eid));   // [dev] the pile deferral drill's count
     UE_LOGI("[PILE] trash_mirror: MATERIALIZED eid=%u native=%p class='%ls' chipType=%u form=%s "
             "(rooted, tick-off, kinematic, Movable) -- the game's own hover GUI, trace and rotation",
             eid, native, className.c_str(), static_cast<unsigned>(chipType),
