@@ -42,6 +42,7 @@
 #include "coop/dev/desk_verb_drill.h"  // [dev] a client presses the desk's save family through its own input
 #include "coop/dev/hotbar_icon_probe.h"
 #include "coop/dev/load_reroll_watch.h"
+#include "coop/dev/radio_tower_probe.h"
 #include "coop/dev/drive_drill.h"  // [dev] a drive's row is the host's; a client's eraser press and births reach it
 #include "coop/dev/download_drill.h"  // [dev] the download machine's arm and reset are the host's
 #include "coop/dev/laptop_drill.h"  // [dev] the laptop's slot is the host's; a file edit lands on its own disc
@@ -279,6 +280,7 @@ void RearmSelftests() {
 void TickLoadWindow(coop::net::Session& session) {
     coop::dev::hotbar_icon_probe::Tick();  // [dev] the quick-slot bar's icons, decided during the load
     coop::dev::load_reroll_watch::Tick(session);  // [dev] what it watches runs inside the world load
+    coop::dev::radio_tower_probe::Tick(session);  // [dev] the radio tower's state and calls (one string read when off)
     coop::dev::desk_verb_drill::TickLoad(&session);  // [dev] the join's census, armed ahead of the load it counts
     coop::dev::explosion_drill::TickLoad(&session);  // [dev] the explosion drill's load half, inside the world load
 }

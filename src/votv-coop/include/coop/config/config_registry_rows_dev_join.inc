@@ -51,6 +51,12 @@ CFG_FLAG(load_reroll_watch, "load_reroll_watch", "dev", false, "VOTVCOOP_LOAD_RE
     "since both run inside the load, and logs the first calls with their callers. It holds the "
     "script gate on while set, with or without a session, so every lane's gate watch also runs "
     "outside a session for that run; read-only otherwise.")
+CFG_STRING(radio_tower_probe, "radio_tower_probe", "dev", "", "VOTVCOOP_RADIO_TOWER_PROBE", false,
+    "Diagnostic probe (BOTH peers): the radio tower. observe: reads the tower once its gamemode holds it (where, "
+    "its puzzle's size, its fuse and puzzle counts), prints its state once a second when it changed, and counts "
+    "each call of its bodies on this peer. fixclient: observe, plus a fixture: the host breaks the tower once a "
+    "client's world is ready and the client completes the puzzle on its own copy, which today stays on the "
+    "client. Holds the script gate on while set. Lines tagged [RADIO-TOWER]; the host's DONE line ends it.")
 CFG_FLAG(client_world_first, "client_world_first", "dev", false, "VOTVCOOP_CLIENT_WORLD_FIRST",
     "Rig (CLIENT): before it joins, the client boots a world of its own (a New Game: the rig starts every "
     "client fresh) and stands in it, then joins from inside it: the host's save downloaded and its world "
