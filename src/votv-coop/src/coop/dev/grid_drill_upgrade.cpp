@@ -3,6 +3,7 @@
 #include "grid_drill_upgrade.h"
 
 #include "grid_drill_checks.h"  // co-located private header (src tree, not include/)
+#include "grid_drill_walk.h"  // the walk to the generator
 
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
@@ -41,8 +42,8 @@ uint64_t NowMs() {
 
 // The bare install goes first: its refusal is also the host's cue to hand the first upgrade, so nothing the host
 // hands can lie beside the client before it has counted what was there.
-enum class Step : uint8_t { Arm, Bare, BareAck, Find, Ack, Refund, Done };
-Step     g_step = Step::Arm;
+enum class Step : uint8_t { Walk, Arm, Bare, BareAck, Find, Ack, Refund, Done };
+Step     g_step = Step::Walk;
 uint64_t g_stepMs = 0;
 int32_t  g_index = -1;      // the drill's generator's place in the rows
 int32_t  g_level0 = 0;      // its upgrades as the legs began
@@ -101,11 +102,24 @@ void ClientTick(void* player) {
     ue_wrap::FVector me{};
     if (!gen || !ue_wrap::engine::TryGetActorLocation(player, me)) return;
     switch (g_step) {
-    case Step::Arm: {
+    case Step::Walk: {
+        // Down to the generator by the director: the host judges an install where the player stands.
         if (!coop::net_pump::HasAnnouncedWorldReady() ||
             coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle)
             return;
-        if (g_stepMs == 0) g_stepMs = now;
+        switch (WalkBesideGenerator(player)) {
+        case WalkState::Walking:
+            return;
+        case WalkState::Ended:
+            g_step = Step::Done;
+            return;
+        case WalkState::Arrived:
+            Go(Step::Arm);
+            return;
+        }
+        return;
+    }
+    case Step::Arm: {
         g_index = GEN::IndexOf(gen);
         int32_t local = 0, host = 0;
         if (!Levels(local, host) || local != host) {
@@ -274,7 +288,7 @@ void UpgradeTick(coop::net::Session* session) {
 }
 
 void UpgradeOnDisconnect() {
-    g_step = Step::Arm;
+    g_step = Step::Walk;
     g_stepMs = 0;
     g_index = -1;
     g_level0 = 0;

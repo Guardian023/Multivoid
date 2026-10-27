@@ -185,6 +185,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/grid_drill_checks.cpp
     src/coop/dev/grid_drill_solve.cpp
     src/coop/dev/grid_drill_upgrade.cpp
+    src/coop/dev/grid_drill_walk.cpp
     src/coop/dev/tower_drill.cpp
     src/coop/dev/tower_drill_coord.cpp
     src/coop/dev/tower_drill_radio.cpp

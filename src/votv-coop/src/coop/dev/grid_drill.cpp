@@ -5,6 +5,7 @@
 #include "grid_drill_checks.h"  // co-located private header (src tree, not include/)
 #include "grid_drill_upgrade.h"  // the upgrade arms' own legs
 #include "grid_drill_solve.h"  // the solve and flood legs beside the generator
+#include "grid_drill_walk.h"  // the walk to the generator
 
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
@@ -78,7 +79,7 @@ uint64_t NowMs() {
 // ---- the client's legs -----------------------------------------------------------------------------------------
 
 enum class Step : uint8_t {
-    Arm, WalkPanel, Press, Ack, WaitBreak, Repair, RepairAck, HostRepair, LockStart, LockEnd,
+    Arm, WalkPanel, WalkGen, Press, Ack, WaitBreak, Repair, RepairAck, HostRepair, LockStart, LockEnd,
     PuzzleMatch, PuzzleHost, PuzzleOwn, PuzzleOwnAck, Solve, Done
 };
 Step     g_step = Step::Arm;
@@ -199,12 +200,7 @@ void ClientTick(void* player) {
         }
         Say("client", "armed");
         SayCensus(player, panel);
-        if (BesideArm()) {
-            SolveBegin(Mode() == Arm::PuzzleFlood);
-            Go(Step::Solve);
-            return;
-        }
-        Go(Step::WalkPanel);
+        Go(BesideArm() ? Step::WalkGen : Step::WalkPanel);
         return;
     }
     case Step::LockStart:
@@ -239,6 +235,21 @@ void ClientTick(void* player) {
         if (st != 1) { Abandon("the walk to the panel failed (no route, or the deadline)"); return; }
         SayCensus(player, panel);
         Go(Step::Press);
+        return;
+    }
+    case Step::WalkGen: {
+        // Down to the drill's generator by the director: a generator op is judged where the player stands.
+        switch (WalkBesideGenerator(player)) {
+        case WalkState::Walking:
+            return;
+        case WalkState::Ended:
+            g_step = Step::Done;
+            return;
+        case WalkState::Arrived:
+            SolveBegin(Mode() == Arm::PuzzleFlood);
+            Go(Step::Solve);
+            return;
+        }
         return;
     }
     case Step::Press: {
@@ -615,6 +626,7 @@ void OnDisconnect() {
     g_nextLockReadMs = 0;
     g_presses = 0;
     g_walk.reset();
+    WalkReset();
     g_hostSeen = 0;
     g_hostOpsSeen = 0;
     g_hostSaidArm = false;
