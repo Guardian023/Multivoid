@@ -17,11 +17,15 @@ namespace ui::overlay_backend {
 enum class Rhi : uint8_t;
 struct FrameTarget;  // what one frame draws into; defined for the backends (overlay_backend_internal.h)
 
-// The engine seam that fired names its RHI before it runs the frame; every entry below forwards
-// to that RHI's backend. Render thread only.
-void SelectRhi(Rhi rhi);
+// The engine seam that fired names its RHI before it runs the frame; every entry below but the
+// resize pair forwards to that RHI's backend. Render thread only. false = the frame is not this
+// overlay's: no backend for that RHI, or another RHI already brought the overlay up (the choice is
+// latched at the first successful InitRenderer, so a backend that was never initialised cannot run
+// a frame; a once-only warning names both).
+bool SelectRhi(Rhi rhi);
 
-// The selected RHI's name -- "DX11" / "DX12" -- nullptr until a seam selected one. Feeds the RHI
+// The selected RHI's name -- "DX11" / "DX12" -- non-null from the first present on (a seam selects
+// before the overlay is up, so this does not say bring-up committed), nullptr before. Feeds the RHI
 // indicator (F1 menu line + the bring-up log).
 const char* Kind();
 
@@ -52,9 +56,10 @@ void EnsureTarget(const FrameTarget& t);
 void RenderDrawData(const FrameTarget& t);
 
 // ResizeBuffers bracket, called only from the DX resize detours: release backbuffer-derived state
-// BEFORE the game's resize runs; re-derive it after a successful resize. A backend without a
+// BEFORE the game's resize runs; re-derive it after a successful resize. They take the RHI of the
+// seam that fired (the target's `rhi`), not the selected one. A backend without a
 // bracket leaves both null.
-void OnResizeRelease();
+void OnResizeRelease(Rhi rhi);
 void OnResizeRecreate(const FrameTarget& t);
 
 // Decode an image file (PNG/BMP/JPG via WIC) into a device texture usable as

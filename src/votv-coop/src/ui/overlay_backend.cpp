@@ -8,6 +8,7 @@
 #include "ui/overlay_backend.h"
 
 #include "overlay_backend_internal.h"
+#include "ue_wrap/core/log.h"
 
 #include <windows.h>
 #include <wincodec.h>  // WIC: the skins-browser preview decode (PNG/BMP -> BGRA)
@@ -18,16 +19,35 @@
 namespace ui::overlay_backend {
 namespace {
 
+const BackendOps* OpsFor(Rhi rhi) {
+    switch (rhi) {
+        case Rhi::Dx11: return &dx11::Ops();
+        case Rhi::Dx12: return &dx12::Ops();
+        default:        return nullptr;
+    }
+}
+
 const BackendOps* g_ops = nullptr;  // render-thread-owned (all writers run in the Present detour)
+bool g_brought = false;             // an InitRenderer succeeded: the RHI is latched for the run
 
 }  // namespace
 
-void SelectRhi(Rhi rhi) {
-    switch (rhi) {
-        case Rhi::Dx11: g_ops = &dx11::Ops(); break;
-        case Rhi::Dx12: g_ops = &dx12::Ops(); break;
-        default:        g_ops = nullptr; break;
+bool SelectRhi(Rhi rhi) {
+    const BackendOps* want = OpsFor(rhi);
+    if (g_brought && want != g_ops) {
+        // A backend that was never captured or initialised must not run a frame, so the seam of
+        // the other RHI is refused; a second viewport is the only way one could fire.
+        static bool warned = false;
+        if (!warned) {
+            warned = true;
+            UE_LOGW("imgui_overlay: the %s present seam fired after the overlay came up on %s -- "
+                    "that seam's frames are ignored for the rest of the run",
+                    want ? want->name : "unknown-RHI", g_ops->name);
+        }
+        return false;
     }
+    g_ops = want;
+    return want != nullptr;
 }
 
 const char* Kind() { return g_ops ? g_ops->name : nullptr; }
@@ -41,7 +61,9 @@ void AbandonCapture() {
 }
 
 bool InitRenderer(const FrameTarget& t) {
-    return g_ops && g_ops->init(t);
+    if (!g_ops || !g_ops->init(t)) return false;
+    g_brought = true;
+    return true;
 }
 
 void NewFrame() {
@@ -60,13 +82,16 @@ void RenderDrawData(const FrameTarget& t) {
     if (g_ops) g_ops->render(t);
 }
 
-// The resize pair is the DX resize bracket's mechanism: a half without one leaves it null.
-void OnResizeRelease() {
-    if (g_ops && g_ops->resizeRelease) g_ops->resizeRelease();
+// The resize pair is the DX resize bracket's mechanism: a half without one leaves it null. The
+// backend is the one of the seam that fired, not the last selected one.
+void OnResizeRelease(Rhi rhi) {
+    const BackendOps* ops = OpsFor(rhi);
+    if (ops && ops->resizeRelease) ops->resizeRelease();
 }
 
 void OnResizeRecreate(const FrameTarget& t) {
-    if (g_ops && g_ops->resizeRecreate) g_ops->resizeRecreate(t);
+    const BackendOps* ops = OpsFor(t.rhi);
+    if (ops && ops->resizeRecreate) ops->resizeRecreate(t);
 }
 
 void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH) {

@@ -117,8 +117,8 @@ uintptr_t __fastcall D3D11PresentCheckedDetour(void* viewport, int32_t syncInter
                                                 "FD3D11Viewport::PresentChecked",
                                                 g_lastOkSc11))
     {
-        overlay_backend::SelectRhi(overlay_backend::Rhi::Dx11);
-        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx11, BringUpWindow(sc), sc, nullptr});
+        if (overlay_backend::SelectRhi(overlay_backend::Rhi::Dx11))
+            imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx11, BringUpWindow(sc), sc, nullptr});
     }
     return g_d3d11PresentTrampoline(viewport, syncInterval);
 }
@@ -128,8 +128,8 @@ uintptr_t __fastcall D3D12PresentInternalDetour(void* viewport, int32_t syncInte
                                                 "FD3D12Viewport::PresentInternal",
                                                 g_lastOkSc12))
     {
-        overlay_backend::SelectRhi(overlay_backend::Rhi::Dx12);
-        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx12, BringUpWindow(sc), sc, nullptr});
+        if (overlay_backend::SelectRhi(overlay_backend::Rhi::Dx12))
+            imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx12, BringUpWindow(sc), sc, nullptr});
     }
     return g_d3d12PresentTrampoline(viewport, syncInterval);
 }
@@ -168,7 +168,8 @@ void EngineResizeBracket(const char* which, size_t scOff, overlay_backend::Rhi r
 
 void __fastcall D3D11ResizeDetour(void* viewport, uint32_t sizeX, uint32_t sizeY,
                                   uint8_t bFullscreen, int32_t pixelFormat) {
-    overlay_backend::OnResizeRelease();   // the back buffers are about to be recreated
+    // The back buffers are about to be recreated.
+    overlay_backend::OnResizeRelease(overlay_backend::Rhi::Dx11);
     g_d3d11ResizeTrampoline(viewport, sizeX, sizeY, bFullscreen, pixelFormat);
     char note[96];
     _snprintf_s(note, sizeof(note), _TRUNCATE, " (%ux%u fullscreen=%u fmt=%d)", sizeX, sizeY,
@@ -178,7 +179,7 @@ void __fastcall D3D11ResizeDetour(void* viewport, uint32_t sizeX, uint32_t sizeY
 }
 
 void __fastcall D3D12ResizeDetour(void* viewport) {
-    overlay_backend::OnResizeRelease();
+    overlay_backend::OnResizeRelease(overlay_backend::Rhi::Dx12);
     g_d3d12ResizeTrampoline(viewport);
     // No size in the line: ResizeInternal takes only `this`, so four numbers here would be register
     // residue.
