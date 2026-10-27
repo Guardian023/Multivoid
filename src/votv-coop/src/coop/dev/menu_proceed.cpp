@@ -4,15 +4,15 @@
 // a special early-boot widget, not ui_menu_C, carrying no standard UButtons, and VOTV's menu
 // cursor is raw-input driven, so synthetic OS clicks do not activate it either.
 //
-// So instead of fighting OMEGA this goes the other way: wait until the game reaches GAMEPLAY
-// (the harness boots past OMEGA with StartFreshGame or LoadStorySave), then issue VOTV's own
+// So instead of fighting OMEGA this goes the other way: from whatever world the game boots into
+// (the preload level, a fresh game, a loaded save), issue VOTV's own
 // AmainGamemode_C::transition("/Game/menu"). Quitting to the menu loads the real ui_menu_C main
 // menu without re-showing OMEGA, and our ui_menu_C::Tick observer (coop::multiplayer_menu)
 // injects the MULTIPLAYER button. A transparent ProcessEvent bypass covers the dying-world
 // teardown, where our detour otherwise hangs on the EndPlay storm (autotest_menutravel_probe is
 // what shows that); it auto-expires, so the observers re-engage at the loaded menu.
 //
-// Requires the launch to boot gameplay (scenario=play, ideally fresh_boot=1).
+// Needs no gameplay boot: any world with a live gamemode works, and the menu level itself skips this.
 
 #include "coop/dev/menu_proceed.h"
 
@@ -79,7 +79,9 @@ bool ReadProbe(Probe& out, bool inject) {
     return ok;
 }
 
-bool InGameplay(const std::wstring& world) { return world.find(L"ntitled") != std::wstring::npos; }
+// The menu level is the world named "menu"; a world not yet created reads "<null>".
+bool IsMenuLevel(const std::wstring& world) { return world == L"menu"; }
+bool HasWorld(const std::wstring& world) { return world != L"<null>"; }
 
 // AmainGamemode_C::transition(FName LevelName) -- VOTV's own level travel. Game thread.
 bool CallTransition(const std::wstring& level) {
@@ -105,19 +107,26 @@ void Fail(const char* step, const Probe& p) {
 
 DWORD WINAPI Thread(LPVOID) {
     Probe p;
-    // 1+2. Gameplay is ready when the world is the fresh game's (the harness boots past OMEGA into
-    // untitled_1) AND a mainGamemode_C is live; the world name alone reads "Untitled" a while before
-    // the gamemode exists. Then dispatch the transition, retried each second until it goes. The
-    // bypass for the dying-world teardown is armed in the same game-thread task as the call and
-    // cleared again if the call did not dispatch, so a refused attempt leaves the task pump running.
+    // 1+2. The transition is ready when a mainGamemode_C is live and the world is a real one other
+    // than the menu level: whichever world the game booted into (the fresh game's, the preload level,
+    // a loaded save) the game's own transition travels from it. A world that already IS the menu level
+    // skips the transition. The call is retried each second until it dispatches. The bypass for the
+    // dying-world teardown is armed in the same game-thread task as the call and cleared again if
+    // the call did not dispatch, so a refused attempt leaves the task pump running.
     bool dispatched = false;
     bool ready = false;
     for (int i = 0; i < kMaxTries && !dispatched && !coop::shutdown::IsShuttingDown(); ++i) {
         if (i > 0) ::Sleep(1000);
-        if (!ReadProbe(p, false) || !InGameplay(p.world) || !p.gamemodeLive) continue;
+        if (!ReadProbe(p, false)) continue;
+        if (IsMenuLevel(p.world)) {
+            UE_LOGW("menu_proceed: the world is already the menu level -- no transition needed");
+            dispatched = true;
+            break;
+        }
+        if (!HasWorld(p.world) || !p.gamemodeLive) continue;
         if (!ready) {
             ready = true;
-            UE_LOGW("menu_proceed: in gameplay (world='%ls') -- transitioning to /Game/menu for the menu shot",
+            UE_LOGW("menu_proceed: world='%ls' with a live gamemode -- transitioning to /Game/menu for the menu shot",
                     p.world.c_str());
         }
         auto ok = std::make_shared<std::atomic<int>>(0);
@@ -132,17 +141,17 @@ DWORD WINAPI Thread(LPVOID) {
         dispatched = ok->load() != 0;
     }
     if (!dispatched) {
-        Fail(ready ? "the transition never dispatched" : "gameplay never became ready", p);
+        Fail(ready ? "the transition never dispatched" : "no world with a live gamemode to travel from", p);
         return 0;
     }
 
-    // 3. The menu is up when the old world is gone, a ui_menu_C is live and the bypass has expired
+    // 3. The menu is up when the world is the menu level, a ui_menu_C is live and the bypass has expired
     // (a task posted under the bypass does not run, so it is checked first).
     bool menuUp = false;
     for (int i = 0; i < kMaxTries && !menuUp && !coop::shutdown::IsShuttingDown(); ++i) {
         ::Sleep(1000);
         if (GT::TransparentBypassActive()) continue;
-        menuUp = ReadProbe(p, false) && !InGameplay(p.world) && p.menuLive;
+        menuUp = ReadProbe(p, false) && IsMenuLevel(p.world) && p.menuLive;
     }
     if (!menuUp) {
         Fail("the main menu never came up after the transition", p);
