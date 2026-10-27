@@ -19,6 +19,7 @@
 #include "harness/mod_environment.h"
 #include "coop/dev/freecam.h"
 #include "coop/dev/log_drill.h"  // [dev] the two-process log drill
+#include "coop/input/game_window_proc.h"
 #include "coop/input/input_owner.h"
 #include "coop/props/prop_key_index.h"  // Install, posted at boot
 #include "coop/dev/object_overlay.h"
@@ -594,6 +595,11 @@ void Start() {
     // The session the close handler stops, handed over before any window message can arrive; the
     // window itself is found and subclassed by coop/input/game_window_proc from the frame tail.
     coop::shutdown::SetSession(&session_runtime::Session());
+    // The game window's one subclass, from boot: the window usually exists by now, and a close or a
+    // native text field must not wait for the first play-loop composite (about 1.5 s into the
+    // menu scenario). If it is not there yet, the frame tail's Tick finds it. Called once here,
+    // before the timeline thread that drives the pump exists, so Tick's state has one writer at a time.
+    coop::input::game_window_proc::Tick();
 
     auto* scenario = new std::string(cfg::ReadScenario());
     if (HANDLE t = ::CreateThread(nullptr, 0, TimelineThread, scenario, 0, nullptr)) {

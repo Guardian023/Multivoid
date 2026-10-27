@@ -20,7 +20,8 @@ namespace {
 std::atomic<HWND>    g_hwnd{nullptr};
 std::atomic<WNDPROC> g_origProc{nullptr};
 
-// Tick's pacing while no window is held; the game thread only.
+// Tick's pacing; one writer at a time (harness::Start before the timeline thread exists, then the
+// pump on the game thread).
 ULONGLONG g_nextFindMs = 0;
 constexpr ULONGLONG kFindEveryMs = 250;
 
