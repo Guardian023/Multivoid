@@ -7,6 +7,7 @@
 #include "coop/props/prop_save_data.h"
 #include "coop/props/container_contents_sync.h"
 #include "coop/props/container_birth.h"
+#include "coop/props/container_contents_io.h"
 #include "coop/props/container_park.h"
 #include "coop/props/container_slice_wire.h"
 #include "coop/props/container_writer_watch.h"
@@ -48,6 +49,7 @@ namespace pk = coop::props::container_park;
 namespace cw = coop::props::container_slice_wire;
 namespace ci = ue_wrap::container_inventory;
 namespace cb = coop::props::container_birth;
+namespace cio = coop::props::container_contents_io;
 namespace cww = coop::props::container_writer_watch;
 
 using coop::element::LivePropActor;
@@ -120,25 +122,6 @@ bool IsHost() {
     return s && s->role() == coop::net::Role::Host;
 }
 
-// BOUNDARY 1, fail closed: only a world container's own inventory is this lane's to author
-// (ci::IsWorldInventory); authoring a personal inventory from the host would wipe that peer's own.
-// BOUNDARY 2: a nested container's ints[0][0] is its own GObjStack index, a slot number in the
-// sender's array that must not survive the wire, so it is shipped and written as -1
-// (ci::ClearInventoryIndex says why never by clearing ints).
-bool ReadContents(void* inv, std::vector<SR::SaveRecord>& out, bool neuterNested = true) {
-    int32_t count = -1;
-    if (!ci::ReadContents(inv, out, cw::kMaxRecords, &count)) {
-        if (count > static_cast<int32_t>(cw::kMaxRecords))
-            UE_LOGW("container_contents: %d records exceeds the %zu cap -- refusing to ship a "
-                    "truncated slice", count, cw::kMaxRecords);
-        return false;
-    }
-    if (neuterNested)
-        for (auto& r : out)
-            if (ci::IsContainerRecord(r)) ci::ClearInventoryIndex(r);
-    return true;
-}
-
 // Broadcast one container.
 
 // False if the send was refused while a world-ready peer was present, or a first publication is
@@ -147,7 +130,7 @@ bool ReadContents(void* inv, std::vector<SR::SaveRecord>& out, bool neuterNested
 
 bool BroadcastContainer(coop::net::Session* s, uint32_t eid, void* inv, int toSlot, bool force) {
     std::vector<SR::SaveRecord> recs;
-    if (!ReadContents(inv, recs)) {
+    if (!cio::ReadRecords(inv, recs)) {
         // Nothing resolvable is not a transport failure -- unless a first publication is owed for this
         // eid, which a slot not readable yet would otherwise lose for good.
         switch (cb::FirstOwed(eid, NowMs())) {
@@ -333,48 +316,21 @@ Ingest ApplyContents(uint32_t eid, const std::vector<SR::SaveRecord>& recs, uint
         auto it = g_appliedHash.find(eid);
         if (it != g_appliedHash.end() && it->second == blobHash) return Ingest::Handled;
     }
-    if (!ci::IsWorldInventory(inv)) {           // BOUNDARY 1 (fail-closed)
-        UE_LOGW("container_contents: eid=%u resolves to a PERSONAL inventory (or an unresolvable "
-                "Player flag) -- refusing to apply", eid);
-        return Ingest::Handled;                       // resolved; deliberately not applied
-    }
-    uint8_t* slot = ci::ContentsSlot(inv);
-    if (!slot) return Ingest::Park;
-
-    // The allocator pre-flight: without it an empty array would silently replace real contents.
-    if (void* probe = R::EngineAlloc(16)) {
-        R::EngineFree(probe);
-    } else {
-        UE_LOGW("container_contents: eid=%u -- EngineAlloc unavailable; refusing to write", eid);
-        return Ingest::Handled;
-    }
-
-    const int32_t n = static_cast<int32_t>(recs.size());
-    void* buf = SR::AllocZeroed(static_cast<size_t>(n), static_cast<size_t>(SR::kSaveStride));
-    if (!buf && n > 0) {
-        UE_LOGW("container_contents: eid=%u -- alloc of %d records failed; leaving contents", eid, n);
-        return Ingest::Handled;
-    }
     // The HOST applies a CLIENT's contents with its world up, so it resolves each record's class
     // names through object_index (an attacker's unknown name is an O(1) miss, not a whole-array walk);
     // a CLIENT applying the host's broadcast may be mid-load, so it keeps FindClass (its index can trail).
     const SR::ClassResolver resolve = IsHost() ? &ue_wrap::object_index::ClassByName : nullptr;
-    for (int32_t i = 0; i < n; ++i)
-        SR::WriteSaveRecord(reinterpret_cast<uint8_t*>(buf) + static_cast<size_t>(i) * SR::kSaveStride,
-                            recs[i], resolve);
-    // The previous buffer is orphaned: freeing the nested sub-arrays, minted FStrings and signal
-    // rows recursively is far more crash-prone than leaking them, and the engine never double-frees
-    // a buffer it has lost. inventory::ApplyToSaveObject orphans the same way once per join; this
-    // lane is steady-state, and the content-hash gate above bounds it, since an apply happens only
-    // when the contents changed.
-    SR::WriteArrHeader(slot, 0, buf, n);
+    switch (cio::WriteRecords(eid, inv, recs, resolve)) {
+        case cio::WriteResult::Refused:  return Ingest::Handled;
+        case cio::WriteResult::NotReady: return Ingest::Park;
+        case cio::WriteResult::Written:  break;
+    }
 
     g_appliedHash[eid] = blobHash;
     Touch(eid);
     // The base a later local edit declares; never cleared by our own write edge.
     if (!IsHost()) g_baseHash[eid] = blobHash;
-    ci::RederiveShownState(ci::OwnerOf(inv), inv);
-    UE_LOGI("container_contents: eid=%u applied %d records", eid, n);
+    UE_LOGI("container_contents: eid=%u applied %d records", eid, static_cast<int32_t>(recs.size()));
     return Ingest::Applied;
 }
 
@@ -461,7 +417,7 @@ Ingest ParseAndApply(const std::vector<uint8_t>& blob, uint32_t& outEid, uint8_t
         void* actor = LivePropActor(outEid);
         void* inv = actor && ci::IsContainer(actor) ? ci::InventoryOf(actor) : nullptr;
         std::vector<SR::SaveRecord> hostRecs;
-        if (inv && ReadContents(inv, hostRecs, /*neuterNested=*/false) && !hostRecs.empty()) {
+        if (inv && cio::ReadRecords(inv, hostRecs, /*neuterNested=*/false) && !hostRecs.empty()) {
             if (recs.size() + hostRecs.size() <= cw::kMaxRecords) {
                 recs.insert(recs.end(), hostRecs.begin(), hostRecs.end());
                 merged = true;
@@ -699,7 +655,7 @@ bool ContentHashOf(uint32_t eid, uint64_t& outHash, uint32_t& outRecords) {
     if (!inv || !ci::IsWorldInventory(inv)) return false;
     if (cb::Awaited(actor, 0)) return false;   // a transfer in progress is not a settled reading
     std::vector<SR::SaveRecord> recs;
-    if (!ReadContents(inv, recs)) return false;
+    if (!cio::ReadRecords(inv, recs)) return false;
     outHash = cw::ContentHash(eid, recs);
     outRecords = static_cast<uint32_t>(recs.size());
     return true;
