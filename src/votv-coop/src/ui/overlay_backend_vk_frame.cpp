@@ -284,7 +284,8 @@ void PollFences(uint64_t now) {
 
 // ---- the proof windows (2.8 C10) ----------------------------------------------------------------------
 
-// A window's verdict: 60 presents with a surface open, then every submit of its frames observed finished.
+// A window's verdict: the first 60 presents in which a frame was due to be submitted, then every submit of
+// its frames observed finished.
 void PrintVerdicts() {
     for (Window& w : g_win) {
         if (!w.active || w.printed || w.open < kWindowFrames) continue;
@@ -580,22 +581,32 @@ VkSemaphore RecordGuarded(RingSlot& slot, const SwapSet& set, ImDrawData* draw) 
     }
 }
 
-}  // namespace
-
-void Render(const FrameTarget& t) {
-    // The host calls this only when a surface is open: the present counts into the proof windows.
+// This present is one the proof windows count: the first kWindowFrames presents of a window in which a frame
+// was due to be drawn.
+void OpenWindows() {
     for (Window& w : g_win) {
         if (!w.active || w.open >= kWindowFrames) continue;
         ++w.open;
         g_cur.windows |= w.bit;
     }
+}
+
+}  // namespace
+
+void Render(const FrameTarget& t) {
     ImDrawData* draw = ImGui::GetDrawData();
     if (!g_cur.set || IsDown() || !draw) return;
     // Mirrors ImGui's own early return: such a call advances neither ring.
     if (static_cast<int>(draw->DisplaySize.x * draw->FramebufferScale.x) <= 0 ||
         static_cast<int>(draw->DisplaySize.y * draw->FramebufferScale.y) <= 0)
         return;
-    if (Ctx().red == Red::Present) return;  // the red arm: present with the engine's semaphore, submit nothing
+    // Nothing to draw (the HUD idle): no pass over the whole image, no submit, no ImGui call, so neither ring
+    // moves and the present goes through with the engine's own semaphore.
+    if (draw->TotalVtxCount == 0) return;
+    if (Ctx().red == Red::Present) {  // the red arm: present with the engine's semaphore, submit nothing
+        OpenWindows();
+        return;
+    }
     RingSlot& slot = g_ring[RingIndex()];
     if (slot.inFlight) {
         // The slot's previous frame is still on the GPU: skip this overlay frame, never wait for it.
@@ -603,6 +614,7 @@ void Render(const FrameTarget& t) {
             UE_LOGW("[VK-OVERLAY] skipped %u overlay frame(s): the ring slot's fence was still unsignalled", g_skipped);
         return;
     }
+    OpenWindows();
     const VkSemaphore done = RecordGuarded(slot, *g_cur.set, draw);
     if (!done) return;
     slot.inFlight = true;
