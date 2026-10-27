@@ -43,15 +43,15 @@ void OnOp(const coop::net::FuseTowerPayload& p, uint8_t sender);
 // there, said here once a session.
 void OnShortPayload(size_t got);
 
-// HOST: each slot's acknowledgement and the oldest refused claim still to tell it, into the rows. With more than one
-// queued, the acknowledgement stops before the next, so the client keeps those claims until their own answers.
-void FillAcks(coop::net::FuseTowerPayload& p);
+// HOST: each slot's acknowledgement into the rows, held below its oldest refused claim so its client keeps its claims
+// until their own answers. The answer to `answerSlot` carries that claim's seq too (and acknowledges up to the one
+// before the next); a broadcast (-1) carries none, so only a per-slot answer tells a refusal.
+void FillAcks(coop::net::FuseTowerPayload& p, int answerSlot);
 
 // HOST: the answer that carried `slot`'s oldest refused claim was taken by the send; it is told, and leaves. Whether
-// the slot has more to tell, and the slots that have (a bit each).
+// the slot has more to tell.
 void RefusedTold(uint8_t slot);
 bool RefusedPending(uint8_t slot);
-uint8_t RefusedSlots();
 
 // CLIENT: the rows' answer to my ops: the claims they acknowledge leave, and the refused pull they tell of has its
 // fuse reaped (each refused claim has an answer of its own).

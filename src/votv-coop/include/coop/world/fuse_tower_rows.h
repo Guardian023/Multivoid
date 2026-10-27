@@ -41,7 +41,8 @@ void HostSendNow();
 
 // HOST: a refusal's answer is owed to its sender alone (the rows hold no news for the others). It goes at the next
 // tick: one answer for the refusals that carry no claim, and one more for each refused claim, each carrying that
-// claim's seq (coop/world/fuse_tower_ops FillAcks); one that could not be sent stays owed.
+// claim's seq (coop/world/fuse_tower_ops FillAcks); one that could not be sent stays owed, until its slot's occupant
+// changes.
 void HostAnswerOwed(uint8_t slot);
 
 // CLIENT: the rows are being run on this client's towers; a use then is theirs, not a player's.
