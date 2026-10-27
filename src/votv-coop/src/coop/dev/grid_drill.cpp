@@ -43,19 +43,17 @@ namespace GP  = ue_wrap::generator_panel;
 
 constexpr uint8_t  kCalcBit       = 0x08;    // the calc breaker: the lockout's end switches the servers with it
 constexpr float    kPressReachCm  = 150.f;   // a lever, within the look-at trace's 200
-// The host's reach for a generator op (coop/world/power_grid): a repair pressed within it must be taken; one pressed
-// beyond anything its pads add (the generator's bounds and the puppet's lag, a few hundred uu) must be refused.
-constexpr float    kGeneratorReachUU = 400.f;
+// A repair pressed within the host's reach for a generator op (coop::power_grid::kGeneratorReachUU) must be taken;
+// one pressed beyond anything its pads add (the generator's bounds and the puppet's lag, a few hundred uu) must be
+// refused.
 constexpr float    kBeyondPadsUU     = 5000.f;
 constexpr uint64_t kLockPollMs       = 250;     // the lock legs read the servers at this cadence
 constexpr int      kWalkDeadlineS = 240;
-// Failure bounds only: each leg ends on the state it waits for, and these say it never came.
-constexpr uint64_t kAckBoundMs    = 15000;
-constexpr uint64_t kRowBoundMs    = 30000;
+// Failure bound only (the shared ones are in grid_drill_checks.h).
 constexpr uint64_t kLockBoundMs   = 90000;   // the desk virus's lockout lasts 60 s on the host
 
 enum class Arm : uint8_t { Off, Run, Red, Join, Lockout, LockJoin, Puzzle, PuzzleRed, PuzzleSolve, PuzzleFlood,
-                          Upgrade, UpgradeRepair, UpgradeRepairRed };
+                          Upgrade, UpgradeRepair, UpgradeRepairRed, UpgradeRepairLossRed };
 Arm Mode() {
     static const Arm a = [] {
         const std::string v = coop::config::ResolveString(::coop::config_registry::rows::grid_drill);
@@ -64,6 +62,7 @@ Arm Mode() {
              : v == "puzzlesolve" ? Arm::PuzzleSolve : v == "puzzleflood" ? Arm::PuzzleFlood
              : (v == "upgrade" || v == "upgradered") ? Arm::Upgrade
              : v == "upgraderepair" ? Arm::UpgradeRepair : v == "upgraderepairred" ? Arm::UpgradeRepairRed
+             : v == "upgraderepairlossred" ? Arm::UpgradeRepairLossRed
              : Arm::Off;
     }();
     return a;
@@ -394,7 +393,7 @@ void ClientTick(void* player) {
             return;
         }
         const float dist = Dist(me, ue_wrap::engine::GetComponentLocation(button));
-        if (dist > kGeneratorReachUU && dist <= kBeyondPadsUU) {
+        if (dist > coop::power_grid::kGeneratorReachUU && dist <= kBeyondPadsUU) {
             Abandon("the repair would be pressed between the button's reach and the host's pads");
             return;
         }
@@ -606,10 +605,12 @@ void HostTick(coop::net::Session* s) {
 void Tick(coop::net::Session* session) {
     if (Mode() == Arm::Off || !session || !session->connected()) return;
     if (!PC::EnsureResolved() || !GEN::EnsureResolved()) return;
-    if (Mode() == Arm::Upgrade || Mode() == Arm::UpgradeRepair || Mode() == Arm::UpgradeRepairRed) {
-        UpgradeTick(session, Mode() == Arm::UpgradeRepair      ? UpgradeFlavour::Repair
-                             : Mode() == Arm::UpgradeRepairRed ? UpgradeFlavour::RepairRed
-                                                               : UpgradeFlavour::Plain);
+    if (Mode() == Arm::Upgrade || Mode() == Arm::UpgradeRepair || Mode() == Arm::UpgradeRepairRed ||
+        Mode() == Arm::UpgradeRepairLossRed) {
+        UpgradeTick(session, Mode() == Arm::UpgradeRepair          ? UpgradeFlavour::Repair
+                             : Mode() == Arm::UpgradeRepairRed     ? UpgradeFlavour::RepairRed
+                             : Mode() == Arm::UpgradeRepairLossRed ? UpgradeFlavour::RepairLossRed
+                                                                   : UpgradeFlavour::Plain);
         return;
     }
     if (session->role() == coop::net::Role::Host) {

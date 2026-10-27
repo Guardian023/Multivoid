@@ -7,8 +7,9 @@
 // upgraderepair: the client installs the one upgrade the host hands it, the host breaks the generator, the client
 // solves its puzzle and presses Activate (grid_drill_solve.h), the host takes the repair; 20 s on, both peers read
 // the generator's upgrades and the meshes they built, which must still be the install's (a client's repair must not
-// take its upgrades). upgraderepairred is the control with the install skipped, which must end on level 0.
-// Src-local.
+// take its upgrades); the host judges its own generator the same way. upgraderepairred is the control with the install
+// skipped, which must end on level 0. upgraderepairlossred is the control whose host takes the upgrades off its own
+// generator after the repair (the level written back, updUpgrades run), so both verdicts must FAIL. Src-local.
 
 #pragma once
 
@@ -18,7 +19,7 @@ namespace coop::net { class Session; }
 
 namespace coop::dev::grid_drill {
 
-enum class UpgradeFlavour : uint8_t { Plain, Repair, RepairRed };
+enum class UpgradeFlavour : uint8_t { Plain, Repair, RepairRed, RepairLossRed };
 
 // Either peer's legs, per frame once the grid resolved. Game thread.
 void UpgradeTick(coop::net::Session* session, UpgradeFlavour flavour);

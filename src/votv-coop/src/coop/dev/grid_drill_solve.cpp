@@ -24,9 +24,7 @@ namespace {
 namespace GEN = ue_wrap::generator;
 namespace GP  = ue_wrap::generator_panel;
 
-// Failure bounds only: each leg ends on the state it waits for, and these say it never came.
-constexpr uint64_t kAckBoundMs   = 15000;
-constexpr uint64_t kRowBoundMs   = 30000;
+// Failure bound only (the shared ones are in grid_drill_checks.h).
 constexpr uint64_t kSolveBoundMs = 60000;  // a solve is some ninety inputs, a click's move 0.1-0.2 s
 
 uint64_t NowMs() {

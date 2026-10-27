@@ -64,6 +64,7 @@ WalkState Abandon(const char* why) {
 }
 
 std::vector<FVector> Standpoints(void* player, const float* ringZ) {
+    g_trace.clear();  // the ABANDONED tail is the search that failed last
     return DR::ReachableStandpoints(player, g_button, kRingCm, kStandpoints, kStandReachCm, ringZ, &g_trace);
 }
 
@@ -98,7 +99,7 @@ WalkState WalkBesideGenerator(void* player) {
         g_walk = DR::StartBackgroundWalk(ring[0], kStandReachCm, kWalkDeadlineS);
         return WalkState::Walking;
     }
-    if (!g_walk) return WalkState::Ended;
+    if (!g_walk) return Abandon("the walk to the standpoint is gone");
     const int st = g_walk->state.load();
     if (st == 0) return WalkState::Walking;
     g_walk.reset();
