@@ -4,7 +4,7 @@
 // sooner and measures nothing when it is not, so each peer says when it has reached a milestone.
 // Every other log line may be reworded; this one is a contract with tools outside the tree:
 //   rig: READY <milestone>[ slot=<n>]
-//   hosting            the host's session is up, in a loaded world
+//   hosting            the host's session is up and its world has settled, once per session
 //   world-ready        this client announced ClientWorldReady: its world is up, its registry is
 //                      coherent and the load's tail has settled; the host's replay has NOT arrived
 //   joined             this client's join is over: the host's snapshot is applied and the join

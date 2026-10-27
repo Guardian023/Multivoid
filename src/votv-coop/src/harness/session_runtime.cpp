@@ -71,7 +71,6 @@
 #include "coop/session/local_grants.h"
 #include "coop/session/net_pump.h"
 #include "coop/session/player_handshake.h"
-#include "coop/session/rig_ready.h"
 #include "coop/session/server_settings_sync.h"
 #include "coop/text/utf8_codec.h"
 #include "coop/session/session_manager.h"
@@ -374,8 +373,8 @@ bool StartCoopSession(const coop::net::Config& netCfg, coop::net::Refusal* why) 
             netCfg.role == coop::net::Role::Host ? "host" : "client",
             netCfg.topology == coop::net::Topology::P2P ? "p2p" : "lan-direct",
             ok ? "" : " -- START FAILED");
-    // Every host start is made in a loaded world (the boot load or the picker's load comes first).
-    if (ok && netCfg.role == coop::net::Role::Host) coop::rig_ready::Say("hosting");
+    // The host starts in a loaded level whose world may still be starting up: `rig: READY hosting` is
+    // said by host_world_settle once that world has settled, and a join waits for the same edge.
     return ok;
 }
 

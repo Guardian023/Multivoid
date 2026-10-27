@@ -13,6 +13,7 @@
 #include "ui/voice_panel.h"          // Close() on flee -- don't leave the voice panel open across the transition
 #include "coop/dev/dev_lanes.h"
 #include "coop/dev/leak_probe.h"
+#include "coop/session/host_world_settle.h"  // the host world's settle walk and its ready line
 #include "coop/dev/heap_probe.h"
 #include "coop/dev/perf_probe.h"
 #include "coop/element/element_deleter.h"
@@ -232,6 +233,9 @@ void TearDownSession(coop::net::Session& session, const char* why) {
         coop::subsystems::DisconnectSlot(session, slot);
     }
     coop::subsystems::DisconnectAll();
+    // The next session's `rig: READY hosting` is owed; the world's settle latch stays. Here and not in
+    // DisconnectAll, which also runs when a host's last client leaves and the session lives on.
+    coop::host_world_settle::OnSessionEnd();
     // Every session-scoped overlay dies here: the last lines would otherwise ride their 11 s TTL into
     // the menu, and one stale nameplate re-activates the whole HUD there through hud::IsActive(). Not
     // in DisconnectAll, which also runs on a host whose client left, and the host keeps its UI.
@@ -331,6 +335,10 @@ void Tick(coop::net::Session& session) {
     // UObject census is flat but RAM climbs; installs ucrtbase malloc/free detours on its first
     // armed tick.
     coop::dev::heap_probe::Tick();
+
+    // The host's world-settle walk, ahead of the transfer tick that holds a join for it, and ungated by
+    // the local player: a world is settling before one exists. A no-op on a client.
+    coop::host_world_settle::Tick(session);
 
     // The host's pending save-transfer chunk sends; a no-op without an active stream.
     if (session.role() == coop::net::Role::Host) coop::save_transfer::TickHost();

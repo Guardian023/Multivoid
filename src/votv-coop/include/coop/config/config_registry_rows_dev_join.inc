@@ -83,6 +83,20 @@ CFG_FLAG(replay_watch_break, "replay_watch_break", "dev", false, "VOTVCOOP_DEV_R
     "Red arm: the save-replay watch is registered on a function this game does not have.")
 CFG_FLAG(replay_post_drop, "replay_post_drop", "dev", false, "VOTVCOOP_DEV_REPLAY_POST_DROP",
     "Red arm: the save-replay watch ignores the replay.")
+CFG_FLAG(host_settle_red, "host_settle_red", "dev", false, "VOTVCOOP_HOST_SETTLE_RED",
+    "Red arm (HOST): the host's world counts as settled as soon as a gamemode exists, the old test, for "
+    "the join's hold and the start-up birth gate alike. The drill's real-conditions read "
+    "is never overridden, so it names the capture that ran too early.")
+CFG_FLAG(host_settle_drill, "host_settle_drill", "dev", false, "VOTVCOOP_HOST_SETTLE_DRILL",
+    "Drill (HOST judges): a join that meets the host's world start-up waits for it. At the join's "
+    "capture it reads the real conditions (the prop processor's phases and every container's "
+    "inventory, never overridden by host_settle_red); it requires a request that waited in the hold, "
+    "and no births dropped at the watcher's cap, then prints PASS, "
+    "INCONCLUSIVE (the join never met the start-up) or FAIL, and DONE. Lines tagged [HOST-SETTLE-DRILL].")
+CFG_FLAG(host_settle_ceiling_probe, "host_settle_ceiling_probe", "dev", false,
+    "VOTVCOOP_HOST_SETTLE_CEILING_PROBE",
+    "Probe (HOST): the settle walk never passes, as if the prop processor never finished, so the "
+    "25 s ceiling admits the world with its WARN and the held join completes.")
 CFG_FLAG(atv_adopt_break, "atv_adopt_break", "dev", false, "VOTVCOOP_DEV_ATV_ADOPT_BREAK",
     "Red arm: an announced ATV is never adopted from the world's own copy; a mirror is spawned beside it.")
 CFG_FLAG(atv_set_break, "atv_set_break", "dev", false, "VOTVCOOP_DEV_ATV_SET_BREAK",
