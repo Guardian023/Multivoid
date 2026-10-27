@@ -13,6 +13,7 @@
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/engine/engine.h"            // SpawnActor
 #include "ue_wrap/engine/engine_component.h"  // GetComponentLocation
+#include "ue_wrap/engine/engine_timeline.h"
 #include "ue_wrap/engine/hit_result.h"
 
 #include <algorithm>
@@ -39,11 +40,7 @@ int32_t  g_offButtonIndex = -1, g_offFuseIndex = -1;
 // The parts a use strikes: TArray<UPrimitiveComponent*> puzzle_buttons and fusesButtons, the lever's box, the
 // panel's first retract button.
 int32_t  g_offButtons = -1, g_offFuseSlots = -1, g_offLeverBox = -1, g_offRetract = -1;
-int32_t  g_offTimeline = -1;    // UTimelineComponent* leverTL
-// UTimelineComponent::TheTimeline's direction, run and place, as the component itself keeps them: Play and
-// Reverse write them at once, where the tower's own copy of the direction waits for the timeline's next tick.
-Bool     g_tlReverse, g_tlPlaying;
-int32_t  g_tlPosition = -1;
+int32_t  g_offTimeline = -1;    // UTimelineComponent* leverTL, read through ue_wrap/engine/engine_timeline
 // Audio components by Sound. The game names its two fuse sounds the other way round: a pull plays
 // audio_fuseInsert and an insert audio_fusePullout.
 constexpr const wchar_t* kSoundFields[] = { L"audio_click", L"audio_success", L"audio_fail", L"audio_fuseInsert",
@@ -108,19 +105,6 @@ bool ResolveMembers(void* cls) {
     g_offTimeline = need(R::FindPropertyOffset(cls, L"leverTL"), L"leverTL");
     for (int i = 0; i < kSoundCount; ++i) g_offSound[i] = need(R::FindPropertyOffset(cls, kSoundFields[i]),
                                                                kSoundFields[i]);
-    if (void* tlCls = R::FindClass(L"TimelineComponent")) {
-        const int32_t tl = R::FindPropertyOffset(tlCls, L"TheTimeline");
-        void* tlStruct = tl >= 0 ? R::PropertyInnerStruct(tlCls, L"TheTimeline") : nullptr;
-        Bool rev, play;
-        const int32_t pos = tlStruct ? R::FindPropertyOffset(tlStruct, L"Position") : -1;
-        if (tlStruct && R::FindBoolProperty(tlStruct, L"bReversePlayback", rev.off, rev.mask) &&
-            R::FindBoolProperty(tlStruct, L"bPlaying", play.off, play.mask) && pos >= 0) {
-            g_tlReverse = {tl + rev.off, rev.mask};
-            g_tlPlaying = {tl + play.off, play.mask};
-            g_tlPosition = tl + pos;
-        }
-    }
-    if (g_tlPosition < 0 && !missing) missing = L"TimelineComponent.TheTimeline";
     if (missing) {
         g_latchedOff = true;
         UE_LOGW("coord_tower: coordRadarDish_C is loaded but %ls did not resolve -- the tower reads and writes stay "
@@ -239,11 +223,10 @@ bool Read(void* tower, State& out) {
     out.opened = ReadBit(tower, g_opened);
     out.isAnim = ReadBit(tower, g_anim);
     out.leverMoving = ReadBit(tower, g_leverMoving);
-    if (void* tl = ObjectAt(tower, g_offTimeline); tl && R::IsLive(tl)) {
-        const bool reverse = ReadBit(tl, g_tlReverse);
-        const float position = *reinterpret_cast<const float*>(Base(tl) + g_tlPosition);
+    engine_timeline::State tl;
+    if (engine_timeline::Read(ObjectAt(tower, g_offTimeline), tl)) {
         // Forward and past its start, or forward and running: a fresh timeline stands forward at 0, down.
-        out.leverUp = !reverse && (ReadBit(tl, g_tlPlaying) || position > 0.0f);
+        out.leverUp = !tl.reverse && (tl.playing || tl.position > 0.0f);
     }
     const TArrayView& f = ArrayAt(tower, g_offFuses);
     out.fuseCount = static_cast<uint8_t>(f.data ? std::clamp(f.num, 0, kMaxFuses) : 0);

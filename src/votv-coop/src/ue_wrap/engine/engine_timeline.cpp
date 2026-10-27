@@ -4,6 +4,7 @@
 
 #include "ue_wrap/core/component_calls.h"
 #include "ue_wrap/core/log.h"
+#include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
 
 #include <cstdint>
@@ -28,8 +29,8 @@ bool Bit(const void* obj, const Bool& b) { return (Base(obj)[b.off] & b.mask) !=
 bool EnsureResolved() {
     if (g_resolved) return true;
     if (g_latchedOff) return false;
-    void* cls = R::FindClass(L"TimelineComponent");
-    if (!cls) return false;  // not loaded yet: asked again, no latch
+    void* cls = object_index::ClassByName(L"TimelineComponent");
+    if (!cls) return false;  // not loaded yet: asked again, one hash lookup and no walk of the object array
     const int32_t tl = R::FindPropertyOffset(cls, L"TheTimeline");
     void* st = tl >= 0 ? R::PropertyInnerStruct(cls, L"TheTimeline") : nullptr;
     Bool rev, play;
