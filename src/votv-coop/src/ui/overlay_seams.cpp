@@ -106,21 +106,10 @@ HWND ReadOutputWindow(IDXGISwapChain* sc) {
     }
 }
 
-// The descriptor read is a COM call, so it runs once per swapchain and not on every present: the
-// window is cached against the swapchain it was read from. A miss is not cached (the host retries
-// on the next frame, as its bring-up always has).
-struct WindowCache {
-    IDXGISwapChain* sc = nullptr;
-    HWND            hwnd = nullptr;
-};
-WindowCache g_window11;
-WindowCache g_window12;
-
-HWND OutputWindowOf(IDXGISwapChain* sc, WindowCache& cache) {
-    if (sc == cache.sc) return cache.hwnd;
-    const HWND hwnd = ReadOutputWindow(sc);
-    if (hwnd) { cache.sc = sc; cache.hwnd = hwnd; }
-    return hwnd;
+// The window is the bring-up's alone: it is read only while the overlay is not yet ready, as the
+// bring-up always did, and the target carries none afterwards.
+HWND BringUpWindow(IDXGISwapChain* sc) {
+    return imgui_overlay::ImguiReady() ? nullptr : ReadOutputWindow(sc);
 }
 
 uintptr_t __fastcall D3D11PresentCheckedDetour(void* viewport, int32_t syncInterval) {
@@ -129,7 +118,7 @@ uintptr_t __fastcall D3D11PresentCheckedDetour(void* viewport, int32_t syncInter
                                                 g_lastOkSc11))
     {
         overlay_backend::SelectRhi(overlay_backend::Rhi::Dx11);
-        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx11, OutputWindowOf(sc, g_window11), sc, nullptr});
+        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx11, BringUpWindow(sc), sc, nullptr});
     }
     return g_d3d11PresentTrampoline(viewport, syncInterval);
 }
@@ -140,7 +129,7 @@ uintptr_t __fastcall D3D12PresentInternalDetour(void* viewport, int32_t syncInte
                                                 g_lastOkSc12))
     {
         overlay_backend::SelectRhi(overlay_backend::Rhi::Dx12);
-        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx12, OutputWindowOf(sc, g_window12), sc, nullptr});
+        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx12, BringUpWindow(sc), sc, nullptr});
     }
     return g_d3d12PresentTrampoline(viewport, syncInterval);
 }
@@ -162,11 +151,11 @@ D3D12ResizeInternalFn g_d3d12ResizeTrampoline = nullptr;
 // original stays with the caller (the two take different arguments), and `sizeNote` is
 // pre-formatted because only one seam has any size to report.
 void EngineResizeBracket(const char* which, size_t scOff, overlay_backend::Rhi rhi,
-                         IDXGISwapChain*& lastOk, WindowCache& window,
+                         IDXGISwapChain*& lastOk,
                          void* viewport, const char* sizeNote) {
     IDXGISwapChain* sc = ValidatedSwapChain(viewport, scOff, which, lastOk);
     if (sc && imgui_overlay::ImguiReady()) {
-        overlay_backend::OnResizeRecreate({rhi, OutputWindowOf(sc, window), sc, nullptr});
+        overlay_backend::OnResizeRecreate({rhi, nullptr, sc, nullptr});
         // Resizes are rare, so one line each is not spam, and it is the one line that says the
         // bracket ran, with or without RivaTuner in the process.
         UE_LOGI("imgui_overlay: %s%s -- render target rebuilt on %s", which, sizeNote,
@@ -185,7 +174,7 @@ void __fastcall D3D11ResizeDetour(void* viewport, uint32_t sizeX, uint32_t sizeY
     _snprintf_s(note, sizeof(note), _TRUNCATE, " (%ux%u fullscreen=%u fmt=%d)", sizeX, sizeY,
                 bFullscreen, pixelFormat);
     EngineResizeBracket("FD3D11Viewport::Resize", ue_wrap::profile::kD3D11Viewport_SwapChain,
-                        overlay_backend::Rhi::Dx11, g_lastOkSc11, g_window11, viewport, note);
+                        overlay_backend::Rhi::Dx11, g_lastOkSc11, viewport, note);
 }
 
 void __fastcall D3D12ResizeDetour(void* viewport) {
@@ -195,7 +184,7 @@ void __fastcall D3D12ResizeDetour(void* viewport) {
     // residue.
     EngineResizeBracket("FD3D12Viewport::ResizeInternal",
                         ue_wrap::profile::kD3D12Viewport_SwapChain, overlay_backend::Rhi::Dx12,
-                        g_lastOkSc12, g_window12, viewport, "");
+                        g_lastOkSc12, viewport, "");
 }
 
 }  // namespace

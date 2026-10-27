@@ -21,7 +21,8 @@ enum class Rhi : uint8_t { None, Dx11, Dx12, Vulkan };
 
 struct VulkanFrame;  // defined with the Vulkan backend
 
-// What one overlay frame draws into. The DX seams fill hwnd and dxgi; Vulkan fills vk.
+// What one overlay frame draws into. The DX seams fill dxgi, and hwnd only until the overlay is up
+// (the bring-up is its one reader); Vulkan fills vk.
 struct FrameTarget {
     Rhi            rhi;
     HWND           hwnd;
