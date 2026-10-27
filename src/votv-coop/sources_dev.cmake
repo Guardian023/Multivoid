@@ -104,6 +104,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/world_singleton_parity.cpp
     src/coop/dev/function_lookup_parity.cpp
     src/coop/dev/container_opener_probe.cpp
+    src/coop/dev/container_writer_probe.cpp
     src/coop/dev/container_view_drill.cpp
     src/coop/dev/dev_lanes.cpp
     src/coop/dev/physmods_drill.cpp

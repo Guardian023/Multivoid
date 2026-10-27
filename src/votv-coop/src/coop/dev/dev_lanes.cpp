@@ -9,6 +9,7 @@
 #include "coop/dev/client_model_probe.h"  // kel-vs-scientist side-by-side visual check (ini client_model_probe=1)
 #include "coop/dev/container_join_drill.h"  // [dev] an edit no world-ready peer could take reaches the joiner
 #include "coop/dev/container_opener_probe.h"  // [dev] the actors far containers open through, on real objects
+#include "coop/dev/container_writer_probe.h"  // [dev] a container writer the container lane never saw
 #include "coop/dev/container_selftest.h"  // [dev] container-lane e2e circle (organic addLoot)
 #include "coop/dev/container_view_drill.h"  // [dev] a container view closes as its opener leaves reach
 #include "coop/dev/death_seam_census.h"  // [dev] every element end the death seam announces
@@ -216,6 +217,7 @@ void EndSession() {
     coop::dev::sack_drill::OnDisconnect();  // [dev] the sack and the counts belong to one session
     coop::dev::drone_call_drill::OnDisconnect();  // [dev] the console, the legs and the host's watch belong to one world
     coop::dev::dronesack_drill::OnDisconnect();  // [dev] the sack, the crate and the records belong to one session
+    coop::dev::container_writer_probe::OnDisconnect();  // [dev] the readings belong to one world
     coop::dev::server_upgrade_drill::OnDisconnect();  // [dev] the box and the legs belong to one world
     coop::dev::server_drill::OnDisconnect();  // [dev] the same for the server break drill
     coop::dev::camera_drill::OnDisconnect();  // [dev] a rejoin's client walks to the camera again
@@ -329,6 +331,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::container_selftest::Tick();  // [dev] the container-lane e2e circle (a single bool read when off)
     coop::dev::container_join_drill::Tick(&session);  // [dev] the container join drill (a single bool read when off)
     coop::dev::container_opener_probe::Tick(&session);  // [dev] far containers' openers and the reach to them (latched read when off)
+    coop::dev::container_writer_probe::Tick(&session);  // [dev] a container changed by a writer nothing watches (latched read when off)
     coop::dev::container_view_drill::Tick(&session);  // [dev] the view-close drill (a single bool read when off)
     coop::dev::physmods_drill::Tick(&session);  // [dev] the module-plug drill (a single bool read when off)
     coop::dev::throw_drill::Tick(&session);  // [dev] the throw drill (latched string compares when off)
