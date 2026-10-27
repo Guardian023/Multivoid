@@ -115,8 +115,8 @@ void Window(coop::net::Session& session) {
     } else if (!LateLoad::On()) {
         fails.Add("arm giveup needs pile_late_load=1, which destroys the native that never loads");
     }
-    if (LateLoad::On() && !chosen) fails.Add("the late-load seam's clump never deferred");
-    if (LateLoad::On() && chosen) {
+    if (LateLoad::ChoseThisSession() && !chosen) fails.Add("the late-load seam's clump never deferred");
+    if (LateLoad::ChoseThisSession() && chosen) {
         const auto it = g_deferred.find(chosen);
         const bool known = it != g_deferred.end();
         const bool gaveUpIt = known && it->second.gaveUpAt != 0;

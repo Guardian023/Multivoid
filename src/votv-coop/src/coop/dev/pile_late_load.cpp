@@ -28,6 +28,10 @@ ue_wrap::CachedObjRef g_clump;
 ue_wrap::FVector g_saved{};
 uint32_t g_eid = 0;
 uint64_t g_tickNo = 0, g_deferredTick = 0;
+// One clump per PROCESS: a rehost's second join loads a save whose clumps the first join already
+// placed, and a seam acting there could choose one the host no longer sends.
+bool g_usedInProcess = false;
+bool g_choseThisSession = false;
 
 }  // namespace
 
@@ -38,13 +42,15 @@ bool On() {
 }
 
 void NoteLoadCaught(void* clump) {
-    if (!On() || g_phase != Phase::None || !clump) return;
+    if (!On() || g_usedInProcess || g_phase != Phase::None || !clump) return;
     if (!ue_wrap::engine::TryGetActorLocation(clump, g_saved)) return;
     ue_wrap::FVector aside = g_saved;
     aside.X += kAsideCm;
     if (!ue_wrap::engine::SetActorLocation(clump, aside)) return;
     g_clump.Set(clump);
     g_phase = Phase::Aside;
+    g_usedInProcess = true;
+    g_choseThisSession = true;
     UE_LOGI("[PILE-LATE-LOAD] test seam: save-loaded clump kept aside at load, saved at (%.1f,%.1f,%.1f) -- an "
             "artificial late load, not a natural deferral", g_saved.X, g_saved.Y, g_saved.Z);
 }
@@ -60,6 +66,7 @@ void NoteDeferred(uint32_t eid, const ue_wrap::FVector& key, bool wantClump) {
 }
 
 uint32_t ChosenEid() { return g_eid; }
+bool ChoseThisSession() { return g_choseThisSession; }
 
 void Tick() {
     if (!On()) return;
@@ -89,6 +96,7 @@ void OnDisconnect() {
     g_phase = Phase::None;
     g_eid = 0;
     g_deferredTick = 0;
+    g_choseThisSession = false;
 }
 
 }  // namespace coop::dev::pile_late_load

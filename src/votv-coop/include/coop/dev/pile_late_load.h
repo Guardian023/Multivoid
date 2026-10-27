@@ -29,6 +29,7 @@ void NoteDeferred(uint32_t eid, const ue_wrap::FVector& key, bool wantClump);
 
 // The chosen clump's eid; 0 until its row has deferred.
 uint32_t ChosenEid();
+bool ChoseThisSession();  // a clump was kept aside in this session (the seam acts once per process)
 
 // Once per pump tick; acts on the tick after the deferral.
 void Tick();
