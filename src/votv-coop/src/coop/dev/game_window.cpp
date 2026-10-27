@@ -2,6 +2,8 @@
 
 #include "coop/dev/game_window.h"
 
+#include "coop/input/game_window_proc.h"
+
 namespace coop::dev::game_window {
 namespace {
 
@@ -16,6 +18,9 @@ BOOL CALLBACK PickThreadWindow(HWND h, LPARAM lp) {
 }  // namespace
 
 HWND GameWindow() {
+    // The window the mod subclasses is the one its keys and messages travel through, so it is the
+    // one to post to; the thread scan below answers only before that subclass exists.
+    if (void* subclassed = coop::input::game_window_proc::Hwnd()) return static_cast<HWND>(subclassed);
     HWND found = nullptr;
     ::EnumThreadWindows(::GetCurrentThreadId(), &PickThreadWindow, reinterpret_cast<LPARAM>(&found));
     return found;

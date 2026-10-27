@@ -11,7 +11,8 @@
 
 namespace coop::dev::game_window {
 
-// The first visible top-level window of the calling (game) thread with a usable client area, or null. Deterministic
+// The window the mod subclasses once it is held, else the first visible top-level window of the calling (game)
+// thread with a usable client area, or null. Deterministic
 // where the foreground window is not: an unattended run can have another window focused.
 HWND GameWindow();
 
