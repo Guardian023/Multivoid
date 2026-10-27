@@ -210,7 +210,10 @@ std::uintptr_t ResolveLoaderSlot(const char* name) {
     if (!store || store + 7 > limit) return 0;
     std::int32_t rel;
     std::memcpy(&rel, reinterpret_cast<const void*>(store + 3), sizeof rel);
-    return store + 7 + rel;
+    const std::uintptr_t slot = store + 7 + rel;
+    // SwapSlot's exchange is atomic only on an aligned pointer; the loader's table is one, so anything else is a
+    // wrong match.
+    return (slot & 7) == 0 ? slot : 0;
 }
 
 bool ReadViewport(void* viewport, ViewportState& out) {
