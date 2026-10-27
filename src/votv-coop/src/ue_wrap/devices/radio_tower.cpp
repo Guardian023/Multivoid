@@ -33,7 +33,7 @@ struct Bool { int32_t off = -1; uint8_t mask = 0; };
 
 CachedObjRef g_cls;             // radiotower_C; a class the map loads, so a new world may load a new one
 CachedObjRef g_tower;           // the gamemode's radiotower
-Bool     g_broken, g_anim;
+Bool     g_broken, g_anim, g_skipPuzzle;
 int32_t  g_offFuses = -1;       // TArray<uint8>
 int32_t  g_offCells = -1;       // TArray<bool> puzzleData
 int32_t  g_offSize = -1;        // FIntPoint puzzleSize
@@ -90,6 +90,7 @@ bool ResolveMembers(void* cls) {
     };
     needBool(g_broken, L"isBroken");
     needBool(g_anim, L"animation");
+    needBool(g_skipPuzzle, L"skipPuzzle");
     g_offFuses = need(R::FindPropertyOffset(cls, L"fuses"), L"fuses");
     g_offCells = need(R::FindPropertyOffset(cls, L"puzzleData"), L"puzzleData");
     g_offSize = need(R::FindPropertyOffset(cls, L"puzzleSize"), L"puzzleSize");
@@ -214,6 +215,7 @@ bool Read(void* tower, State& out) {
     out = State{};
     out.isBroken = ReadBit(tower, g_broken);
     out.animation = ReadBit(tower, g_anim);
+    out.skipPuzzle = ReadBit(tower, g_skipPuzzle);
     engine_timeline::State tl;
     if (engine_timeline::Read(LiveObjectAt(tower, g_offLeverTl), tl)) {
         out.leverPlaying = tl.playing;
@@ -330,6 +332,23 @@ bool PartLocation(void* tower, const LookAt& at, FVector& out) {
     if (!part) return false;
     out = engine::GetComponentLocation(part);
     return true;
+}
+
+bool InsertFuse(void* tower, void* player, int32_t slot, void* fuse) {
+    if (!Usable(tower) || !player || !fuse) return false;
+    const LookAt at{Part::Fuse, slot};
+    void* part = PartComponent(tower, at);
+    void* fn = R::FindDispatchFunctionCached(R::ClassOf(tower), L"playerUsedOn");
+    if (!part || !fn) return false;
+    const SavedLook saved = SaveLook(tower);
+    WriteLook(tower, at);
+    const FVector where = engine::GetComponentLocation(part);
+    ParamFrame f(fn);
+    // radiotower playerUsedOn (:741) reads the player, the hit's component and holdObject; holdPropName stays empty.
+    const bool ok = f.valid() && f.Set<void*>(L"player", player) && hit_result::Write(f, L"hit", tower, part, where) &&
+                    f.Set<void*>(L"lookAtComponent", part) && f.Set<void*>(L"holdObject", fuse) && Call(tower, f);
+    if (R::IsLive(tower)) RestoreLook(tower, saved);
+    return ok;
 }
 
 }  // namespace ue_wrap::radio_tower

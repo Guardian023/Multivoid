@@ -30,6 +30,8 @@ struct State {
     uint8_t height = 0;             // puzzleSize.Y; cell i sits at row i / height, column i % height
     uint8_t cellCount = 0;          // puzzleData.Num
     bool    cells[kMaxCells] = {};  // puzzleData; the puzzle is solved when no cell is false
+    bool    skipPuzzle = false;     // the tower's BeginPlay read the game rule enableLightsOut as off: a scramble sets
+                                    // every cell and breaks, and the lever repairs with no press
 };
 
 // The gamemode's radiotower, or null while the gamemode or the tower is not there or the wrapper is latched off.
@@ -90,5 +92,10 @@ bool Use(void* tower, void* player, const LookAt& at);
 
 // The world location of the part `at` names, where a use reaches. False while the part is not there.
 bool PartLocation(void* tower, const LookAt& at, FVector& out);
+
+// An insert as `player` makes it: `Fuse` slot `slot` written as the look-at, then playerUsedOn(player, a hit on the
+// slot's component, that component, `fuse`), then the look-at the tower held put back. False while the slot is not
+// there or the call did not run.
+bool InsertFuse(void* tower, void* player, int32_t slot, void* fuse);
 
 }  // namespace ue_wrap::radio_tower
