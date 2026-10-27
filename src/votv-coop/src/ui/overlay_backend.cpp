@@ -1,10 +1,9 @@
 // ui/overlay_backend.cpp -- the RHI dispatcher behind ui/overlay_backend.h.
 //
-// Owns exactly one concept: WHICH per-RHI implementation is live. The first
-// present's CaptureDevice picks it by what the game's swapchain actually is:
-// a DX11 device comes straight off the swapchain, while DX12 additionally has
-// to capture its presenting command queue first (a few frames -- see
-// overlay_backend_dx12_capture.cpp).
+// Owns exactly one concept: WHICH per-RHI implementation is live. The engine seam that fired
+// (the D3D11 or the D3D12 present detour) names it through SelectRhi before the frame runs;
+// every entry below forwards to that RHI's ops table. DX12 additionally has to capture its
+// presenting command queue first (a few frames -- see overlay_backend_dx12_capture.cpp).
 
 #include "ui/overlay_backend.h"
 
@@ -19,83 +18,66 @@
 namespace ui::overlay_backend {
 namespace {
 
-enum class Active { None, Dx11, Dx12 };
-Active g_active = Active::None;  // render-thread-owned (all writers run in the Present detour)
+const BackendOps* g_ops = nullptr;  // render-thread-owned (all writers run in the Present detour)
 
 // The dx halves take a FrameTarget; until the seams fill one, the swapchain is wrapped here.
 FrameTarget Tgt(IDXGISwapChain* sc) { return {Rhi::None, nullptr, sc, nullptr}; }
 
 }  // namespace
 
-const char* Kind() {
-    if (g_active == Active::Dx11) return dx11::Ops().name;
-    if (g_active == Active::Dx12) return dx12::Ops().name;
-    return nullptr;
+void SelectRhi(Rhi rhi) {
+    switch (rhi) {
+        case Rhi::Dx11: g_ops = &dx11::Ops(); break;
+        case Rhi::Dx12: g_ops = &dx12::Ops(); break;
+        default:        g_ops = nullptr; break;
+    }
 }
 
+const char* Kind() { return g_ops ? g_ops->name : nullptr; }
+
 bool CaptureDevice(IDXGISwapChain* sc) {
-    if (dx11::Ops().capture(Tgt(sc))) {
-        g_active = Active::Dx11;
-        return true;
-    }
-    if (dx12::Ops().capture(Tgt(sc))) {  // true only once the presenting queue is CONFIRMED
-        g_active = Active::Dx12;
-        return true;
-    }
-    return false;
+    return g_ops && g_ops->capture(Tgt(sc));  // true only once the presenting queue is CONFIRMED
 }
 
 void AbandonCapture() {
-    if (g_active == Active::Dx11) dx11::Ops().abandon();
-    else if (g_active == Active::Dx12) dx12::Ops().abandon();
-    g_active = Active::None;
+    if (g_ops) g_ops->abandon();
 }
 
 bool InitRenderer(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) return dx11::Ops().init(Tgt(sc));
-    if (g_active == Active::Dx12) return dx12::Ops().init(Tgt(sc));
-    return false;
+    return g_ops && g_ops->init(Tgt(sc));
 }
 
 void NewFrame() {
-    if (g_active == Active::Dx11) dx11::Ops().newFrame();
-    else if (g_active == Active::Dx12) dx12::Ops().newFrame();
+    if (g_ops) g_ops->newFrame();
 }
 
 void InvalidateDeviceObjects() {
-    if (g_active == Active::Dx11) dx11::Ops().invalidate();
-    else if (g_active == Active::Dx12) dx12::Ops().invalidate();
+    if (g_ops) g_ops->invalidate();
 }
 
 void EnsureTarget(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) dx11::Ops().ensureTarget(Tgt(sc));
-    else if (g_active == Active::Dx12) dx12::Ops().ensureTarget(Tgt(sc));
+    if (g_ops) g_ops->ensureTarget(Tgt(sc));
 }
 
 void RenderDrawData(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) dx11::Ops().render(Tgt(sc));
-    else if (g_active == Active::Dx12) dx12::Ops().render(Tgt(sc));
+    if (g_ops) g_ops->render(Tgt(sc));
 }
 
+// The resize pair is the DX resize bracket's mechanism: a half without one leaves it null.
 void OnResizeRelease() {
-    if (g_active == Active::Dx11) dx11::Ops().resizeRelease();
-    else if (g_active == Active::Dx12) dx12::Ops().resizeRelease();
+    if (g_ops && g_ops->resizeRelease) g_ops->resizeRelease();
 }
 
 void OnResizeRecreate(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) dx11::Ops().resizeRecreate(Tgt(sc));
-    else if (g_active == Active::Dx12) dx12::Ops().resizeRecreate(Tgt(sc));
+    if (g_ops && g_ops->resizeRecreate) g_ops->resizeRecreate(Tgt(sc));
 }
 
 void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH) {
-    if (g_active == Active::Dx11) return dx11::Ops().textureFromFile(path, outW, outH);
-    if (g_active == Active::Dx12) return dx12::Ops().textureFromFile(path, outW, outH);
-    return nullptr;
+    return g_ops ? g_ops->textureFromFile(path, outW, outH) : nullptr;
 }
 
 void DestroyTexture(void* id) {
-    if (g_active == Active::Dx11) dx11::Ops().destroyTexture(id);
-    else if (g_active == Active::Dx12) dx12::Ops().destroyTexture(id);
+    if (g_ops) g_ops->destroyTexture(id);
 }
 
 void InstallCreationProbe() { dx12_capture::InstallCreationProbe(); }

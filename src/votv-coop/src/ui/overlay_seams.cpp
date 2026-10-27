@@ -9,6 +9,7 @@
 #include "overlay_seams.h"
 
 #include "ui/overlay_backend.h"
+#include "overlay_backend_internal.h"
 
 #include "ue_wrap/core/hook.h"
 #include "ue_wrap/core/log.h"
@@ -97,7 +98,10 @@ uintptr_t __fastcall D3D11PresentCheckedDetour(void* viewport, int32_t syncInter
     if (IDXGISwapChain* sc = ValidatedSwapChain(viewport, ue_wrap::profile::kD3D11Viewport_SwapChain,
                                                 "FD3D11Viewport::PresentChecked",
                                                 g_lastOkSc11))
+    {
+        overlay_backend::SelectRhi(overlay_backend::Rhi::Dx11);
         imgui_overlay::OverlayFrame(sc);
+    }
     return g_d3d11PresentTrampoline(viewport, syncInterval);
 }
 
@@ -105,7 +109,10 @@ uintptr_t __fastcall D3D12PresentInternalDetour(void* viewport, int32_t syncInte
     if (IDXGISwapChain* sc = ValidatedSwapChain(viewport, ue_wrap::profile::kD3D12Viewport_SwapChain,
                                                 "FD3D12Viewport::PresentInternal",
                                                 g_lastOkSc12))
+    {
+        overlay_backend::SelectRhi(overlay_backend::Rhi::Dx12);
         imgui_overlay::OverlayFrame(sc);
+    }
     return g_d3d12PresentTrampoline(viewport, syncInterval);
 }
 

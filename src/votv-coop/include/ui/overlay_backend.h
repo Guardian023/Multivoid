@@ -1,20 +1,28 @@
 // ui/overlay_backend.h -- the RHI-specific half of the ImGui overlay.
 //
-// imgui_overlay.cpp owns the hooks, the window-message handler and surface compositing (the platform layer); this
-// interface owns everything that touches a concrete D3D device: device capture off the game's
-// swapchain, the ImGui renderer backend, the render target, and texture creation for UI surfaces.
-// One implementation per RHI -- overlay_backend_dx11.cpp and overlay_backend_dx12.cpp, both
-// shipped -- selected at first present by what the game's swapchain actually is. No RHI types
-// cross this boundary.
+// imgui_overlay.cpp owns the window-message handler and surface compositing (the platform layer);
+// this interface owns everything that touches a concrete graphics device: device capture off the
+// game's swapchain, the ImGui renderer backend, the render target, and texture creation for UI
+// surfaces. One implementation per RHI -- overlay_backend_dx11.cpp and overlay_backend_dx12.cpp,
+// both shipped -- selected by the engine seam that fired (SelectRhi, before each frame), not
+// guessed from the swapchain. No RHI types cross this boundary.
 
 #pragma once
+
+#include <cstdint>
 
 struct IDXGISwapChain;
 
 namespace ui::overlay_backend {
 
-// Which renderer is live -- "DX11" / "DX12" once bring-up committed, nullptr
-// while pending. Feeds the RHI indicator (F1 menu line + the bring-up log).
+enum class Rhi : uint8_t;
+
+// The engine seam that fired names its RHI before it runs the frame; every entry below forwards
+// to that RHI's backend. Render thread only.
+void SelectRhi(Rhi rhi);
+
+// The selected RHI's name -- "DX11" / "DX12" -- nullptr until a seam selected one. Feeds the RHI
+// indicator (F1 menu line + the bring-up log).
 const char* Kind();
 
 // First-present bring-up, step 1: capture the device/context off the game's
