@@ -302,7 +302,7 @@ void RadioApply(void* tower, const FuseTowerRow& c, const ApplyCtx& x) {
             if (live) RT::Play(tower, RT::Sound::Fail);
             ++edges.fails;
         }
-        RT::PlayLever(tower, RT::Lever::Confirm, leverUp);
+        if (live) RT::PlayLever(tower, RT::Lever::Confirm, leverUp);
         ++edges.levers;
     }
     // The reset lever's timeline event plays the scramble and click sounds, which a tower's first row must not
@@ -477,16 +477,12 @@ const char* CanPull(Kind kind, void* tower, const View& view, int32_t slot) {
 }
 
 const char* CanInsert(Kind kind, void* tower, const View& view, int32_t slot) {
-    // The radio tower's insert is ignored while a lever runs (radiotower playerUsedOn :655); the fuse slots of a
-    // coordinate tower are only there to reach while its panel stands still.
+    // The radio tower's insert is ignored while a lever runs (radiotower playerUsedOn :655); the coordinate tower's
+    // has no such test (coordRadarDish :616-665), only the held class and the slot.
     if (kind == Kind::Radio) {
         RT::State st;
         if (!RT::Read(tower, st)) return "the tower does not read";
         if (st.animation) return "its lever is moving";
-    } else {
-        CT::State st;
-        if (!CT::Read(tower, st)) return "the tower does not read";
-        if (st.isAnim) return "its panel is moving";
     }
     if (slot < 0 || slot >= view.fuseCount || view.fuses[slot] != 0) return "that fuse slot is not empty on the host";
     return nullptr;

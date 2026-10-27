@@ -39,11 +39,10 @@ void QueueConnectBroadcastForSlot(int slot);
 // tower for all of them. A refusal changes none, and is answered by HostAnswerOwed.
 void HostSendNow();
 
-// HOST: a refusal's answer is owed to its sender alone (the rows hold no news for the others). It is sent once at
-// the next tick, however many refusals came; Flush sends it now, when a claim's refusal is about to overwrite the
-// refused seq the unsent answer carries.
+// HOST: a refusal's answer is owed to its sender alone (the rows hold no news for the others). It goes at the next
+// tick: one answer for the refusals that carry no claim, and one more for each refused claim, each carrying that
+// claim's seq (coop/world/fuse_tower_ops FillAcks); one that could not be sent stays owed.
 void HostAnswerOwed(uint8_t slot);
-void HostAnswerFlush(uint8_t slot);
 
 // CLIENT: the rows are being run on this client's towers; a use then is theirs, not a player's.
 bool Applying();

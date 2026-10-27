@@ -92,7 +92,17 @@ bool     g_shortWarned = false;
 // ---- the host ------------------------------------------------------------------------------------------------
 
 coop::roster_ledger::PerSlotState<uint16_t> g_ack;
-coop::roster_ledger::PerSlotState<uint16_t> g_refused;
+// A slot's refused claim seqs, oldest first. The rows carry one refused seq for a slot, so each is told in an answer
+// of its own and popped once that answer's send was taken (RefusedTold). One queue-full refusal pushes at most
+// kMaxQueued + 1, the op queue's cap.
+constexpr size_t kRefusedCap = kMaxQueued + 1;
+struct RefusedFifo {
+    uint16_t seq[kRefusedCap] = {};
+    uint8_t  head = 0, count = 0;
+    uint16_t At(size_t i) const { return seq[(head + i) % kRefusedCap]; }
+};
+coop::roster_ledger::PerSlotState<RefusedFifo> g_refused;
+uint64_t g_refusedLost = 0;
 struct Waiting { FuseTowerPayload p; uint64_t arrivedMs; };
 std::deque<Waiting> g_waiting[coop::net::kMaxPeers];
 coop::net::IntentBucket g_rate[coop::net::kMaxPeers];
@@ -174,7 +184,22 @@ bool IsUse(uint8_t op) {
            op == coop::net::kFuseTowerOpRetract || op == coop::net::kFuseTowerOpReset;
 }
 
-// A refused op: counted, warned once per kind of fault per slot, a claim named in the rows, a spent fuse given
+// A claim refused to `slot`: its seq joins the queue its answers drain. A full queue (answers the towers' read has
+// held back) loses its oldest, counted and said.
+void PushRefused(uint8_t slot, uint16_t seq) {
+    RefusedFifo& f = g_refused[slot];
+    if (f.count == kRefusedCap) {
+        f.head = static_cast<uint8_t>((f.head + 1) % kRefusedCap);
+        --f.count;
+        if (++g_refusedLost <= 3 || g_refusedLost % 100 == 0)
+            UE_LOGE("fuse_tower: slot %u has %zu refused claims unanswered -- the oldest is dropped (%llu so far)",
+                    slot, kRefusedCap, static_cast<unsigned long long>(g_refusedLost));
+    }
+    f.seq[(f.head + f.count) % kRefusedCap] = seq;
+    ++f.count;
+}
+
+// A refused op: counted, warned once per kind of fault per slot, a claim queued for its answer, a spent fuse given
 // back, and the answer owed to the sender alone (the rows carry no news for the others).
 void Refused(uint8_t sender, const FuseTowerPayload& p, const char* refusal, Fault why,
              const EL::IntentSubject& reach, bool spent, void* tower) {
@@ -184,7 +209,7 @@ void Refused(uint8_t sender, const FuseTowerPayload& p, const char* refusal, Fau
         UE_LOGW("fuse_tower: host refused slot %u's %s of tower %d (seq %u) -- %s (%.0f uu, allowed %.0f); "
                 "the rest of this kind from this slot are counted, not said", sender, OpName(p.op), p.tower, p.seq,
                 refusal, reach.distUU, reach.reachUU);
-    if (IsClaim(p.op)) g_refused[sender] = p.seq;
+    if (IsClaim(p.op)) PushRefused(sender, p.seq);
     if (spent) Refund(sender, KindOf(p), tower);
     coop::fuse_tower_rows::HostAnswerOwed(sender);
 }
@@ -247,8 +272,6 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     } else if (!refusal && IsUse(p.op)) {
         refuse(FK::CanUse(kind, tower, p.op), Fault::Rule);
     }
-    // A claim's refusal overwrites the sender's last refused seq, so an answer still unsent goes first.
-    if (refusal && IsClaim(p.op)) coop::fuse_tower_rows::HostAnswerFlush(sender);
     g_ack[sender] = p.seq;
     if (refusal) {
         Refused(sender, p, refusal, why, reach, spent, tower);
@@ -310,15 +333,14 @@ void HostOffer(coop::net::Session* s, const FuseTowerPayload& p, uint8_t sender)
         g_rate[sender].Refund(kOpBudget);  // a wait runs nothing
     }
     if (q.size() >= kMaxQueued) {
-        // Every waiting op refused with the newest, in order: a claim's own rows name it refused, so a pull's fuse is
-        // reaped, and an insert's spend is refunded. One answer, to the sender alone, once the loop has run.
-        coop::fuse_tower_rows::HostAnswerFlush(sender);
+        // Every waiting op refused with the newest, in order: each claim is queued as refused, so a pull's fuse is
+        // reaped, and an insert's spend is refunded. Its answers go to the sender alone, one a claim.
         const size_t n = q.size();
         q.push_back(w);
         for (const Waiting& r : q) {
             if (SeqAfter(r.p.seq, g_ack[sender])) g_ack[sender] = r.p.seq;
             if (!IsClaim(r.p.op)) continue;
-            g_refused[sender] = r.p.seq;
+            PushRefused(sender, r.p.seq);
             if (r.p.op == coop::net::kFuseTowerOpInsert && TakeSpend(sender, KindOf(r.p), r.p.tower))
                 if (void* tower = FK::Find(KindOf(r.p), r.p.tower))
                     Refund(sender, KindOf(r.p), tower);
@@ -593,11 +615,31 @@ void OnOp(const FuseTowerPayload& p, uint8_t sender) {
     HostOffer(s, p, sender);
 }
 
+// A slot with refused claims queued is told the oldest, and acknowledged only up to the one before the next: a claim
+// past it, refused or taken, is told by a later answer, so the client does not drop it as taken meanwhile.
 void FillAcks(FuseTowerPayload& p) {
     for (int i = 0; i < coop::net::kMaxPeers; ++i) {
-        p.ack[i] = g_ack[i];
-        p.refused[i] = g_refused[i];
+        const RefusedFifo& f = g_refused[i];
+        p.ack[i] = f.count > 1 ? static_cast<uint16_t>(f.At(1) - 1) : g_ack[i];
+        p.refused[i] = f.count ? f.At(0) : 0;
     }
+}
+
+void RefusedTold(uint8_t slot) {
+    if (slot >= coop::net::kMaxPeers) return;
+    RefusedFifo& f = g_refused[slot];
+    if (!f.count) return;
+    f.head = static_cast<uint8_t>((f.head + 1) % kRefusedCap);
+    --f.count;
+}
+
+bool RefusedPending(uint8_t slot) { return slot < coop::net::kMaxPeers && g_refused[slot].count != 0; }
+
+uint8_t RefusedSlots() {
+    uint8_t mask = 0;
+    for (int i = 1; i < coop::net::kMaxPeers; ++i)
+        if (g_refused[i].count) mask = static_cast<uint8_t>(mask | (1u << i));
+    return mask;
 }
 
 void OnAcks(uint16_t ack, uint16_t refused) {
@@ -673,7 +715,7 @@ void OnDisconnect() {
     g_seq = g_lastAck = 0;
     g_pullTower = g_insertTower = nullptr;
     g_sent = g_reaped = g_taken = g_refusedCount = g_refunds = g_queuesFull = g_outOfReach = g_rollsRefused = 0;
-    g_staleSeqs = 0;
+    g_staleSeqs = g_refusedLost = 0;
 }
 
 }  // namespace coop::fuse_tower_ops

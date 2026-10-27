@@ -105,18 +105,24 @@ uint8_t  g_answerOwed = 0;  // a refusal's answer, owed to these slots alone
 uint64_t g_broadcasts = 0;
 
 // The rows with every slot's acknowledgement: to `onlySlot`, or to every peer when a tower or an acknowledgement
-// changed since the last broadcast. False when the towers did not read (nothing was sent).
+// changed since the last broadcast. False when the towers did not read or a slot's send was not taken (nothing
+// went). The refused claim an answer carries is told once its send was taken, and leaves the slot's queue.
 bool HostSendRows(coop::net::Session* s, int onlySlot = -1) {
     FuseTowerPayload p{};
     if (!ReadRows(p)) return false;
     coop::fuse_tower_ops::FillAcks(p);
     if (onlySlot >= 0) {
-        s->SendReliableToSlot(onlySlot, coop::net::ReliableKind::FuseTowerState, &p, sizeof(p));
+        if (!s->SendReliableToSlot(onlySlot, coop::net::ReliableKind::FuseTowerState, &p, sizeof(p))) return false;
+        coop::fuse_tower_ops::RefusedTold(static_cast<uint8_t>(onlySlot));
         return true;
     }
     if (!g_acksDirty && g_haveSent && SameRows(p, g_lastSent)) return true;
-    s->SendReliable(coop::net::ReliableKind::FuseTowerState, &p, sizeof(p));
-    g_answerOwed = 0;  // every slot's acknowledgement rode this broadcast
+    const bool taken = s->SendReliable(coop::net::ReliableKind::FuseTowerState, &p, sizeof(p));
+    if (taken) {
+        // Every slot's acknowledgement and oldest refused claim rode this broadcast; the rest are still owed.
+        for (uint8_t slot = 1; slot < coop::net::kMaxPeers; ++slot) coop::fuse_tower_ops::RefusedTold(slot);
+        g_answerOwed = coop::fuse_tower_ops::RefusedSlots();
+    }
     if (++g_broadcasts <= 3 || !SameRows(p, g_lastSent))
         UE_LOGI("fuse_tower: host rows #%llu (%u towers)", static_cast<unsigned long long>(g_broadcasts), p.count);
     g_lastSent = p;
@@ -125,11 +131,16 @@ bool HostSendRows(coop::net::Session* s, int onlySlot = -1) {
     return true;
 }
 
-// The answers owed to refused senders, each to its slot alone; one the towers could not be read for stays owed.
+// The answers owed to refused senders, each to its slot alone and one for each refused claim; what the towers could
+// not be read for, or a send did not take, stays owed for the next tick.
 void HostPayAnswers(coop::net::Session* s) {
-    for (int slot = 1; g_answerOwed && slot < coop::net::kMaxPeers; ++slot)
-        if ((g_answerOwed & (1u << slot)) && HostSendRows(s, slot))
-            g_answerOwed = static_cast<uint8_t>(g_answerOwed & ~(1u << slot));
+    for (uint8_t slot = 1; g_answerOwed && slot < coop::net::kMaxPeers; ++slot) {
+        if (!(g_answerOwed & (1u << slot))) continue;
+        bool sent;
+        do sent = HostSendRows(s, slot);
+        while (sent && coop::fuse_tower_ops::RefusedPending(static_cast<uint8_t>(slot)));
+        if (sent) g_answerOwed = static_cast<uint8_t>(g_answerOwed & ~(1u << slot));
+    }
 }
 
 void HostServeOwed(coop::net::Session* s) {
@@ -338,13 +349,6 @@ void HostSendNow() {
 
 void HostAnswerOwed(uint8_t slot) {
     if (slot > 0 && slot < coop::net::kMaxPeers) g_answerOwed = static_cast<uint8_t>(g_answerOwed | (1u << slot));
-}
-
-void HostAnswerFlush(uint8_t slot) {
-    auto* s = Connected();
-    if (!s || s->role() != coop::net::Role::Host || slot == 0 || slot >= coop::net::kMaxPeers) return;
-    if ((g_answerOwed & (1u << slot)) && HostSendRows(s, slot))
-        g_answerOwed = static_cast<uint8_t>(g_answerOwed & ~(1u << slot));
 }
 
 bool Applying() { return g_applying; }

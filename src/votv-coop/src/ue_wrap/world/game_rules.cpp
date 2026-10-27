@@ -3,6 +3,7 @@
 #include "ue_wrap/world/game_rules.h"
 
 #include "ue_wrap/core/call.h"
+#include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/world/world_singleton.h"
 #include "ue_wrap/world/game_mode.h"  // the mode byte: a GI member, not one of the rules
@@ -167,7 +168,10 @@ int ReadDifficulty() {
         sOff = -1;
         for (const R::StructFieldInfo& fi : R::EnumerateStructFields(rules))
             if (TrimmedKey(fi.name) == "difficulty") {
-                sOff = rulesOff + fi.offset;
+                // One byte, as the rules classify it (ReadRulesAt); a recook that widened it reads as absent.
+                if (fi.size == 1) sOff = rulesOff + fi.offset;
+                else UE_LOGW("game_rules: gameRules.difficulty is %d bytes, not one -- latched OFF; game version "
+                             "mismatch?", fi.size);
                 break;
             }
     }
