@@ -19,7 +19,7 @@ namespace coop::dev::tower_drill::detail {
 // joinred: the client's gates open and no rows applied), then the radio tower's: the walk that measures the reach
 // (radioreach), the repair (radio) and its control (radiored), the reset lever (radioreset), and the repair of a
 // tower the host broke before the client joined (radiojoin) with its control (radiojoinred), the reset lever's control
-// (radioresetred), and a fuse pulled from the host's tower and put back (radiofuse) with its control (radiofusered).
+// (radioresetred), and a fuse pulled from the host's tower and a good one inserted (radiofuse) with its control (radiofusered).
 enum class Arm : uint8_t {
     Off, Run, Red, Join, JoinRed, RadioReach, Radio, RadioRed, RadioReset, RadioJoin, RadioJoinRed, RadioResetRed,
     RadioFuse, RadioFuseRed

@@ -25,7 +25,6 @@ struct RadioView {
     coop::net::FuseTowerRow        w{};
     bool                           haveW = false;
     int                            fuseSlot = -1;   // the fuse arms: the host's blown slot this copy pulls
-    uint64_t                       climbMs = 0;     // how long the climb took
 };
 
 // Failure bound: a lever's effect reaching the host's row and this copy.
@@ -34,7 +33,6 @@ inline constexpr uint64_t kRadioVerdictMs = 20000;
 // This copy's cells (or fuses) as a string of digits, and whether they are the host's row's cells.
 std::string Digits(const ue_wrap::radio_tower::State& st, bool fuses);
 std::string RowCells(const coop::net::FuseTowerRow& w);
-std::string RowFuses(const coop::net::FuseTowerRow& w);
 bool CellsEqual(const ue_wrap::radio_tower::State& l, const coop::net::FuseTowerRow& w);
 
 // How an arm ends (tower_drill_radio.cpp): `RadioFail` says "<arm> FAIL: <why>", `RadioAbandon` "<arm> ABANDONED:
@@ -50,9 +48,10 @@ void RadioInconclusive(const char* why);
 void ResetArmTick(const RadioView& v);
 void ResetArmReset();
 
-// The fuse arm's client step (tower_drill_radio_arms.cpp): the client at the top pulls the host's blown fuse and
-// puts it into an empty slot, and the host's slots must read as the client moved them.
+// The fuse arm (tower_drill_radio_arms.cpp): the client at the top pulls the host's blown fuse, the host hands it a
+// good one once the slot reads empty (FuseArmHostTick), and the client inserts that; the host's slot must read good.
 void FuseArmTick(const RadioView& v);
+void FuseArmHostTick();
 void FuseArmReset();
 
 }  // namespace coop::dev::tower_drill::detail

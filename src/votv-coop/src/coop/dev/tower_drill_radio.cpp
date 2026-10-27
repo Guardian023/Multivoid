@@ -49,7 +49,8 @@
 // radiojoin: the host breaks its tower at its own world-ready, before any client joins; the first row the client's
 // tower took must already read broken, and it then repairs as radio does; radiojoinred has the gates open, which ends
 // `radiojoin FAIL: the host broke at <ms> but this copy never read it`. radioreset, radioresetred, radiofuse and
-// radiofusered: at the top the client pulls the reset lever, or a blown fuse and puts it back (tower_drill_radio_arms.cpp).
+// radiofusered: at the top the client pulls the reset lever, or a blown fuse and inserts the good one the host hands it
+// (tower_drill_radio_arms.cpp).
 
 namespace coop::dev::tower_drill {
 namespace {
@@ -448,7 +449,6 @@ void ClientTick(void* player) {
     v.haveL = v.tower && RT::Read(v.tower, v.l);
     v.haveW = FindRow(coop::net::kFuseTowerKindRadio, 0, v.w);
     v.fuseSlot = g_fuseSlot;
-    v.climbMs = g_climb.Result().climbMs;
     void* const tower = v.tower;
     const RT::State& l = v.l;
     const bool haveL = v.haveL;
@@ -734,12 +734,6 @@ std::string RowCells(const FuseTowerRow& w) {
     return s;
 }
 
-std::string RowFuses(const FuseTowerRow& w) {
-    std::string s;
-    for (int i = 0; i < w.fuseCount; ++i) s += static_cast<char>('0' + w.fuses[i] % 10);
-    return s;
-}
-
 void RadioDone(const char* verdict) { Done(verdict); }
 void RadioFail(const char* why) { Fail(why); }
 void RadioAbandon(const char* why) { Abandon(why); }
@@ -749,7 +743,10 @@ void RadioInconclusive(const char* why) {
     Done("INCONCLUSIVE");
 }
 
-void RadioHostTick(coop::net::Session& s) { HostTick(s); }
+void RadioHostTick(coop::net::Session& s) {
+    HostTick(s);
+    FuseArmHostTick();
+}
 
 void RadioClientTick() {
     if (g_step == Step::Done) return;

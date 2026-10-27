@@ -11,18 +11,26 @@
 // (fuse_tower_ops RollsRefused). A roll can return the cells it had (a tower with the puzzle off always does); the
 // arm then pulls again, three pulls at most.
 
-// The fuse arm: a pull of a blown fuse's slot (actionOptionIndex, the look at the slot, :296-:360) puts a fuse in
-// the player's hand and empties the slot; an insert (playerUsedOn, :655-:701) takes a prop_fuse_C from the hand into
-// an empty slot and, above the two easiest difficulties, destroys it.
+// The fuse arm: a pull of a blown fuse's slot (actionOptionIndex, :296-:360) puts the game's junk prop `fuse_0` (a
+// prop_C, :307) in the hand and empties the slot; an insert (playerUsedOn, :655-:701) takes only a prop_fuse_C (the
+// cast at :661-:663) and, above the two easiest difficulties, destroys it. So the host hands the client a good fuse
+// once its pull emptied the slot, as a player re-arms a tower, and the client inserts that.
 
 #include "tower_drill_radio_steps.h"
 
+#include "coop/player/players_registry.h"
+#include "coop/player/remote_player.h"
+#include "coop/world/fuse_tower_kind.h"
 #include "coop/world/fuse_tower_ops.h"
 
+#include "ue_wrap/actors/prop.h"  // GetPropNameString
+#include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/log.h"
+#include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/devices/radio_tower.h"
-#include "ue_wrap/engine/engine_mainplayer.h"  // what the hand holds
+#include "ue_wrap/engine/engine.h"             // TryGetActorLocation, GetActorForwardVector
+#include "ue_wrap/engine/engine_mainplayer.h"  // what the hand holds, where the camera is
 #include "ue_wrap/world/game_rules.h"
 
 #include <cstdint>
@@ -36,6 +44,9 @@ using namespace detail;
 
 namespace RT = ue_wrap::radio_tower;
 namespace R = ue_wrap::reflection;
+namespace FK = coop::fuse_tower_kind;
+namespace OI = ue_wrap::object_index;
+using ue_wrap::FVector;
 
 constexpr int kMaxPulls = 3;   // the reset lever pulled again when the host's cells came back unchanged
 
@@ -57,12 +68,17 @@ bool ResetRed() { return ArmOf() == Arm::RadioResetRed; }
 
 // ---- the fuse arm ----------------------------------------------------------------------------------------------
 
-enum class FuseStep : uint8_t { Pull, PullWait, Insert, InsertWait };
+enum class FuseStep : uint8_t { Pull, PullWait, Await, Insert, InsertWait };
 FuseStep g_fuse = FuseStep::Pull;
 uint64_t g_fuseMs = 0;
 uint64_t g_reapedBefore = 0;
-int      g_target = -1;                // the slot the fuse goes into
 bool     g_classSaid = false;
+ue_wrap::CachedObjRef g_handed;        // the good fuse the host handed this copy
+
+constexpr uint64_t kHandedMs = 30000;  // the host's fuse reaching this copy
+constexpr float    kHandedNearUU = 300.f;
+constexpr float    kHandedAheadUU = 60.f;  // the host drops the fuse this far in front of the client's eye
+constexpr uint8_t  kClientSlot = 1;
 
 bool FuseRed() { return ArmOf() == Arm::RadioFuseRed; }
 
@@ -81,7 +97,35 @@ void* HeldActor(void* player) {
     return (held && R::IsLive(held)) ? held : nullptr;
 }
 
-bool IsFuseProp(void* actor) { return R::ClassNameOf(actor) == L"prop_fuse_C"; }
+// The nearest prop_fuse_C to a point: one class's instances and no more.
+struct NearestFuse {
+    FVector at;
+    void*   best = nullptr;
+    float   bestD = 0.f;
+};
+
+void ConsiderFuse(void* ctx, void* obj, int32_t) {
+    auto* n = static_cast<NearestFuse*>(ctx);
+    FVector p{};
+    if (!ue_wrap::engine::TryGetActorLocation(obj, p)) return;
+    const float d = Dist(n->at, p);
+    if (!n->best || d < n->bestD) { n->best = obj; n->bestD = d; }
+}
+
+void* HandedFuseNear(void* player) {
+    void* cls = OI::ClassByName(L"prop_fuse_C");
+    NearestFuse n{};
+    if (!cls || !ue_wrap::engine::TryGetActorLocation(player, n.at)) return nullptr;
+    OI::ForEachInstance(cls, &ConsiderFuse, &n);
+    return n.best && n.bestD <= kHandedNearUU ? n.best : nullptr;
+}
+
+// The host's side: the blown slot it saw, and the good fuse it handed once that slot read empty.
+int                   g_hostBlown = -1;
+bool                  g_hostHanded = false;
+bool                  g_hostSpentSaid = false;
+bool                  g_hostEyeWarned = false;
+ue_wrap::CachedObjRef g_hostFuse;
 
 // The host's slot as it reads, and what the client's act should have made of it.
 void FailHostSlot(const RadioView& v, int slot, const char* act) {
@@ -204,10 +248,9 @@ void FuseArmTick(const RadioView& v) {
             UE_LOGI("[TOWER-DRILL] client's pull put a %ls in the hand", R::ClassNameOf(held).c_str());
         }
         if (red) {
-            // The gates are open: the pull ran on this copy alone and no claim went to the host. The host's slot is
-            // what the verdict reads, after the window.
-            if (held && IsFuseProp(held)) FuseGo(FuseStep::Insert);
-            else if (FuseOverdue(kRadioVerdictMs)) FailHostSlot(v, slot, "pull");
+            // The gates are open: the pull ran on this copy alone and no claim went to the host, so the host's slot
+            // stays and no fuse is handed. The host's slot is what the verdict reads, after the window.
+            if (FuseOverdue(kRadioVerdictMs)) FailHostSlot(v, slot, "pull");
             return;
         }
         if (coop::fuse_tower_ops::Reaped() != g_reapedBefore) {
@@ -218,10 +261,10 @@ void FuseArmTick(const RadioView& v) {
             if (FuseOverdue(5000)) RadioAbandon("the hand holds nothing after the pull");
             return;
         }
-        if (!IsFuseProp(held)) {
+        if (!FK::IsPulledFuse(held)) {
             std::wstring cls = R::ClassNameOf(held);
             char why[128];
-            std::snprintf(why, sizeof why, "the pull put a %ls in the hand, not a prop_fuse_C", cls.c_str());
+            std::snprintf(why, sizeof why, "the pull put a %ls in the hand, not the game's pulled fuse", cls.c_str());
             RadioAbandon(why);
             return;
         }
@@ -232,53 +275,108 @@ void FuseArmTick(const RadioView& v) {
                 Answered() ? FailHostSlot(v, slot, "pull") : RadioFail("the host never answered the pull");
             return;
         }
-        FuseGo(FuseStep::Insert);
+        UE_LOGI("[TOWER-DRILL] radiofuse pull taken (slot %d, hand %ls)", slot,
+                ue_wrap::prop::GetPropNameString(held).c_str());
+        FuseGo(FuseStep::Await);
+        return;
+    }
+    case FuseStep::Await: {
+        // The host hands a good fuse once its slot reads empty; its spawn watcher gives it to this copy.
+        if (void* fuse = HandedFuseNear(v.player)) {
+            g_handed.Set(fuse);
+            FuseGo(FuseStep::Insert);
+            return;
+        }
+        if (FuseOverdue(kHandedMs)) RadioAbandon("the host's fuse never reached this copy");
         return;
     }
     case FuseStep::Insert: {
-        void* held = HeldActor(v.player);
-        g_target = -1;
-        if (slot < v.l.fuseCount && v.l.fuses[slot] == 0) g_target = slot;
-        for (int i = 0; i < v.l.fuseCount && g_target < 0; ++i)
-            if (v.l.fuses[i] == 0) g_target = i;
-        if (!held || g_target < 0) {
-            RadioAbandon(!held ? "the hand holds no fuse to insert" : "no empty slot to insert into");
+        void* fuse = g_handed.Get();
+        if (!fuse || slot >= v.l.fuseCount || v.l.fuses[slot] != 0) {
+            RadioAbandon(!fuse ? "the handed fuse is gone before the insert" : "the emptied slot is not empty here");
             return;
         }
-        RT::InsertFuse(v.tower, v.player, g_target, held);
+        if (!RT::InsertFuse(v.tower, v.player, slot, fuse)) {
+            RadioAbandon("the insert did not run on this copy");
+            return;
+        }
         g_seq = coop::fuse_tower_ops::LastSentSeq();
-        UE_LOGI("[TOWER-DRILL] client inserted its fuse into slot %d (seq %u)", g_target, g_seq);
+        UE_LOGI("[TOWER-DRILL] client inserted the handed fuse into slot %d (seq %u)", slot, g_seq);
         FuseGo(FuseStep::InsertWait);
         return;
     }
     case FuseStep::InsertWait: {
-        const int target = g_target >= 0 ? g_target : slot;
-        // PASS: the host's slot reads as the client moved it (good), the fuse is spent from the hand, and the
-        // host answered. The control's host is never touched, so its window runs out.
-        if (!red && Answered() && coop::fuse_tower_ops::PendingClaims() == 0 && target < v.w.fuseCount &&
-            v.w.fuses[target] == 1 && !HeldActor(v.player)) {
-            UE_LOGI("[TOWER-DRILL] radiofuse PASS (slot %d pulled, slot %d inserted, host fuses %s, climbMs=%llu)", slot,
-                    target, RowFuses(v.w).c_str(), static_cast<unsigned long long>(v.climbMs));
+        // PASS: the host's slot reads good, the handed fuse is spent on this copy, and the host answered. The
+        // host's own line says its copy of the fuse went too.
+        if (Answered() && coop::fuse_tower_ops::PendingClaims() == 0 && slot < v.w.fuseCount && v.w.fuses[slot] == 1 &&
+            !g_handed.Alive()) {
+            UE_LOGI("[TOWER-DRILL] radiofuse PASS (slot %d, pull and insert taken)", slot);
             RadioDone("PASS");
             return;
         }
         if (FuseOverdue(kRadioVerdictMs)) {
-            if (red) FailHostSlot(v, target >= 0 ? target : slot, "insert");
-            else if (!Answered()) RadioFail("the host never answered the insert");
-            else if (target >= v.w.fuseCount || v.w.fuses[target] != 1) FailHostSlot(v, target, "insert");
-            else RadioFail("the fuse is still in the hand after the insert");
+            if (!Answered()) RadioFail("the host never answered the insert");
+            else if (slot >= v.w.fuseCount || v.w.fuses[slot] != 1) FailHostSlot(v, slot, "insert");
+            else RadioFail("the handed fuse is still here after the insert");
         }
         return;
     }
     }
 }
 
+// The host hands the client a good fuse once the client's pull has emptied the slot, where a player re-arming the
+// tower would have one: 60 uu in front of the client's eye. The host's spawn watcher gives it to every peer.
+void FuseArmHostTick() {
+    if (!IsRadioFuse(ArmOf())) return;
+    void* t = RT::Instance();
+    RT::State st;
+    if (!t || !RT::Read(t, st)) return;
+    if (g_hostHanded) {
+        if (!g_hostSpentSaid && !g_hostFuse.Alive()) {
+            g_hostSpentSaid = true;
+            UE_LOGI("[TOWER-DRILL] host's handed fuse is gone (spent)");
+        }
+        return;
+    }
+    if (g_hostBlown < 0) {
+        for (int i = 0; i < st.fuseCount && g_hostBlown < 0; ++i)
+            if (st.fuses[i] == 2) g_hostBlown = i;
+        return;
+    }
+    if (g_hostBlown >= st.fuseCount || st.fuses[g_hostBlown] != 0) return;
+    coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(kClientSlot);
+    void* body = rp ? rp->GetActor() : nullptr;
+    FVector eye{};
+    if (!body || !ue_wrap::engine::ReadMainPlayerCameraLocation(body, eye)) {
+        if (body && !g_hostEyeWarned) {
+            g_hostEyeWarned = true;
+            UE_LOGW("[TOWER-DRILL] host cannot read the client puppet's camera yet; the fuse waits");
+        }
+        return;
+    }
+    const FVector fwd = ue_wrap::engine::GetActorForwardVector(body);
+    const FVector at{eye.X + fwd.X * kHandedAheadUU, eye.Y + fwd.Y * kHandedAheadUU, eye.Z};
+    void* fuse = FK::SpawnFuse(at);
+    g_hostHanded = true;
+    if (!fuse) {
+        UE_LOGW("[TOWER-DRILL] host could not spawn a good fuse for the client -- FAIL");
+        return;
+    }
+    g_hostFuse.Set(fuse);
+    UE_LOGI("[TOWER-DRILL] host handed a good fuse at (%.0f, %.0f, %.0f)", at.X, at.Y, at.Z);
+}
+
 void FuseArmReset() {
     g_fuse = FuseStep::Pull;
     g_fuseMs = 0;
     g_reapedBefore = 0;
-    g_target = -1;
     g_classSaid = false;
+    g_handed.Reset();
+    g_hostBlown = -1;
+    g_hostHanded = false;
+    g_hostSpentSaid = false;
+    g_hostEyeWarned = false;
+    g_hostFuse.Reset();
 }
 
 }  // namespace detail
