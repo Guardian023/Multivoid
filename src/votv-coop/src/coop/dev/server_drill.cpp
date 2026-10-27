@@ -41,8 +41,10 @@ constexpr int      kWalkDeadlineS = 300;
 constexpr uint64_t kMirrorBoundMs = 60000;   // CLIENT: world-ready to the host's break shown here
 constexpr uint64_t kRowBoundMs    = 30000;   // CLIENT: its repair to the host's row showing it
 constexpr uint64_t kRepairBoundMs = 600000;  // HOST: its break to the client's repair (the walk included)
-constexpr uint64_t kRedBoundMs    = 120000;  // HOST, runred: its break to the verdict that nothing was paid
 constexpr uint64_t kBalanceBoundMs = 10000;  // CLIENT: the host's row showing the fix to its balance moving
+// HOST, runred: its break to its own verdict. The client carries the red (its AwaitBalance FAIL, after the
+// walk and the balance wait); the host's line only follows once that bound is past.
+constexpr uint64_t kRedBoundMs    = kWalkDeadlineS * 1000ull + kBalanceBoundMs + 110000;
 constexpr uint64_t kCheckEveryMs  = 250;
 // The repair minigame's pay (serverbox_sync.cpp, PayRepairReward): 15, or 50 in lol mode.
 constexpr int32_t  kPayPlain = 15, kPayLol = 50;
@@ -155,11 +157,13 @@ void HostTick(coop::net::Session* s) {
         int32_t after = 0;
         if (SB::ReadIsBroken(box)) {
             if (Red() && Expired(kRedBoundMs)) {
-                // The failed repair pays nothing: the money check's red arm ends here.
+                // The client's failed repair pays nothing; its own FAIL came first, this is the host's reading.
+                const SS::Counts hc = SS::LaneCounts();
                 ue_wrap::economy::ReadPoints(&after);
-                UE_LOGI("[SERVER-DRILL] host paid 0 (lol=0) for the client's repair (points %d -> %d)",
-                        g_hostBefore, after);
-                Fail("host paid 0: the client's repair never fixed the box");
+                UE_LOGI("[SERVER-DRILL] host paid %d (lol=%d) for the client's repair (points %d -> %d)",
+                        hc.lastPaid, hc.lastPaidLol ? 1 : 0, g_hostBefore, after);
+                FailFmt("the client's repair never fixed the box, the host paid %d (lol=%d)", hc.lastPaid,
+                        hc.lastPaidLol ? 1 : 0);
             } else if (!Red() && Expired(kRepairBoundMs)) {
                 Fail("the client's repair never reached the host");
             }
@@ -172,14 +176,20 @@ void HostTick(coop::net::Session* s) {
         const SS::Counts hc = SS::LaneCounts();
         UE_LOGI("[SERVER-DRILL] host paid %d (lol=%d) for the client's repair (points %d -> %d)", hc.lastPaid,
                 hc.lastPaidLol ? 1 : 0, g_hostBefore, after);
+        if (hc.lastRecord != 0) {
+            // A record's bonus rides the widget's clock, which the client cannot see: both peers compare the base pay.
+            char buf[120];
+            std::snprintf(buf, sizeof(buf), "a record was paid (%d), the fixture's widget ticked", hc.lastRecord);
+            Abandon(buf);
+            return;
+        }
         const int32_t want = hc.lastPaidLol ? kPayLol : kPayPlain;
         if (hc.lastPaid != want) {
             FailFmt("the host paid %d for the client's repair, its tier pays %d", hc.lastPaid, want);
             return;
         }
-        if (after - g_hostBefore != hc.lastPaid + hc.lastRecord) {
-            FailFmt("the host's points moved %d, the repair paid %d", after - g_hostBefore,
-                    hc.lastPaid + hc.lastRecord);
+        if (after - g_hostBefore != hc.lastPaid) {
+            FailFmt("the host's points moved %d, the repair paid %d", after - g_hostBefore, hc.lastPaid);
             return;
         }
         UE_LOGI("[SERVER-DRILL] host DONE in session %d (run): box %d fixed by the client's repair (%llu run here)",
@@ -335,7 +345,8 @@ void ClientTick(void* player) {
             return;
         }
         if (Expired(kBalanceBoundMs))
-            FailFmt("the client's balance moved %d, the host paid %d", read ? now - g_clientBefore : 0, want);
+            FailFmt("the client's balance moved %d, expected %d for the flag it sent", read ? now - g_clientBefore : 0,
+                    want);
         return;
     }
     default:
