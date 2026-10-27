@@ -18,6 +18,7 @@
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/engine/engine.h"
+#include "ue_wrap/engine/engine_attach.h"   // IsActorRootSimulatingPhysics
 #include "ue_wrap/engine/engine_pawn.h"
 
 #include <windows.h>
@@ -25,6 +26,7 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
+#include <vector>
 
 namespace coop::dev::container_route_drill::detail {
 namespace {
@@ -40,7 +42,8 @@ constexpr uint64_t kFillBoundMs    = 5000;   // the spawn to the backpack's inve
 constexpr uint64_t kPublishBoundMs = 10000;  // the fill to the first fan-out
 constexpr uint64_t kViewBoundMs    = 5000;   // the open verb to the screen showing the backpack
 constexpr uint64_t kJudgeBoundMs   = 15000;  // the client's R1 slice sent to the host judging it
-constexpr int      kTraceLines     = 400;   // the thrown prop's position, one line per tick, at most
+constexpr uint64_t kPlaceBoundMs   = 5000;   // the R5 drive's spawn to its element id
+constexpr uint64_t kThrownBoundMs  = 30000;  // r4-start to the host holding a drive made by the throw
 
 enum class Step : uint8_t { Arm, Fill, Publish, WaitR1, WaitJudge, WaitRoutes, ViewOpen, ViewRegen, WaitBefore, WaitDone, Done };
 Step     g_step = Step::Arm;
@@ -52,10 +55,17 @@ int      g_slotsBefore = 0;
 uint64_t g_gen0 = 0;
 void*    g_slot0 = nullptr;   // the screen's first slot widget before the raw write
 int      g_drives0 = 0;
-int      g_traceLines = 0;
-bool     g_r4Over = false;
 bool     g_opened = false;   // the open verb was sent for the host's screen
 int      g_r1Sent = 0;       // the slices the client had sent when it finished R1
+uint64_t g_placeMs = 0;      // R5: the drive at the intake spawned
+bool     g_r5Placed = false, g_r5Said = false;
+bool     g_r4Started = false, g_r4Over = false, g_r4Gone = false;
+uint64_t g_r4StartMs = 0;
+uint64_t g_ov0 = 0;          // the census's R4 overlaps at r4-start
+coop::element::ElementId g_hi = 0;   // the registry's highest live eid at r4-start
+uint32_t g_r4Eid = 0;        // the drive the throw made here (0 until found)
+std::vector<coop::element::Registry::ActorIdPair> g_snap;
+TraceRate g_trHost;
 
 void Next(Step s) { g_step = s; g_stepMs = ::GetTickCount64(); }
 bool Expired(uint64_t bound) { return ::GetTickCount64() - g_stepMs > bound; }
@@ -74,6 +84,12 @@ void Fail(const char* why) {
     g_step = Step::Done;
 }
 
+// A bound that passed: the FAIL line, and the drill ends.
+void FailAt(const char* phase) {
+    FailPhase("host", phase);
+    g_step = Step::Done;
+}
+
 ue_wrap::FVector Offset(const ue_wrap::FVector& at, const ue_wrap::FVector& fwd, float ahead, float side) {
     return {at.X + fwd.X * ahead + fwd.Y * side, at.Y + fwd.Y * ahead - fwd.X * side, at.Z + kDropCm};
 }
@@ -87,26 +103,6 @@ bool PutIn(void* pack, void* item) {
         !ue_wrap::Call(inv, f))
         return false;
     return f.Get<bool>(L"return");
-}
-
-// The R4 step, from the host's side: the thrown prop's copy, named by the eid the client's start line carries, from
-// that line to the client's done line. One cached-ref read per tick, with the clock the client's line carries; the
-// analysis reads the lag between them.
-void TraceR4() {
-    if (g_r4Over) return;
-    if (coop::dev::drill_chat::PollDue()) {
-        std::string rest;
-        int eid = 0;
-        if (!g_r4Prop.Get() && coop::dev::drill_chat::LiveRestOf(kPrefixR4Start, &rest) && IntAfter(rest, "eid", eid))
-            g_r4Prop.Set(coop::element::LivePropActor(static_cast<uint32_t>(eid)));
-        if (coop::dev::drill_chat::ChatHasLive(kLineR4Done)) g_r4Over = true;
-    }
-    void* prop = g_r4Prop.Get();
-    ue_wrap::FVector at{};
-    if (g_r4Over || !prop || g_traceLines >= kTraceLines || !E::TryGetActorLocation(prop, at)) return;
-    ++g_traceLines;
-    UE_LOGI("[CI-CENSUS] r4 host prop=(%.1f,%.1f,%.1f) t=%llu eid=%u", at.X, at.Y, at.Z,
-            static_cast<unsigned long long>(cen::UnixMs()), EidOf(prop));
 }
 
 // The fixture's own fill, or the refill: two drives put into the backpack the way the player's hand puts one in,
@@ -144,13 +140,11 @@ void StepArm(coop::net::Session* s) {
     if (!pack || !ci::IsContainer(pack)) { Fail("the backpack did not spawn as a container"); return; }
     g_pack.Set(pack);
     if (!cen::IsBeforeOnly()) {
-        // Two loose drives: one at the client's vacuum intake (in its puppet's view), which the vacuum gathers, and one
-        // to the side, which it throws into the backpack. The client's mirrors arrive where the host put them.
+        // One loose drive to the side, which the client holds and throws into the backpack (R4); the drive its vacuum
+        // gathers (R5) is spawned later, at the intake the client reads. The client's mirror arrives where the host put it.
         void* driveCls = R::FindClass(kDriveClass);
-        void* a = driveCls ? E::SpawnActor(driveCls, Offset(at, fwd, kIntakeAheadCm, 0.f)) : nullptr;
         void* b = driveCls ? E::SpawnActor(driveCls, Offset(at, fwd, kSideAheadCm, -kSideCm)) : nullptr;
-        if (!a || !b) { Fail("the loose drives did not spawn"); return; }
-        g_s.Set(a);
+        if (!b) { Fail("the loose drive did not spawn"); return; }
     }
     Next(Step::Fill);
 }
@@ -209,6 +203,102 @@ void StepWaitJudge() {
             RecordCount(g_eid), static_cast<unsigned long long>(judged));
     coop::dev::drill_chat::Say(kLineRefilled);
     Next(Step::WaitRoutes);
+}
+
+// R5: the drive the client's vacuum gathers is spawned AT the intake the client read once the intake settled in its
+// hand, and its element id is said once it has one.
+void PlaceR5(int x, int y, int z) {
+    void* driveCls = R::FindClass(kDriveClass);
+    void* a = driveCls ? E::SpawnActor(driveCls, {static_cast<float>(x), static_cast<float>(y), static_cast<float>(z)}) : nullptr;
+    if (!a) { FailAt("R5 the drive at the intake did not spawn"); return; }
+    g_s.Set(a);
+    g_placeMs = ::GetTickCount64();
+    UE_LOGI("[CI-CENSUS] drill host: R5 a drive spawned at the client's intake (%d,%d,%d)", x, y, z);
+}
+
+void SayR5Placed() {
+    const uint32_t eid = EidOf(g_s.Get());
+    if (eid == static_cast<uint32_t>(coop::element::kInvalidId)) {
+        if (::GetTickCount64() - g_placeMs > kPlaceBoundMs) FailAt("R5 the drive at the intake got no element id");
+        return;
+    }
+    char say[48];
+    std::snprintf(say, sizeof(say), "%seid=%u", kPrefixR5Placed, eid);
+    coop::dev::drill_chat::Say(say);
+    g_r5Said = true;
+}
+
+// The highest element id live in the registry now.
+coop::element::ElementId HighestLiveEid() {
+    coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, g_snap);
+    coop::element::ElementId hi = 0;
+    for (const auto& p : g_snap) hi = p.id > hi ? p.id : hi;
+    return hi;
+}
+
+// The drive the host's drop path made for the client's throw: the first prop_drive_C element above the id recorded at
+// r4-start. True once found and named to the client.
+bool FindThrownDrive() {
+    coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, g_snap);
+    coop::element::ElementId best = coop::element::kInvalidId;
+    for (const auto& p : g_snap)
+        if (p.id > g_hi && p.id < best && R::ClassNameOf(coop::element::LivePropActor(p.id)) == kDriveClass) best = p.id;   // null-safe
+    if (best == coop::element::kInvalidId) return false;
+    g_r4Prop.Set(coop::element::LivePropActor(best));
+    g_r4Eid = best;
+    char say[48];
+    std::snprintf(say, sizeof(say), "%seid=%u", kPrefixR4Thrown, best);
+    coop::dev::drill_chat::Say(say);
+    UE_LOGI("[CI-CENSUS] drill host: the throw made a drive here, eid=%u (registry highest at r4-start %u)", best, g_hi);
+    return true;
+}
+
+// From the found drive to the client's done line, one read per check, with the clock the client's lines carry.
+void TraceR4() {
+    void* prop = g_r4Prop.Get();
+    ue_wrap::FVector at{};
+    const bool live = prop && E::TryGetActorLocation(prop, at);
+    if (!live && !g_r4Gone) {
+        g_r4Gone = true;
+        UE_LOGI("[CI-CENSUS] r4 host eid=%u gone t=%llu", g_r4Eid, static_cast<unsigned long long>(cen::UnixMs()));
+    }
+    if (live && g_trHost.Take())
+        UE_LOGI("[CI-CENSUS] r4 host eid=%u sim=%d t=%llu pos=(%.1f,%.1f,%.1f)", g_r4Eid, E::IsActorRootSimulatingPhysics(prop) ? 1 : 0,
+                static_cast<unsigned long long>(cen::UnixMs()), at.X, at.Y, at.Z);
+}
+
+// The client drives R5 and R4 here; each of its start lines is answered, and the host's side of R4 is traced.
+void StepWaitRoutes() {
+    std::string rest;
+    int x = 0, y = 0, z = 0, held = 0;
+    if (!g_r5Placed && coop::dev::drill_chat::LiveRestOf(kPrefixR5Intake, &rest) && IntAfter(rest, "x", x) &&
+        IntAfter(rest, "y", y) && IntAfter(rest, "z", z)) {
+        g_r5Placed = true;
+        PlaceR5(x, y, z);
+        if (g_step == Step::Done) return;
+    }
+    if (g_r5Placed && !g_r5Said) SayR5Placed();
+    if (g_step == Step::Done) return;
+    if (!g_r4Started && coop::dev::drill_chat::LiveRestOf(kPrefixR4Start, &rest) && IntAfter(rest, "eid", held)) {
+        g_r4Started = true;
+        g_r4StartMs = ::GetTickCount64();
+        g_ov0 = cen::R4Overlaps();
+        g_hi = HighestLiveEid();
+        UE_LOGI("[CI-CENSUS] drill host: r4-start, the client holds eid=%d, registry highest live eid %u", held, g_hi);
+    }
+    if (g_r4Started && !g_r4Eid && !FindThrownDrive() && ::GetTickCount64() - g_r4StartMs > kThrownBoundMs) {
+        FailAt("R4 the host made no drive for the throw");
+        return;
+    }
+    if (g_r4Started && !g_r4Over) {
+        if (coop::dev::drill_chat::ChatHasLive(kLineR4Done)) {
+            g_r4Over = true;
+            UE_LOGI("[CI-CENSUS] drill host: R4 overlap n=%llu", static_cast<unsigned long long>(cen::R4Overlaps() - g_ov0));
+        } else if (g_r4Eid) {
+            TraceR4();
+        }
+    }
+    if ((!g_r4Started || g_r4Eid) && coop::dev::drill_chat::ChatHasLive(kLineRoutesDone)) Next(Step::ViewOpen);
 }
 
 // Read 7: the host's own screen onto the backpack, one raw write the way an accepted client slice is applied, and
@@ -280,9 +370,6 @@ void StepWaitDone() {
 
 void HostTick(coop::net::Session* s) {
     if (g_step == Step::Done) return;
-    // The thrown prop's host copy is traced every tick of the R4 step's window (the client is in R4 while the host
-    // waits for its routes); the rest is paced.
-    if (g_step == Step::WaitRoutes) TraceR4();
     if (g_step == Step::ViewOpen || g_step == Step::ViewRegen) {
         // The screen steps run each tick: the open verb and the write are separate frames.
     } else if (!Due()) {
@@ -294,9 +381,7 @@ void HostTick(coop::net::Session* s) {
     case Step::Publish:    StepPublish(); return;
     case Step::WaitR1:     StepWaitR1(); return;
     case Step::WaitJudge:  StepWaitJudge(); return;
-    case Step::WaitRoutes:
-        if (Said(kLineRoutesDone)) Next(Step::ViewOpen);
-        return;
+    case Step::WaitRoutes: StepWaitRoutes(); return;
     case Step::ViewOpen:   StepViewOpen(); return;
     case Step::ViewRegen:  StepViewRegen(); return;
     case Step::WaitBefore: StepWaitBefore(); return;
@@ -317,8 +402,11 @@ void HostReset() {
     g_r1Sent = 0;
     g_r4Prop.Reset();
     g_drives0 = 0;
-    g_traceLines = 0;
-    g_r4Over = false;
+    g_placeMs = g_r4StartMs = g_ov0 = 0;
+    g_r5Placed = g_r5Said = g_r4Started = g_r4Over = g_r4Gone = false;
+    g_hi = 0;
+    g_r4Eid = 0;
+    g_trHost.Reset();
     g_opened = false;
 }
 

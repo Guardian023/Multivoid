@@ -15,14 +15,14 @@ inline constexpr const wchar_t* kPackClass  = L"prop_backpack_C";
 inline constexpr const wchar_t* kDriveClass = L"prop_drive_C";
 inline constexpr int      kItems        = 2;      // the records the fixture holds
 inline constexpr float    kAheadCm      = 100.f;  // the fixture before the puppet
-inline constexpr float    kIntakeAheadCm = 60.f;  // the R5 prop, in the client's puppet's view (the vacuum's intake)
-inline constexpr float    kSideAheadCm  = 60.f;   // the R4 drive, to one side of it
+inline constexpr float    kSideAheadCm  = 60.f;   // the R4 drive, to one side of the backpack
 inline constexpr float    kSideCm       = 80.f;
 inline constexpr float    kDropCm       = 30.f;
 inline constexpr float    kNearCm       = 400.f;  // CLIENT: the fixtures' mirrors are this near its player
 inline constexpr uint64_t kCheckEveryMs = 250;
 inline constexpr uint64_t kSeamBoundMs  = 30000;  // the census's six watches to settle
 inline constexpr uint64_t kRegenWindowMs = 1000;  // a write's applying to the open screen's rebuild
+inline constexpr uint64_t kHandBoundMs  = 10000;  // CLIENT: a hold, or the vacuum's intake, settling in the hand
 
 // The lines the peers say to each other (drill_chat).
 inline constexpr const char* kLineRoutesDone    = "ci-census client routes-done";
@@ -31,7 +31,10 @@ inline constexpr const char* kLineBeforeReady   = "ci-census client before-ready
 inline constexpr const char* kLineBeforeWritten = "ci-census host before-written";
 inline constexpr const char* kLineRefilled      = "ci-census host refilled";
 inline constexpr const char* kPrefixR1Done      = "ci-census client r1-done ";   // + "sent=<slices sent so far>"
-inline constexpr const char* kPrefixR4Start     = "ci-census client r4-start ";  // + "eid=<the thrown prop>"
+inline constexpr const char* kPrefixR4Start     = "ci-census client r4-start ";  // + "eid=<the held prop, or 0>"
+inline constexpr const char* kPrefixR5Intake    = "ci-census client r5-intake "; // + "x=<cm> y=<cm> z=<cm>"
+inline constexpr const char* kPrefixR5Placed    = "ci-census host r5-placed ";   // + "eid=<the drive at the intake>"
+inline constexpr const char* kPrefixR4Thrown    = "ci-census host r4-thrown ";   // + "eid=<the host's drive for the throw>"
 inline constexpr const char* kPrefixClientDone  = "ci-census client done ";   // + "rb=<0|1> ic=<0|1>"
 inline constexpr const char* kPrefixHostDone    = "ci-census host done ";     // + "ih=<0|1>"
 
@@ -56,6 +59,23 @@ void LogLargest(const char* role);
 
 // Prints a line of the drill (every one carries the tag the rig reads).
 void Abandon(const char* role, const char* why);
+
+// A bound that passed: a FAIL line naming the row's arm and the phase, then Abandon.
+void FailPhase(const char* role, const char* phase);
+
+// A trace stream's rate: the first 20 lines, then every 10th, at most 200 in all. Take() once per read.
+class TraceRate {
+public:
+    bool Take() {
+        ++seen_;
+        const bool line = (seen_ <= 20 || seen_ % 10 == 0) && emitted_ < 200;
+        if (line) ++emitted_;
+        return line;
+    }
+    void Reset() { seen_ = emitted_ = 0; }
+private:
+    int seen_ = 0, emitted_ = 0;
+};
 
 // The screen the gamemode holds for a container view (ui_playerInventory_C), its container slot widgets, and a
 // no-argument call of a function on an object. Null / 0 / false when they do not resolve.

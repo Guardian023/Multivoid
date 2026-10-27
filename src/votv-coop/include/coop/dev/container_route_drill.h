@@ -2,15 +2,14 @@
 // census's routes once against one shared container the HOST places beside its puppet, with the game's own verbs at
 // the human seam, and both peers print the census after every step. Armed by the row container_route_census=drill
 // (or drill-vacuumcancel, drill-before) on BOTH peers; see coop/dev/container_route_census.h.
-//   HOST   -- spawns a backpack holding two drives, one loose drive at the client's vacuum intake and one beside it,
-//             all before the client's puppet, logs the record hashes it published, hands the backpack two fresh records
-//             once it has judged the client's R1 slice, then (once the client says its routes are done) opens the
-//             backpack's own screen as its player, applies one raw write to the contents the way an accepted client
-//             slice is applied, and logs whether the open screen rebuilt. Then it writes once more without publishing,
-//             so the client's next take is judged on a stale base and refused, and logs the outcome.
-//   CLIENT -- R1 a slot press, R2 the take key with no hovered slot (the line names the record it put back), R3
-//             hold+run, R5 a gather with the vacuum, R4 a throw into the overlap; then the screen's rebuild when the
-//             host's write lands, and the take the host refuses.
+//   HOST   -- spawns a backpack of two drives and a loose drive beside it before the client's puppet, logs the hashes it
+//             published, hands the backpack two fresh records once it judged R1's slice, spawns R5's drive at the
+//             intake the client reads, finds and traces the drive its drop path makes for the R4 throw, then (the
+//             client's routes done) opens the backpack's screen, applies one raw write the way an accepted client
+//             slice is applied, logs whether the screen rebuilt, and writes once more unpublished for the stale take.
+//   CLIENT -- R1 a slot press, R2 the take key with no hovered slot, R3 hold+run, R5 a gather once the host's drive
+//             lies within the vacuum's intake, R4 the held drive thrown at the backpack after an aim; then the
+//             screen's rebuild, and the take the host refuses. A passed bound is said as a FAIL line of the arm.
 // Both peers wait for the census's six watches to be live before the first step, and end ABANDONED on a dead one.
 // The peers sequence on drill_chat lines; `[CI-CENSUS] drill client DONE` and `... drill host DONE` end the run.
 
