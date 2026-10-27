@@ -305,7 +305,7 @@ void Tick(void* scrim, void* list, void* exitBtn) {
     }
     g_windowWaitStartMs = 0;   // it came back; a later blip starts its own patience
 
-    // The second precondition: an ImGui surface that is up owns the mouse, WndProcDetour swallows
+    // The second precondition: an ImGui surface that is up owns the mouse, HandleWindowMessage swallows
     // every mouse message and SetCursorPosDetour returns TRUE without moving the pointer, so a
     // perfect aim at a perfect widget reads IsHovered() == false everywhere (measured: the
     // config-review panel, armed at boot by an ini finding, held the pointer at client (0,0) for a

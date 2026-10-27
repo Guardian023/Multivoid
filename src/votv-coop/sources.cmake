@@ -598,6 +598,7 @@ set(VOTVCOOP_SOURCES
     src/ui/voice_icons.cpp
     src/ui/voice_panel.cpp
   src/coop/dev/floppy_selftest.cpp
+    src/coop/input/game_window_proc.cpp
     src/coop/input/input_owner.cpp
     src/coop/session/teleport_client.cpp
     src/ui/imgui_overlay.cpp

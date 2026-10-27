@@ -105,7 +105,8 @@ site's own words, and a stable code to paste into a report, listed in
 ### The overlay
 
 The overlay is one Dear ImGui host over the game's swap chain: it hooks the present and resize
-calls and the window procedure through the mod's own detour substrate, detects the graphics API
+calls through the mod's own detour substrate and takes the game window's messages from the one
+window subclass (`coop/input/game_window_proc`), detects the graphics API
 at the swap chain, and draws on DirectX 11 and 12 alike (`ui/imgui_overlay`,
 `ui/overlay_backend`). It survives other overlays and capture software on the same swap chain.
 Fonts are vendored families embedded in the DLL with Cyrillic ranges, rasterised at the real

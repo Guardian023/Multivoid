@@ -591,11 +591,9 @@ void Start() {
     // boot there is no menu and a null donor is indistinguishable from an absence.
     coop::dev::native_ui_probe::Init();
 
-    // The WM_CLOSE subclass on the game window, so an X-close runs our cleanup before the engine's
-    // teardown dispatches: with the detour live through shutdown it faults on half-destroyed
-    // objects and the process hangs. The window may not exist yet; Install retries from the
-    // timeline.
-    coop::shutdown::Install(&session_runtime::Session());
+    // The session the close handler stops, handed over before any window message can arrive; the
+    // window itself is found and subclassed by coop/input/game_window_proc from the frame tail.
+    coop::shutdown::SetSession(&session_runtime::Session());
 
     auto* scenario = new std::string(cfg::ReadScenario());
     if (HANDLE t = ::CreateThread(nullptr, 0, TimelineThread, scenario, 0, nullptr)) {

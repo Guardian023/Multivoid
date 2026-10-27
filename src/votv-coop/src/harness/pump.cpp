@@ -13,6 +13,7 @@
 #include "coop/dev/function_lookup_parity.h"
 #include "coop/dev/join_abort_drill.h"
 #include "coop/dev/world_singleton_parity.h"
+#include "coop/input/game_window_proc.h"
 #include "coop/player/death_revive.h"
 #include "coop/player/nameplate.h"
 #include "coop/player/revive_protection.h"
@@ -37,8 +38,8 @@ uint64_t g_lastDrain = 0;   // game thread
 // and a module that calls up into the lifecycle driver that calls it is a cycle nothing needs.
 std::atomic<coop::net::Session*> g_session{nullptr};
 
-// The shutdown hooks, run every tick regardless of possession and idempotent: the HWND subclass
-// and the window title must work before the local player exists (a close on the splash). The
+// The shutdown hooks, run every tick regardless of possession and idempotent: the window title
+// must work before the local player exists (a close on the splash). The
 // run-ending seam is registered here unconditionally rather than lazily from the pump: registered
 // only while a session runs, the single-player guarantee would rest on the watch's absence rather
 // than on the seam's own session test, and a negative-control run would grade a watch that was
@@ -46,7 +47,6 @@ std::atomic<coop::net::Session*> g_session{nullptr};
 void TickShutdownHooks() {
     coop::net::Session* s = g_session.load(std::memory_order_acquire);
     if (!s) return;
-    coop::shutdown::Install(s);
     coop::shutdown::UpdateWindowTitle();
     coop::death_revive::Install(s);
     coop::revive_protection::Install();
@@ -108,6 +108,9 @@ void TickFrameTail() {
     // the play loop alike, so it catches either abort window) and notes the rejoin's world-ready; a
     // single enum read when off.
     coop::dev::join_abort_drill::OnFrameTail();
+    // The one subclass of the game window (close signals, hotkeys, native text fields): found and
+    // followed here, in session or out of one, with no present needed.
+    coop::input::game_window_proc::Tick();
     TickShutdownHooks();
 }
 
