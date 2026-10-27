@@ -538,6 +538,10 @@ CFG_INT(join_gate_red, "join_gate_red", "dev", 0, 0, 1, "VOTVCOOP_JOIN_GATE_RED"
 CFG_INT(bind_wait_red, "bind_wait_red", "dev", 0, 0, 1, "VOTVCOOP_BIND_WAIT_RED",
     "Developer red arm: never set. 1 makes the bind wait refuse every hold, so a message for a prop whose bind is "
     "deferred is dropped and counted as never bound, so the drills that count what the wait replayed must fail.")
+CFG_FLAG(window_proc_red, "window_proc_red", "dev", false, "VOTVCOOP_WINDOW_PROC_RED",
+    "Developer red arm: never set. 1 makes game_window_proc never subclass the game window, so no key reaches a "
+    "native text field and the server browser selftest's INPUT TYPE phase must FAIL with \"the characters did not "
+    "arrive\".")
 // A drill seam, never on by default: the late-join drill sets it on the JOINER so that every seed landing before
 // its spawn is held and replays at the bind, and every drill line that uses it names it. Not with
 // bind_wait_selftest: its first check expects an unmarked eid to be refused.

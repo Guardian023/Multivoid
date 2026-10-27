@@ -2,6 +2,8 @@
 
 #include "coop/input/game_window_proc.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/session/shutdown.h"
 #include "ue_wrap/core/log.h"
 #include "ui/imgui_overlay.h"
@@ -138,6 +140,18 @@ bool Release(HWND h) {
 }  // namespace
 
 void Tick() {
+    // The red arm of the typing proof: never subclass, so no key can reach a native text field. Read
+    // once; Tick is not per message.
+    static const bool red = coop::config::ResolveFlag(coop::config_registry::rows::window_proc_red);
+    if (red) {
+        static bool sTold = false;
+        if (!sTold) {
+            sTold = true;
+            UE_LOGW("game_window_proc: RED -- the window is not subclassed, so no key reaches a native "
+                    "text field");
+        }
+        return;
+    }
     HWND held = g_hwnd.load(std::memory_order_acquire);
     if (held && !::IsWindow(held)) {
         // A destroyed window takes its subclass with it, so there is nothing to restore.
