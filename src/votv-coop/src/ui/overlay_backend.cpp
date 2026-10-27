@@ -20,9 +20,6 @@ namespace {
 
 const BackendOps* g_ops = nullptr;  // render-thread-owned (all writers run in the Present detour)
 
-// The dx halves take a FrameTarget; until the seams fill one, the swapchain is wrapped here.
-FrameTarget Tgt(IDXGISwapChain* sc) { return {Rhi::None, nullptr, sc, nullptr}; }
-
 }  // namespace
 
 void SelectRhi(Rhi rhi) {
@@ -35,16 +32,16 @@ void SelectRhi(Rhi rhi) {
 
 const char* Kind() { return g_ops ? g_ops->name : nullptr; }
 
-bool CaptureDevice(IDXGISwapChain* sc) {
-    return g_ops && g_ops->capture(Tgt(sc));  // true only once the presenting queue is CONFIRMED
+bool CaptureDevice(const FrameTarget& t) {
+    return g_ops && g_ops->capture(t);  // true only once the presenting queue is CONFIRMED
 }
 
 void AbandonCapture() {
     if (g_ops) g_ops->abandon();
 }
 
-bool InitRenderer(IDXGISwapChain* sc) {
-    return g_ops && g_ops->init(Tgt(sc));
+bool InitRenderer(const FrameTarget& t) {
+    return g_ops && g_ops->init(t);
 }
 
 void NewFrame() {
@@ -55,12 +52,12 @@ void InvalidateDeviceObjects() {
     if (g_ops) g_ops->invalidate();
 }
 
-void EnsureTarget(IDXGISwapChain* sc) {
-    if (g_ops) g_ops->ensureTarget(Tgt(sc));
+void EnsureTarget(const FrameTarget& t) {
+    if (g_ops) g_ops->ensureTarget(t);
 }
 
-void RenderDrawData(IDXGISwapChain* sc) {
-    if (g_ops) g_ops->render(Tgt(sc));
+void RenderDrawData(const FrameTarget& t) {
+    if (g_ops) g_ops->render(t);
 }
 
 // The resize pair is the DX resize bracket's mechanism: a half without one leaves it null.
@@ -68,8 +65,8 @@ void OnResizeRelease() {
     if (g_ops && g_ops->resizeRelease) g_ops->resizeRelease();
 }
 
-void OnResizeRecreate(IDXGISwapChain* sc) {
-    if (g_ops && g_ops->resizeRecreate) g_ops->resizeRecreate(Tgt(sc));
+void OnResizeRecreate(const FrameTarget& t) {
+    if (g_ops && g_ops->resizeRecreate) g_ops->resizeRecreate(t);
 }
 
 void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH) {

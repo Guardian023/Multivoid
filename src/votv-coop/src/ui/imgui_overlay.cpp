@@ -12,6 +12,7 @@
 
 #include "ui/overlay_backend.h"
 #include "overlay_seams.h"
+#include "overlay_backend_internal.h"  // FrameTarget, Rhi
 
 #include "ui/dev_menu.h"
 #include "ui/scoreboard.h"
@@ -48,7 +49,6 @@
 #include "ue_wrap/core/log.h"
 
 #include <windows.h>
-#include <dxgi.h>
 
 #include <atomic>
 #include <cstdint>
@@ -133,11 +133,11 @@ inline void ProbeKeyMsg(UINT msg, WPARAM wParam, const char* verdict) {
 
 // First-present bring-up; true once ImGui and the RHI backend are live. On any failure it releases
 // what it acquired this call.
-bool BringUp(IDXGISwapChain* sc) {
-    DXGI_SWAP_CHAIN_DESC desc{};
-    if (FAILED(sc->GetDesc(&desc)) || !desc.OutputWindow) return false;
+bool BringUp(const overlay_backend::FrameTarget& t) {
+    // The DX seams read the window off the swapchain descriptor; no window, no overlay yet.
+    if (!t.hwnd) return false;
 
-    if (!overlay_backend::CaptureDevice(sc)) return false;
+    if (!overlay_backend::CaptureDevice(t)) return false;
 
     bool ctxCreated = false;
     if (!ImGui::GetCurrentContext()) { ImGui::CreateContext(); ctxCreated = true; }
@@ -150,21 +150,21 @@ bool BringUp(IDXGISwapChain* sc) {
     // born at this resolution's size (ui/scale.h).
     ui::scale::LoadUserPrefOnce();  // ini ui.scale (the F1 "UI size" pref)
     RECT rc{};
-    if (::GetClientRect(desc.OutputWindow, &rc))
+    if (::GetClientRect(t.hwnd, &rc))
         ui::scale::NoteViewport(static_cast<float>(rc.right - rc.left),
                                 static_cast<float>(rc.bottom - rc.top));
     ui::scale::ConsumeRebuild();  // the initial bake right here applies it
     // Reset, then scale (ui::style::MaybeRescale's shape): ScaleAllSizes is cumulative, and a
     // SEH-swallowed half bring-up can re-enter with an already scaled style.
     ui::style::Rebuild();
-    if (!ImGui_ImplWin32_Init(desc.OutputWindow)) {
+    if (!ImGui_ImplWin32_Init(t.hwnd)) {
         UE_LOGE("imgui_overlay: ImGui_ImplWin32_Init failed");
         if (ctxCreated) { ImGui::DestroyContext(); ui::fonts::OnContextDestroyed();
                           ui::atlas_watch::OnContextDestroyed(); }
         overlay_backend::AbandonCapture();
         return false;
     }
-    if (!overlay_backend::InitRenderer(sc)) {
+    if (!overlay_backend::InitRenderer(t)) {
         ImGui_ImplWin32_Shutdown();
         if (ctxCreated) { ImGui::DestroyContext(); ui::fonts::OnContextDestroyed();
                           ui::atlas_watch::OnContextDestroyed(); }
@@ -178,7 +178,7 @@ bool BringUp(IDXGISwapChain* sc) {
     // impossible rather than merely absent.
     ui::fonts::Load();
 
-    g_hwnd = desc.OutputWindow;
+    g_hwnd = t.hwnd;
     UE_LOGI("imgui_overlay: %s bring-up OK (hwnd=%p) -- F1 toggles the menu",
             overlay_backend::Kind(), g_hwnd);
     return true;
@@ -187,7 +187,7 @@ bool BringUp(IDXGISwapChain* sc) {
 
 // The SEH-guarded per-frame ImGui pass (render thread): a fault hides the surfaces rather than
 // taking down the render thread.
-void RenderFrameGuarded(IDXGISwapChain* sc) {
+void RenderFrameGuarded(const overlay_backend::FrameTarget& t) {
     __try {
         ui::style::MaybeRescale(g_hwnd);
         ui::voice_panel::CommitAbandonedDrag();
@@ -251,7 +251,7 @@ void RenderFrameGuarded(IDXGISwapChain* sc) {
         ui::overlay_cursor::FrameTransition(g_hwnd, CaptureActive(), g_setCursorPosTrampoline);
         ui::overlay_diag::CursorFrame(g_hwnd, CaptureActive(), g_setCursorPosTrampoline);
         ImGui::Render();
-        overlay_backend::RenderDrawData(sc);
+        overlay_backend::RenderDrawData(t);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         UE_LOGE("imgui_overlay: SEH in render frame -- hiding surfaces to protect the render thread");
         g_visible.store(false, std::memory_order_relaxed);
@@ -280,8 +280,8 @@ void RenderFrameGuarded(IDXGISwapChain* sc) {
 }
 
 // SEH-guarded first-present bring-up (also on the render thread).
-bool BringUpGuarded(IDXGISwapChain* sc) {
-    __try { return BringUp(sc); }
+bool BringUpGuarded(const overlay_backend::FrameTarget& t) {
+    __try { return BringUp(t); }
     __except (EXCEPTION_EXECUTE_HANDLER) {
         UE_LOGE("imgui_overlay: SEH during ImGui bring-up -- overlay disabled this run");
         return false;
@@ -290,7 +290,7 @@ bool BringUpGuarded(IDXGISwapChain* sc) {
 }  // namespace
 
 // One frame of overlay work; the swapchain arrives from whichever present seam fired.
-void OverlayFrame(IDXGISwapChain* sc) {
+void OverlayFrame(const overlay_backend::FrameTarget& t) {
     // The perf probe's frame count (the anchor for ms/frame): a relaxed increment when armed, a
     // bool load when off. It is also the instrument that shows a present seam unlinked (fps=0 while
     // everything else ticks), so it stays on this path.
@@ -306,8 +306,10 @@ void OverlayFrame(IDXGISwapChain* sc) {
     // Count frames presented per WorldKind: the one place "does the game present frames when no
     // world exists" can be asked.
     coop::dev::worldless_frames::NoteFrame();
-    if (!g_imguiReady.load(std::memory_order_acquire)) {
-        if (BringUpGuarded(sc)) g_imguiReady.store(true, std::memory_order_release);
+    // The bring-up below is the DX targets'; a Vulkan target is brought up by its own engine seam.
+    const bool dxTarget = t.rhi == overlay_backend::Rhi::Dx11 || t.rhi == overlay_backend::Rhi::Dx12;
+    if (dxTarget && !g_imguiReady.load(std::memory_order_acquire)) {
+        if (BringUpGuarded(t)) g_imguiReady.store(true, std::memory_order_release);
         // Not brought up yet: present normally.
     }
 
@@ -316,8 +318,8 @@ void OverlayFrame(IDXGISwapChain* sc) {
     // is in the render gate only, not AnyOpen, which also gates input and the cursor.
     if (g_imguiReady.load(std::memory_order_acquire) &&
         (AnyOpen() || ui::hud::IsActive() || coop::join_curtain::IsActive())) {
-        overlay_backend::EnsureTarget(sc);  // recreate the render target after a resize
-        RenderFrameGuarded(sc);
+        overlay_backend::EnsureTarget(t);  // recreate the render target after a resize
+        RenderFrameGuarded(t);
     }
     if (perfOn) {
         coop::dev::perf_probe::AddTicks(coop::dev::perf_probe::Bucket::OverlayPresent,
@@ -460,8 +462,8 @@ bool HandleWindowMessage(void* hwndRaw, unsigned msg, uintptr_t wParam, intptr_t
 bool Init() {
     if (g_installed.load(std::memory_order_acquire)) return true;
     if (!ue_wrap::hook::Init()) { UE_LOGE("imgui_overlay: hook::Init failed"); return false; }
-    int seamsArmed = 0;
-    if (!ui::overlay_seams::Install(seamsArmed)) return false;
+    int seamsArmed = 0, seamsTotal = 0;
+    if (!ui::overlay_seams::Install(seamsArmed, seamsTotal)) return false;
     // Hook user32!SetCursorPos to neutralise UE4's cursor recentre while a surface captures;
     // non-fatal, the cursor just tracks less cleanly.
     if (HMODULE u32 = ::GetModuleHandleW(L"user32.dll")) {
@@ -483,9 +485,9 @@ bool Init() {
     // Test-only env arming (the test launcher's entry into the UI surfaces),
     // ui/overlay_test_arm.cpp; inert unless a VOTVCOOP_* test variable is set.
     ui::overlay_test_arm::ArmFromEnv();
-    UE_LOGI("imgui_overlay: draw seam installed on the ENGINE present path (%d of 4 "
+    UE_LOGI("imgui_overlay: draw seam installed on the ENGINE present path (%d of %d "
             "engine seams armed) -- ImGui brings up on the first frame; press F1 "
-            "in-game for the menu", seamsArmed);
+            "in-game for the menu", seamsArmed, seamsTotal);
     return true;
 }
 

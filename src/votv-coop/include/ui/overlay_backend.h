@@ -5,17 +5,17 @@
 // game's swapchain, the ImGui renderer backend, the render target, and texture creation for UI
 // surfaces. One implementation per RHI -- overlay_backend_dx11.cpp and overlay_backend_dx12.cpp,
 // both shipped -- selected by the engine seam that fired (SelectRhi, before each frame), not
-// guessed from the swapchain. No RHI types cross this boundary.
+// guessed from the swapchain. No RHI types cross this boundary: a FrameTarget carries what one
+// frame draws into.
 
 #pragma once
 
 #include <cstdint>
 
-struct IDXGISwapChain;
-
 namespace ui::overlay_backend {
 
 enum class Rhi : uint8_t;
+struct FrameTarget;  // what one frame draws into; defined for the backends (overlay_backend_internal.h)
 
 // The engine seam that fired names its RHI before it runs the frame; every entry below forwards
 // to that RHI's backend. Render thread only.
@@ -25,10 +25,10 @@ void SelectRhi(Rhi rhi);
 // indicator (F1 menu line + the bring-up log).
 const char* Kind();
 
-// First-present bring-up, step 1: capture the device/context off the game's
-// swapchain. false = this swapchain is not this backend's RHI (or capture
-// failed) -- the overlay stays down and Present passes through.
-bool CaptureDevice(IDXGISwapChain* sc);
+// First-present bring-up, step 1: capture the device/context off the target (the DX backends:
+// the game's swapchain). false = the capture failed or is still pending (DX12 confirms its
+// presenting queue over a few frames) -- the overlay stays down and Present passes through.
+bool CaptureDevice(const FrameTarget& t);
 
 // Unwind arm for a failure between CaptureDevice and InitRenderer: release
 // everything CaptureDevice acquired.
@@ -36,7 +36,7 @@ void AbandonCapture();
 
 // Bring-up, step 2 (ImGui context + Win32 backend are live): init the ImGui
 // renderer backend and create the render target. false = caller unwinds.
-bool InitRenderer(IDXGISwapChain* sc);
+bool InitRenderer(const FrameTarget& t);
 
 // Per-frame, render thread, BEFORE ImGui::NewFrame.
 void NewFrame();
@@ -46,15 +46,16 @@ void NewFrame();
 void InvalidateDeviceObjects();
 
 // Re-create the render target if a resize dropped it (cheap no-op otherwise).
-void EnsureTarget(IDXGISwapChain* sc);
+void EnsureTarget(const FrameTarget& t);
 
-// Draw ImGui's current draw data into the swapchain's backbuffer.
-void RenderDrawData(IDXGISwapChain* sc);
+// Draw ImGui's current draw data into the target's backbuffer.
+void RenderDrawData(const FrameTarget& t);
 
-// ResizeBuffers bracket: release backbuffer-derived state BEFORE the game's
-// resize runs; re-derive it after a successful resize.
+// ResizeBuffers bracket, called only from the DX resize detours: release backbuffer-derived state
+// BEFORE the game's resize runs; re-derive it after a successful resize. A backend without a
+// bracket leaves both null.
 void OnResizeRelease();
-void OnResizeRecreate(IDXGISwapChain* sc);
+void OnResizeRecreate(const FrameTarget& t);
 
 // Decode an image file (PNG/BMP/JPG via WIC) into a device texture usable as
 // an ImTextureID. Render thread only. The caller caches the result and MUST

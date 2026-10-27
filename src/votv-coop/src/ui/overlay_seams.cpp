@@ -94,13 +94,42 @@ EnginePresentFn g_d3d12PresentTrampoline = nullptr;
 IDXGISwapChain* g_lastOkSc11 = nullptr;
 IDXGISwapChain* g_lastOkSc12 = nullptr;
 
+// The window a swapchain presents to, read off its descriptor. SEH-guarded like the other reads of
+// engine-owned pointers; null when the descriptor carries no window.
+HWND ReadOutputWindow(IDXGISwapChain* sc) {
+    __try {
+        DXGI_SWAP_CHAIN_DESC desc{};
+        if (FAILED(sc->GetDesc(&desc))) return nullptr;
+        return desc.OutputWindow;
+    } __except (EXCEPTION_EXECUTE_HANDLER) {
+        return nullptr;
+    }
+}
+
+// The descriptor read is a COM call, so it runs once per swapchain and not on every present: the
+// window is cached against the swapchain it was read from. A miss is not cached (the host retries
+// on the next frame, as its bring-up always has).
+struct WindowCache {
+    IDXGISwapChain* sc = nullptr;
+    HWND            hwnd = nullptr;
+};
+WindowCache g_window11;
+WindowCache g_window12;
+
+HWND OutputWindowOf(IDXGISwapChain* sc, WindowCache& cache) {
+    if (sc == cache.sc) return cache.hwnd;
+    const HWND hwnd = ReadOutputWindow(sc);
+    if (hwnd) { cache.sc = sc; cache.hwnd = hwnd; }
+    return hwnd;
+}
+
 uintptr_t __fastcall D3D11PresentCheckedDetour(void* viewport, int32_t syncInterval) {
     if (IDXGISwapChain* sc = ValidatedSwapChain(viewport, ue_wrap::profile::kD3D11Viewport_SwapChain,
                                                 "FD3D11Viewport::PresentChecked",
                                                 g_lastOkSc11))
     {
         overlay_backend::SelectRhi(overlay_backend::Rhi::Dx11);
-        imgui_overlay::OverlayFrame(sc);
+        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx11, OutputWindowOf(sc, g_window11), sc, nullptr});
     }
     return g_d3d11PresentTrampoline(viewport, syncInterval);
 }
@@ -111,7 +140,7 @@ uintptr_t __fastcall D3D12PresentInternalDetour(void* viewport, int32_t syncInte
                                                 g_lastOkSc12))
     {
         overlay_backend::SelectRhi(overlay_backend::Rhi::Dx12);
-        imgui_overlay::OverlayFrame(sc);
+        imgui_overlay::OverlayFrame({overlay_backend::Rhi::Dx12, OutputWindowOf(sc, g_window12), sc, nullptr});
     }
     return g_d3d12PresentTrampoline(viewport, syncInterval);
 }
@@ -132,11 +161,12 @@ D3D12ResizeInternalFn g_d3d12ResizeTrampoline = nullptr;
 // The half both seams share: re-derive the render target after the engine resized. The call to the
 // original stays with the caller (the two take different arguments), and `sizeNote` is
 // pre-formatted because only one seam has any size to report.
-void EngineResizeBracket(const char* which, size_t scOff, IDXGISwapChain*& lastOk,
+void EngineResizeBracket(const char* which, size_t scOff, overlay_backend::Rhi rhi,
+                         IDXGISwapChain*& lastOk, WindowCache& window,
                          void* viewport, const char* sizeNote) {
     IDXGISwapChain* sc = ValidatedSwapChain(viewport, scOff, which, lastOk);
     if (sc && imgui_overlay::ImguiReady()) {
-        overlay_backend::OnResizeRecreate(sc);
+        overlay_backend::OnResizeRecreate({rhi, OutputWindowOf(sc, window), sc, nullptr});
         // Resizes are rare, so one line each is not spam, and it is the one line that says the
         // bracket ran, with or without RivaTuner in the process.
         UE_LOGI("imgui_overlay: %s%s -- render target rebuilt on %s", which, sizeNote,
@@ -155,7 +185,7 @@ void __fastcall D3D11ResizeDetour(void* viewport, uint32_t sizeX, uint32_t sizeY
     _snprintf_s(note, sizeof(note), _TRUNCATE, " (%ux%u fullscreen=%u fmt=%d)", sizeX, sizeY,
                 bFullscreen, pixelFormat);
     EngineResizeBracket("FD3D11Viewport::Resize", ue_wrap::profile::kD3D11Viewport_SwapChain,
-                        g_lastOkSc11, viewport, note);
+                        overlay_backend::Rhi::Dx11, g_lastOkSc11, g_window11, viewport, note);
 }
 
 void __fastcall D3D12ResizeDetour(void* viewport) {
@@ -164,12 +194,13 @@ void __fastcall D3D12ResizeDetour(void* viewport) {
     // No size in the line: ResizeInternal takes only `this`, so four numbers here would be register
     // residue.
     EngineResizeBracket("FD3D12Viewport::ResizeInternal",
-                        ue_wrap::profile::kD3D12Viewport_SwapChain, g_lastOkSc12, viewport, "");
+                        ue_wrap::profile::kD3D12Viewport_SwapChain, overlay_backend::Rhi::Dx12,
+                        g_lastOkSc12, g_window12, viewport, "");
 }
 
 }  // namespace
 
-bool Install(int& armed) {
+bool Install(int& armed, int& total) {
     // Both RHIs' seams are installed unconditionally: which one the game presents with is unknown
     // at Init, and the other signature simply does not resolve in a single-RHI build. A stale
     // signature is not fatal: the overlay keeps drawing and says loudly that resizes are
@@ -189,6 +220,7 @@ bool Install(int& armed) {
          reinterpret_cast<void*>(&D3D12ResizeDetour),
          reinterpret_cast<void**>(&g_d3d12ResizeTrampoline), false},
     };
+    total = static_cast<int>(sizeof(seams) / sizeof(seams[0]));
     int drawArmed = 0;
     // Each requirement is met by either RHI's signature, so the scan ledger's two rows are decided once
     // the loop has tried all four.

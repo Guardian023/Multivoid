@@ -4,12 +4,12 @@
 
 #pragma once
 
-struct IDXGISwapChain;
+namespace ui::overlay_backend { struct FrameTarget; }
 
 namespace ui::imgui_overlay {
 
-// One frame of overlay work; the swapchain arrives from whichever present seam fired.
-void OverlayFrame(IDXGISwapChain* sc);
+// One frame of overlay work; the target arrives from whichever present seam fired.
+void OverlayFrame(const overlay_backend::FrameTarget& t);
 
 // ImGui and the RHI backend are live (the resize bracket acts only then).
 bool ImguiReady();
@@ -18,8 +18,8 @@ bool ImguiReady();
 
 namespace ui::overlay_seams {
 
-// AOB-resolve and MinHook the present and resize seams; `armed` receives how many of the four
-// installed. false = no draw seam resolved, so the overlay cannot draw this run.
-bool Install(int& armed);
+// AOB-resolve and MinHook the present and resize seams; `armed` receives how many of the `total`
+// seams installed. false = no draw seam resolved, so the overlay cannot draw this run.
+bool Install(int& armed, int& total);
 
 }  // namespace ui::overlay_seams
