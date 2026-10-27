@@ -11,6 +11,8 @@
 #include "coop/props/container_slice_wire.h"
 #include "coop/props/container_write_policy.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/bind_wait.h"
 #include "coop/element/registry.h"
 #include "coop/items/save_record_wire.h"
@@ -93,8 +95,20 @@ std::map<uint32_t, uint64_t> g_appliedHash;
 // both failures in turn.
 std::map<uint32_t, uint64_t> g_baseHash;
 
-// Containers whose broadcast the transport refused; retried by the sweep.
+// Containers whose broadcast the transport refused while a world-ready peer was present, and
+// first publications whose contents do not read yet; retried by the sweep.
 std::set<uint32_t> g_retry;
+
+// Dev instruments: sends refused with no world-ready peer (owed to the connect replay), and the
+// re-arms of those when container_retry_red is on. Reset at session end.
+uint64_t g_noReadyRefusals = 0;
+uint64_t g_noReadyRetries = 0;
+std::set<uint32_t> g_noReadyEids;   // the containers whose fan-out met such a refusal
+
+bool NoReadyRetryRed() {
+    static const bool s = coop::config::ResolveFlag(coop::config_registry::rows::container_retry_red);
+    return s;
+}
 
 // The takeObj-in-flight latch: armed at the verb's entry, consumed by prop_drop_intent at the
 // extracted item's FinishSpawn enqueue (the item spawns inside the takeObj call, so the latch is
@@ -134,7 +148,8 @@ bool ReadContents(void* inv, std::vector<SR::SaveRecord>& out, bool neuterNested
 
 // Broadcast one container.
 
-// False if the send was refused (the caller arms the retry). Run by both peers: on the host toSlot
+// False if the send was refused while a world-ready peer was present, or a first publication is
+// not readable yet (the caller arms the retry). Run by both peers: on the host toSlot
 // < 0 fans out; on a client the same call reaches the host alone, the author-to-arbiter edge.
 
 bool BroadcastContainer(coop::net::Session* s, uint32_t eid, void* inv, int toSlot, bool force) {
@@ -171,6 +186,23 @@ bool BroadcastContainer(coop::net::Session* s, uint32_t eid, void* inv, int toSl
         UE_LOGW("container_contents: eid=%u blob %zu B exceeds the transport ceiling -- dropped "
                 "(contents stay diverged; there is no bulk path)", eid, blob.size());
         return true;
+    }
+    if (toSlot < 0 && s && !s->AnyWorldReadyPeer()) {
+        // The fan-out skips a slot that is not world-ready, so with no world-ready peer nobody
+        // could take it, and it is not attempted: a send would only be refused and warn that it
+        // retries. That slot's ready edge runs the connect replay, which reads the contents then
+        // (QueueConnectBroadcastForSlot); a re-arm owes nothing. A refusal with a world-ready peer
+        // present still retries. Same rule as interactable_channel's SendEdge. Safe before the
+        // send: slot readiness is marked on the game thread (world_ready_answer's
+        // MarkSlotWorldReady), the thread of this sweep, so the check cannot race a ready edge.
+        // Nobody received this hash, so no baseline of what every peer has may stand: a later edit
+        // back to the old contents must be sent, not judged unchanged.
+        g_sentHash.erase(eid);
+        ++g_noReadyRefusals;
+        g_noReadyEids.insert(eid);
+        if (!NoReadyRetryRed()) return true;
+        ++g_noReadyRetries;
+        return false;
     }
     const bool ok = (toSlot < 0)
         ? coop::blob_chunks::SendBlob(s, coop::net::ReliableKind::ContainerContents,
@@ -696,10 +728,18 @@ bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol) {
 
 size_t AppliedEids() { return g_appliedHash.size(); }
 
+uint64_t NoReadyRefusals() { return g_noReadyRefusals; }
+uint64_t NoReadyRetries() { return g_noReadyRetries; }
+bool NoReadyRefusedEid(uint32_t eid) { return g_noReadyEids.count(eid) != 0; }
+bool SentBaselineKnown(uint32_t eid) { return g_sentHash.count(eid) != 0; }
+
 void OnDisconnect() {
     g_wrongClassSaid.clear();
     g_dirty.clear();
     g_retry.clear();
+    g_noReadyRefusals = 0;
+    g_noReadyRetries = 0;
+    g_noReadyEids.clear();
     wp::Reset();
     pk::Reset();
     g_sentHash.clear();

@@ -80,4 +80,16 @@ bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol);
 // drill reads it. Game thread.
 size_t AppliedEids();
 
+// Fan-out sends refused with no world-ready peer: owed to the connect replay, not re-armed. Reset at session end.
+uint64_t NoReadyRefusals();
+
+// Those same refusals re-armed anyway (container_retry_red on; 0 otherwise). Reset at session end.
+uint64_t NoReadyRetries();
+
+// Did this container's fan-out meet a refusal with no world-ready peer? Reset at session end.
+bool NoReadyRefusedEid(uint32_t eid);
+
+// Does the host hold a "what every peer has" hash for this container (a fan-out succeeded for it)?
+bool SentBaselineKnown(uint32_t eid);
+
 }  // namespace coop::props::container_contents_sync

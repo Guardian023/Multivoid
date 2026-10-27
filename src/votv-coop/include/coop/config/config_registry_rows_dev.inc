@@ -118,6 +118,9 @@ CFG_FLAG(desk_snd_selftest, "desk_snd_selftest", "dev", false, nullptr,
 CFG_FLAG(container_selftest, "container_selftest", "dev", false, "VOTVCOOP_CONTAINER_SELFTEST",
     "Autonomous selftest: container contents sync. It MUTATES the world -- it extracts an item on"
     " each peer -- so it is armed per run from the environment, like the hand-drop one.")
+CFG_FLAG(container_retry_red, "container_retry_red", "dev", false, "VOTVCOOP_CONTAINER_RETRY_RED",
+    "Red arm for the container join drill: a container send refused with no world-ready peer is re-armed "
+    "every sweep, as before the fix, and counted.")
 CFG_FLAG(container_opener_probe, "container_opener_probe", "dev", false, "VOTVCOOP_CONTAINER_OPENER_PROBE",
     "Probe (host): once each client's world is up and it has a body, every drone, dronesack and ATV with "
     "the container it opens, the lookups both ways that must name the pair, and each client's reach to "
