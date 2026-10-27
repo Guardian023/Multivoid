@@ -7,6 +7,7 @@
 #include "coop/dev/director/director.h"   // PlayerContext -- where the local body is
 #include "coop/net/session.h"
 #include "coop/props/container_contents_sync.h"
+#include "coop/props/container_writer_watch.h"
 
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/engine/engine.h"
@@ -170,7 +171,7 @@ void FireExtract(uint32_t eid, const char* who) {
 void Verdict(bool host) {
     int32_t now = -1; float vol = 0.f;
     const bool live = CC::ContentsDigest(g_fireEid, now, vol);
-    const bool entered = CC::VerbWatchEntered();
+    const bool entered = coop::props::container_writer_watch::VerbWatchEntered();
     const bool inert = (g_fireBefore >= 0 && g_fireBefore == g_fireAfter);
     const char* fate = !live      ? "the container stopped resolving"
                      : now == g_fireAfter ? "STUCK (the arbiter accepted it, or this peer is the host)"

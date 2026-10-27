@@ -9,8 +9,8 @@
 // player's inventory); and a nested container's own index rides as the sentinel -1, on the way out
 // AND on the way in, since a real value there names a slot in the SENDER's array.
 //
-// The edge is ue_wrap/core/script_gate on addObject and takeObj, marking the OWNING actor's eid
-// dirty. Apply raw-writes the receiver's own GObjStack slot, then re-derives the setter-managed
+// The edge is coop/props/container_writer_watch (ue_wrap/core/script_gate on addObject and takeObj),
+// marking the OWNING actor's eid dirty through MarkHostWrite. Apply raw-writes the receiver's own GObjStack slot, then re-derives the setter-managed
 // state through updateVolumesAndMass and recalculateNames; addObject cannot be the apply verb (it
 // takes a live AActor* and serialises it itself) and checkObjectsVolume is not called (it ejects).
 
@@ -30,10 +30,10 @@ void Install(coop::net::Session* session);
 // drain. Near-free when the dirty set is empty, the steady state.
 void Tick();
 
-// Read and clear the takeObj-in-flight latch, armed at the dispatch edge.
-// prop_drop_intent::OnClientFinishSpawn consumes it to mark the extracted item's spawn as a
-// container extraction. Game thread.
-bool TakeObjInFlight();
+// The seam from the edge: this peer wrote the container `eid` (container_writer_watch). Marks it
+// dirty for the next sweep, drops the applied-hash no-op guard, and on the host stamps the local
+// change. Game thread.
+void MarkHostWrite(uint32_t eid);
 
 // ContainerContents chunks: a BlobChunkPayload whose blob is
 // `[u8 op=0][u32 eid][u64 baseHash][u16 n]` then n records in the coop/items/save_record_wire
@@ -66,10 +66,6 @@ struct WorldContainer {
 
 // Fill `out` with up to `want` live world containers, boundary 1 applied. Host or client.
 size_t SnapshotWorldContainers(WorldContainer* out, size_t want);
-
-// Has the addObject/takeObj watch fired on this peer at least once? The instrument's verdict
-// needs it: an absent effect means one thing if the edge is live and another if it never was.
-bool VerbWatchEntered();
 
 // The observable digest for one container: how many records its slice holds and the currVol the
 // engine reports. Both peers print it; the smoke compares the numbers. False if the eid is not a

@@ -1,5 +1,5 @@
-// coop/props/container_contents_sync.cpp -- world-container contents over the wire: the
-// addObject/takeObj verb edge marks a container dirty, a 250 ms sweep ships its GObjStack slice as
+// coop/props/container_contents_sync.cpp -- world-container contents over the wire: a write to a
+// container (the verb edge, coop/props/container_writer_watch) marks it dirty, a 250 ms sweep ships its GObjStack slice as
 // a blob, the receiver writes the slice back and re-derives the volume and names through the
 // engine's own verbs; a client's edit is a compare-and-swap the host arbitrates and relays. See
 // coop/props/container_contents_sync.h.
@@ -9,6 +9,7 @@
 #include "coop/props/container_birth.h"
 #include "coop/props/container_park.h"
 #include "coop/props/container_slice_wire.h"
+#include "coop/props/container_writer_watch.h"
 #include "coop/props/container_write_policy.h"
 
 #include "coop/config/config.h"
@@ -25,7 +26,6 @@
 #include "ue_wrap/core/object_index.h"  // ClassByName -- the host's O(1) class resolve for a client's contents
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/script_gate.h"
-#include "ue_wrap/facts/function_row.h"
 
 #include <atomic>
 #include <chrono>
@@ -47,17 +47,9 @@ namespace pk = coop::props::container_park;
 namespace cw = coop::props::container_slice_wire;
 namespace ci = ue_wrap::container_inventory;
 namespace cb = coop::props::container_birth;
+namespace cww = coop::props::container_writer_watch;
 
 using coop::element::LivePropActor;
-
-// Verb ids: addObject marks dirty; takeObj also arms the container-extraction birth latch that
-// prop_drop_intent consumes (a client-extracted item's actor is admitted as a host-authoritative
-// drop intent).
-constexpr int kVerbDirty   = 1;   // addObject
-constexpr int kVerbTakeObj = 2;   // takeObj
-
-UE_FACT_FN(kRowAddObject, "container_contents_sync", nullptr, L"addObject", AnyClass);
-UE_FACT_FN(kRowTakeObj,   "container_contents_sync", nullptr, L"takeObj",   AnyClass);
 
 // The sweep drains an edge-driven set, not a poll; 250 ms coalesces a burst (a loot roll fires
 // addObject four times) into one broadcast.
@@ -67,8 +59,6 @@ constexpr uint16_t kContainerContents = static_cast<uint16_t>(coop::net::Reliabl
 
 std::atomic<coop::net::Session*> g_session{nullptr};
 
-bool g_verbsRegistered = false;
-bool g_verbEntered = false;   // the watch has fired at least once on this peer
 bool g_announced = false;
 uint64_t g_nextSweep = 0;
 uint32_t g_nextSeq = 1;
@@ -109,12 +99,6 @@ bool NoReadyRetryRed() {
     static const bool s = coop::config::ResolveFlag(coop::config_registry::rows::container_retry_red);
     return s;
 }
-
-// The takeObj-in-flight latch: armed at the verb's entry, consumed by prop_drop_intent at the
-// extracted item's FinishSpawn enqueue (the item spawns inside the takeObj call, so the latch is
-// live exactly then). Atomic exchange, so the consume is one-shot. A personal-inventory take arms
-// it too, harmlessly; the drain's own gates filter those.
-std::atomic<bool> g_takeObjInFlight{false};
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(
@@ -534,50 +518,6 @@ void ReplayHeld(const uint8_t* bytes, size_t n, int senderSlot) {
         pk::Erase(eid);   // an older pen entry of this eid must not apply over it
 }
 
-// The verb edge.
-
-// Fires at the entry of addObject and takeObj on the game thread, a change notice rather than an
-// action: it remembers which component was touched. No role gate: the verb is a local virtual
-// call, so by the time it is seen the item has already moved on this machine, and an intent the
-// host could deny cannot exist here. Gated on the host it dropped every client extraction: the
-// client took one of two burgers, the host's slot stayed at two, and the world gained a burger.
-sg::Verdict OnVerbEntry(const sg::Call& br) {
-    // The first statement, ahead of every filter: a resolved verb name does not prove this callback
-    // runs, and a registration once returned true with the callback inert for a whole session. If
-    // this line is absent from a log, the lane is dead.
-    if (!g_verbEntered) {
-        g_verbEntered = true;
-        UE_LOGI("container_contents: the verb watch ENTERED for the first time on this peer "
-                "(role=%s) -- the addObject/takeObj edge is LIVE",
-                IsHost() ? "HOST" : "CLIENT");
-    }
-    if (!br.object) return sg::Verdict::Run;
-    auto* s = g_session.load(std::memory_order_acquire);
-    if (!s || !s->connected()) return sg::Verdict::Run;
-    // The verb filter matches on the name alone, so the context is discriminated here: the first
-    // non-propInventory context carrying an addObject would otherwise poison the offset cache for
-    // the session.
-    if (!ci::IsInventory(br.object)) return sg::Verdict::Run;
-    // A takeObj on any inventory component arms the extraction latch; addObject must not.
-    if (br.tag == kVerbTakeObj) g_takeObjInFlight.store(true, std::memory_order_relaxed);
-    void* owner = ci::OwnerOf(br.object);
-    if (!owner) return sg::Verdict::Run;
-    const uint32_t eid =
-        static_cast<uint32_t>(coop::element::Registry::Get().EidForActor(owner));
-    if (eid == static_cast<uint32_t>(coop::element::kInvalidId)) return sg::Verdict::Run;
-    g_dirty.insert(eid);   // resolve identity AT THE EDGE; deref nothing later
-    // The local change is stamped, so the host can tell a stale client write from a clean one.
-    // Host-only: nothing on a client ever reads it, and an ungated stamp grows a row per container
-    // that peer has ever touched.
-    if (IsHost()) wp::NoteLocalChange(eid, NowMs());
-    // And the applied hash is dropped: it means "an identical blob is a no-op" only while our state
-    // still equals what we applied, and after our own mutation a corrective re-publish of the
-    // unchanged host truth would look like a duplicate; a client whose write was refused once kept
-    // its diverged contents forever that way.
-    g_appliedHash.erase(eid);
-    return sg::Verdict::Run;
-}
-
 // Every live world container, boundary 1 applied: fn(eid, actor, inv). The connect seed and the
 // dev walker share it.
 template <typename Fn>
@@ -599,11 +539,18 @@ void WalkWorldContainers(Fn&& fn) {
 // From event_feed's client-side SnapshotBegin and SnapshotComplete dispatch, on the game thread.
 void NoteJoinSnapshotBracket(bool open) { pk::NoteJoinBracket(open, NowMs()); }
 
-// Read-and-clear of the takeObj-in-flight latch; prop_drop_intent consumes it at a FinishSpawn
-// enqueue to admit that birth, and only that birth, as a host-authoritative drop intent. One-shot
-// by exchange; also reached on a task-graph worker, hence atomic.
-bool TakeObjInFlight() {
-    return g_takeObjInFlight.exchange(false, std::memory_order_relaxed);
+// A write to a container reached this peer's edge (container_writer_watch): the container is marked
+// dirty for the sweep, keyed by eid so nothing is dereferenced later. The applied hash is dropped: it
+// means "an identical blob is a no-op" only while our state still equals what we applied, and after
+// our own mutation a corrective re-publish of the unchanged host truth would look like a duplicate;
+// a client whose write was refused once kept its diverged contents forever that way. The local
+// change is stamped on the host, so it can tell a stale client write from a clean one; host-only,
+// since nothing on a client ever reads it and an ungated stamp grows a row per container that peer
+// has ever touched.
+void MarkHostWrite(uint32_t eid) {
+    g_dirty.insert(eid);
+    if (IsHost()) wp::NoteLocalChange(eid, NowMs());
+    g_appliedHash.erase(eid);
 }
 
 void Install(coop::net::Session* session) {
@@ -611,25 +558,14 @@ void Install(coop::net::Session* session) {
     // container's own save record carries the index into that stack, with none of the arbitration.
     coop::prop_save_data::DeclareClassOwnedElsewhere(L"prop_container_C");
     g_session.store(session, std::memory_order_release);
+    cww::Install(session);
 }
 
 void Tick() {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !s->running()) return;
 
-    if (!g_verbsRegistered) {
-        g_verbsRegistered =
-            sg::WatchName(kRowAddObject, kVerbDirty, &OnVerbEntry, nullptr) &&
-            sg::WatchName(kRowTakeObj,   kVerbTakeObj, &OnVerbEntry, nullptr);
-        static bool s_saidFailed = false;
-        if (!g_verbsRegistered && !s_saidFailed) {
-            // Once. This block retries every tick, and the failure it reports is the gate
-            // refusing permanently (a full table, or no detour), so an unlatched line here is a
-            // warning per tick for the rest of the session.
-            s_saidFailed = true;
-            UE_LOGW("container_contents: verb registration FAILED -- the lane is inert");
-        }
-    }
+    cww::Tick();
     sg::ResolvePendingNames();
 
     if (!g_announced) {
@@ -721,8 +657,6 @@ size_t SnapshotWorldContainers(WorldContainer* out, size_t want) {
     return n;
 }
 
-bool VerbWatchEntered() { return g_verbEntered; }
-
 bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol) {
     outCount = -1;
     outVol = 0.f;
@@ -775,7 +709,7 @@ void OnDisconnect() {
     g_asm.Clear();
     g_nextSweep = 0;
     g_announced = false;
-    g_verbEntered = false;
+    cww::OnDisconnect();
 }
 
 }  // namespace coop::props::container_contents_sync
