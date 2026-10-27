@@ -1,6 +1,7 @@
 // coop/dev/tower_drill_detail.h -- what the tower drill's files share: the arm the config row names, the clock, a
 // distance, the host's last row of a tower, and the arm families' entry points (the coordinate arms in
-// tower_drill_coord.cpp). Impl-private: nothing outside coop/dev includes it. Game thread.
+// tower_drill_coord.cpp, the radio arms in tower_drill_radio.cpp). Impl-private: nothing outside coop/dev includes
+// it. Game thread.
 
 #pragma once
 
@@ -15,12 +16,14 @@ namespace coop::net { class Session; }
 namespace coop::dev::tower_drill::detail {
 
 // Every value of the config row `tower_drill`: the coordinate towers' run and join and their controls (red,
-// joinred: the client's gates open and no rows applied).
-enum class Arm : uint8_t { Off, Run, Red, Join, JoinRed };
+// joinred: the client's gates open and no rows applied), then the radio tower's: the walk that measures the reach
+// (radioreach), the repair (radio) and its control (radiored).
+enum class Arm : uint8_t { Off, Run, Red, Join, JoinRed, RadioReach, Radio, RadioRed };
 
 // The arm the row names, read once.
 Arm ArmOf();
 
+inline bool IsRadio(Arm a) { return a >= Arm::RadioReach; }
 // The coordinate arms' two shapes, each with its control.
 inline bool IsRun(Arm a) { return a == Arm::Run || a == Arm::Red; }
 inline bool IsJoin(Arm a) { return a == Arm::Join || a == Arm::JoinRed; }
@@ -37,5 +40,10 @@ bool FindRow(uint8_t kind, int32_t id, coop::net::FuseTowerRow& out);
 void CoordHostTick(coop::net::Session& s);
 void CoordClientTick();
 void CoordReset();
+
+// The radio arms (tower_drill_radio.cpp): the host's break on its own roll, the client's walk, presses and lever.
+void RadioHostTick(coop::net::Session& s);
+void RadioClientTick();
+void RadioReset();
 
 }  // namespace coop::dev::tower_drill::detail

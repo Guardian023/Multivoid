@@ -645,7 +645,7 @@ uint64_t Reaped() { return g_reaped; }
 bool RedOpen() {
     static const bool red = [] {
         const std::string v = coop::config::ResolveString(::coop::config_registry::rows::tower_drill);
-        return v == "red" || v == "joinred";
+        return v == "red" || v == "joinred" || v == "radiored";
     }();
     return red;
 }

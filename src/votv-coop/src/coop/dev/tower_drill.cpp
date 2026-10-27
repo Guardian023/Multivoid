@@ -1,5 +1,5 @@
 // coop/dev/tower_drill.cpp -- see coop/dev/tower_drill.h. The dispatcher and what the arms share; the coordinate arms
-// are in tower_drill_coord.cpp.
+// are in tower_drill_coord.cpp and the radio arms in tower_drill_radio.cpp.
 
 #include "coop/dev/tower_drill.h"
 
@@ -24,6 +24,9 @@ Arm ArmOf() {
         if (v == "red") return Arm::Red;
         if (v == "join") return Arm::Join;
         if (v == "joinred") return Arm::JoinRed;
+        if (v == "radioreach") return Arm::RadioReach;
+        if (v == "radio") return Arm::Radio;
+        if (v == "radiored") return Arm::RadioRed;
         return Arm::Off;
     }();
     return a;
@@ -55,10 +58,19 @@ bool FindRow(uint8_t kind, int32_t id, coop::net::FuseTowerRow& out) {
 void Tick(coop::net::Session* session) {
     const detail::Arm arm = detail::ArmOf();
     if (arm == detail::Arm::Off || !session || !session->connected()) return;
-    if (session->role() == coop::net::Role::Host) detail::CoordHostTick(*session);
+    const bool host = session->role() == coop::net::Role::Host;
+    if (detail::IsRadio(arm)) {
+        if (host) detail::RadioHostTick(*session);
+        else detail::RadioClientTick();
+        return;
+    }
+    if (host) detail::CoordHostTick(*session);
     else detail::CoordClientTick();
 }
 
-void OnDisconnect() { detail::CoordReset(); }
+void OnDisconnect() {
+    detail::CoordReset();
+    detail::RadioReset();
+}
 
 }  // namespace coop::dev::tower_drill

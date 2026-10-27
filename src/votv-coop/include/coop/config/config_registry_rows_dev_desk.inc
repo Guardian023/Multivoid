@@ -38,7 +38,12 @@ CFG_STRING(tower_drill, "tower_drill", "dev", "", "VOTVCOOP_TOWER_DRILL", false,
     "puzzle, solves it and pulls the lever again, and the client reads each change applied as the tower's own. "
     "join: the host breaks the tower as it hosts, and the joiner's tower reads the host's without a roll of its "
     "own. red, joinred: the controls, a client whose gates stand open and who applies no rows, as before the "
-    "lane. Lines tagged [TOWER-DRILL]; the client's DONE line ends it.")
+    "lane. The radio tower: radioreach -- the client walks to the tower with the director and prints how far the "
+    "walk ended from each part (a measurement, no verdict); radio -- the host scrambles its tower until it reads "
+    "broken, the client walks there, solves the puzzle with presses and pulls the confirm lever, and the verdict "
+    "is whether the host's tower reads whole (a part out of reach after the walk ends it ABANDONED); radiored -- "
+    "radio with the client's gates open, which fails as the lane's first build did. Lines tagged [TOWER-DRILL]; "
+    "the client's DONE line ends it.")
 CFG_STRING(desk_ping_drill, "desk_ping_drill", "dev", "", "VOTVCOOP_DESK_PING_DRILL", false,
     "Drill (BOTH peers): a client's ping is rolled on the host. run: the client walks to the main desk, enters the "
     "coordinates screen, commits a triangle and presses its coord_ping key on the game window; legs: miss (a clear "
