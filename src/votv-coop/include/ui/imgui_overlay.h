@@ -3,7 +3,7 @@
 // The ONE ImGui integration point for the whole mod (RULE: dev features live in a
 // categorized ImGui menu; future: a main-menu MP server browser on this same host).
 // It hooks the engine's present and resize paths (via our MinHook substrate), auto-detects the RHI
-// at the swapchain (DX11 and DX12 both draw -- the per-RHI half lives behind ui/overlay_backend.h),
+// at the swapchain (DX11, DX12 and Vulkan draw -- the per-RHI half lives behind ui/overlay_backend.h),
 // runs the ImGui frame, and calls the active UI surface's Render(). F1 toggles visibility. Input is
 // captured only while visible. The window's messages are routed in by coop/input/game_window_proc
 // through HandleWindowMessage.
