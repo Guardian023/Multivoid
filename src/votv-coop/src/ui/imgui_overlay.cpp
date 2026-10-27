@@ -108,6 +108,9 @@ inline bool AnyOpen()     { return MenuOpen() || ScoreOpen() || BrowserOpen() ||
                                    LoadingOpen() || ConsoleOpen() || ChatOpen() || VoiceOpen() ||
                                    EndReasonOpen() || BootWarningOpen() || GameBuildOpen() || ConfigReviewOpen(); }
 inline bool CaptureActive() {
+    // No surface captures while ImGui is down: none of them can draw, and a capture without a
+    // drawn surface would only suppress the cursor recentre and the game's input.
+    if (!g_imguiReady.load(std::memory_order_acquire)) return false;
     // The surfaces that take the cursor and input; the host scoreboard is one, the client
     // scoreboard is a passive peek.
     return MenuOpen() || BrowserOpen() || PickerOpen() || LoadingOpen() || ConsoleOpen() ||
@@ -469,12 +472,13 @@ void __fastcall D3D12ResizeDetour(void* viewport) {
 bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRESULT& result) {
     ui::overlay_diag::NoteWndProcMsg(msg);
     ui::overlay_diag::NoteWndProcThread();
+    // A surface that cannot draw must not open: ImGui draws every surface, so the hotkeys below act
+    // only once it is up, and CaptureActive() is false until then, which leaves the engine's cursor
+    // recentre and the game's keys alone under an RHI the overlay does not present through. The
+    // native text fields are not gated: they need no ImGui.
+    const bool imguiUp = g_imguiReady.load(std::memory_order_acquire);
     // Losing focus drops the scoreboard: a background window never receives the tilde WM_KEYUP, so
     // a hold-to-peek would stick open. Falls through to the game.
-    // A surface that cannot draw must not open: the hotkeys below act only once ImGui is up, so under
-    // an RHI the overlay does not present through, CaptureActive() stays false and the cursor
-    // recentre and the game's keys are untouched. The native text fields are not gated.
-    const bool imguiUp = g_imguiReady.load(std::memory_order_acquire);
     if (msg == WM_KILLFOCUS) g_scoreboard.store(false, std::memory_order_relaxed);
     // F1 toggles the menu; the key is consumed. State, not the ShowCursor counter, drives the
     // cursor: VOTV shows the OS cursor during play, and the SetCursorPos no-op lets it track.
