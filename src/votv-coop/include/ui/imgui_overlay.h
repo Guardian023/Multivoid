@@ -16,7 +16,7 @@
 
 #pragma once
 
-#include <windows.h>
+#include <cstdint>
 
 #include <string>
 
@@ -35,7 +35,10 @@ bool Init();
 // keys. True means the message is consumed and `result` is the window procedure's return; false
 // means it goes on to the next consumer and the game. Called on every message from the window
 // procedure's thread, ahead of the shutdown handling and the game; needs no present.
-bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRESULT& result);
+// The parameters are the window procedure's (HWND, UINT, WPARAM, LPARAM, LRESULT) in plain integer
+// types, so this header stays free of the Windows headers.
+bool HandleWindowMessage(void* hwnd, unsigned msg, uintptr_t wParam, intptr_t lParam,
+                         intptr_t& result);
 
 // Force visibility (e.g. a future main-menu button opening the server browser).
 void SetVisible(bool visible);

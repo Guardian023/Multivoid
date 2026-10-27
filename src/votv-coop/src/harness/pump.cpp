@@ -42,7 +42,7 @@ uint64_t g_lastDrain = 0;   // game thread
 std::atomic<coop::net::Session*> g_session{nullptr};
 
 // The shutdown hooks, run every tick regardless of possession and idempotent: the window title
-// must work before the local player exists (a close on the splash). The
+// must work before the local player exists. The
 // run-ending seam is registered here unconditionally rather than lazily from the pump: registered
 // only while a session runs, the single-player guarantee would rest on the watch's absence rather
 // than on the seam's own session test, and a negative-control run would grade a watch that was

@@ -469,7 +469,9 @@ void __fastcall D3D12ResizeDetour(void* viewport) {
 
 }  // namespace
 
-bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRESULT& result) {
+bool HandleWindowMessage(void* hwndRaw, unsigned msg, uintptr_t wParam, intptr_t lParam,
+                         intptr_t& result) {
+    HWND hwnd = static_cast<HWND>(hwndRaw);
     ui::overlay_diag::NoteWndProcMsg(msg);
     ui::overlay_diag::NoteWndProcThread();
     // A surface that cannot draw must not open: ImGui draws every surface, so the hotkeys below act
