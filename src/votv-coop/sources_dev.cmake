@@ -199,6 +199,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/init_seam_probe.cpp
     src/coop/dev/key_parity_probe.cpp
     src/coop/dev/vulkan_path_probe.cpp
+    src/coop/dev/vulkan_rhi_probe.cpp
     src/coop/dev/floppy_selftest_world.cpp
     src/coop/dev/hookdrag_selftest.cpp
     src/coop/dev/hook_plant.cpp

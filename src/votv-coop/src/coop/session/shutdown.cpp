@@ -3,6 +3,7 @@
 #include "ue_wrap/core/gc_pin.h"
 #include "coop/session/shutdown.h"
 
+#include "coop/dev/vulkan_rhi_probe.h"
 #include "coop/input/game_window_proc.h"
 #include "coop/net/session.h"
 #include "ue_wrap/core/game_thread.h"
@@ -109,6 +110,7 @@ void DoShutdown() {
     ::Sleep(100);  // let detached pollers observe g_shuttingDown
     ue_wrap::game_thread::Uninstall();
     ue_wrap::uobject_listeners::Uninstall();
+    coop::dev::vulkan_rhi_probe::Shutdown();  // [dev] puts the loader slots it swapped back; idle when off
     ue_wrap::hook::Shutdown();
     // From here on a GC pin releases WITHOUT touching the engine. Pins can live inside
     // statics (the proxy map, the permanent audio pins), so their destructors run at DLL

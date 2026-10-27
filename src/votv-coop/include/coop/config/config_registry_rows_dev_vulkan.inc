@@ -9,3 +9,10 @@ CFG_FLAG(vulkan_path_probe, "vulkan_path_probe", "dev", false, "VOTVCOOP_VULKAN_
     "address it calls sees one present per frame, and the swapchain behind it. Lines tagged [VK-PATH], "
     "a per-second summary for the first 10 s of presents, then DONE. Observation only; installs "
     "detours on the Vulkan loader, and on KernelBase LoadLibraryExW until the library maps, while on.")
+CFG_FLAG(vulkan_rhi_probe, "vulkan_rhi_probe", "dev", false, "VOTVCOOP_VULKAN_RHI_PROBE",
+    "Probe (run the game with the Vulkan renderer): resolves the renderer's Present, its pixel-format table "
+    "and the loader slots of vkQueuePresentKHR, vkDestroySwapchainKHR and vkQueueSubmit; hooks the "
+    "viewport's Present and reads the instance, devices, present queue, swapchain, extent, image count and "
+    "back-buffer format from it, checking the format and image count against the Vulkan API; swaps the "
+    "present and submit slots for counters (which threads call, on which queue) for 10 s, then prints "
+    "a DONE line. Observation only; the slots are put back at shutdown.")
