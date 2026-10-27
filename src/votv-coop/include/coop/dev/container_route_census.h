@@ -29,6 +29,7 @@ uint64_t UnixMs();
 bool IsEnabled();           // the row is non-empty
 bool IsDrill();             // drill, drill-vacuumcancel or drill-before
 bool IsVacuumCancel();      // drill-vacuumcancel
+bool IsBeforeOnly();        // drill-before
 
 // Per pump tick: registers the watches once the session runs, says each seam's state once, and reports every 30 s.
 void Tick(coop::net::Session* session);
@@ -49,6 +50,13 @@ void NoteSliceJudged(uint8_t senderSlot, bool accepted);
 // Prints the non-zero cells now, `why` naming the moment.
 void ReportNow(const char* why);
 
+// What the drill reads. All since the session began.
+uint64_t SlicesSent();                 // client-authored slices sent
+uint64_t RouteEntries(int route);      // seam entries of route 0..4 (R1..R5)
+uint64_t R4Overlaps();
+uint64_t GenCalls();                   // ui_playerInventory_C::gen_player bodies run (the screen's rebuild)
+uint64_t VacuumCancelled();            // addObject calls cancelled by drill-vacuumcancel
+uint64_t HostSlices(int slot, bool accepted);   // slices judged for a sender slot
 
 // Verbs run inside the scope do not count (a drill's own setup act).
 class Quiet {

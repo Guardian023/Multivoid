@@ -174,7 +174,7 @@ void NoteOverlap(const sg::Call& c) {
     for (int i = 0; i < g_r4ClassCount; ++i)
         if (std::strcmp(g_r4Classes[i], cls) == 0) return;
     if (g_r4ClassCount < kClasses) {
-        std::strcpy(g_r4Classes[g_r4ClassCount++], cls);
+        std::snprintf(g_r4Classes[g_r4ClassCount++], kName, "%s", cls);
         UE_LOGI("[CI-CENSUS] %s R4: a client-side simulating shared prop of class %s entered a container", Role(), cls);
     }
 }
@@ -213,7 +213,7 @@ void NoteR6Caller(const sg::Call& c) {
         if (std::strcmp(g_callers[i].name, cls) == 0) { ++g_callers[i].n; return; }
     if (g_callerCount >= kCallers) { ++g_callerOther; return; }
     CallerCount& e = g_callers[g_callerCount++];
-    std::strcpy(e.name, cls);
+    std::snprintf(e.name, kName, "%s", cls);
     e.n = 1;
     char outer[kName] = "?";
     if (void* fn = sg::OutermostFunction(c)) Narrow(R::ToString(R::NameOf(fn)), outer, sizeof(outer));
@@ -284,6 +284,7 @@ uint64_t UnixMs() {
 bool IsEnabled() { return !Mode().empty(); }
 bool IsDrill() { return Mode().compare(0, 5, "drill") == 0; }
 bool IsVacuumCancel() { return Mode() == "drill-vacuumcancel"; }
+bool IsBeforeOnly() { return Mode() == "drill-before"; }
 
 Quiet::Quiet() { ++g_quiet; }
 Quiet::~Quiet() { --g_quiet; }
@@ -343,23 +344,22 @@ void ReportNow(const char* why) {
             UE_LOGI("[CI-CENSUS] %s scope R%d entries=%llu verbs-on-no-shared-container=%llu", Role(), r + 1,
                     static_cast<unsigned long long>(g_entries[r]), static_cast<unsigned long long>(g_unshared[r]));
     if (g_entries[kR4]) {
-        char list[kClasses * kName] = "";
-        for (int i = 0; i < g_r4ClassCount; ++i) {
-            if (i) std::strcat(list, ",");
-            std::strcat(list, g_r4Classes[i]);
-        }
+        char list[kClasses * (kName + 1)] = "";
+        size_t used = 0;
+        for (int i = 0; i < g_r4ClassCount; ++i)
+            used += static_cast<size_t>(std::snprintf(list + used, sizeof(list) - used, "%s%s", i ? "," : "", g_r4Classes[i]));
         UE_LOGI("[CI-CENSUS] %s R4 simulated-shared n=%llu classes=%s", Role(), static_cast<unsigned long long>(g_r4Sim),
                 g_r4ClassCount ? list : "-");
     }
     if (g_callerCount) {
-        char line[kCallers * (kName + 12)] = "";
-        for (int i = 0; i < g_callerCount; ++i) {
-            char one[kName + 16];
-            std::snprintf(one, sizeof(one), "%s%s=%u", i ? "," : "", g_callers[i].name, g_callers[i].n);
-            std::strcat(line, one);
-        }
-        UE_LOGI("[CI-CENSUS] R6 callers: %s%s%llu", line, g_callerOther ? ",other=" : "",
-                static_cast<unsigned long long>(g_callerOther));
+        char line[(kCallers + 1) * (kName + 16)] = "";
+        size_t used = 0;
+        for (int i = 0; i < g_callerCount; ++i)
+            used += static_cast<size_t>(std::snprintf(line + used, sizeof(line) - used, "%s%s=%u", i ? "," : "",
+                                                      g_callers[i].name, g_callers[i].n));
+        if (g_callerOther)
+            std::snprintf(line + used, sizeof(line) - used, ",other=%llu", static_cast<unsigned long long>(g_callerOther));
+        UE_LOGI("[CI-CENSUS] R6 callers: %s", line);
     }
     if (g_unattributed) UE_LOGI("[CI-CENSUS] %s slices with no counted writer=%llu", Role(),
                                 static_cast<unsigned long long>(g_unattributed));
@@ -398,6 +398,15 @@ void OnDisconnect() {
     if (!IsEnabled()) return;
     ReportNow("session end");
     Reset();
+}
+
+uint64_t SlicesSent() { return g_slicesSent; }
+uint64_t RouteEntries(int route) { return route >= 0 && route < 5 ? g_entries[route] : 0; }
+uint64_t R4Overlaps() { return g_r4Overlaps; }
+uint64_t GenCalls() { return g_gen; }
+uint64_t VacuumCancelled() { return g_cancelled; }
+uint64_t HostSlices(int slot, bool accepted) {
+    return slot >= 0 && slot < coop::net::kMaxPeers ? g_hostSlice[slot][accepted ? 0 : 1] : 0;
 }
 
 }  // namespace coop::dev::container_route_census

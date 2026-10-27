@@ -107,6 +107,9 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/container_writer_probe.cpp
     src/coop/dev/container_view_drill.cpp
     src/coop/dev/container_route_census.cpp
+    src/coop/dev/container_route_drill.cpp
+    src/coop/dev/container_route_drill_client.cpp
+    src/coop/dev/container_route_drill_host.cpp
     src/coop/dev/dev_lanes.cpp
     src/coop/dev/physmods_drill.cpp
     src/coop/dev/drone_call_drill.cpp

@@ -19,6 +19,7 @@
 #include "coop/net/protocol.h"
 
 #include <cstdint>
+#include <vector>
 
 namespace coop::net { class Session; }
 
@@ -75,6 +76,15 @@ bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol);
 // count, for the parity report. False when the eid is not a live world container here, its contents do not read, or a
 // transfer into it is in progress. Game thread.
 bool ContentHashOf(uint32_t eid, uint64_t& outHash, uint32_t& outRecords);
+
+// Dev (the route census drill): the content hash of each record of one container as the lane publishes it
+// (ContentHash over that record alone), in order, and of the whole slice. False as ContentHashOf. Game thread.
+bool DevRecordHashes(uint32_t eid, std::vector<uint64_t>& out, uint64_t& whole);
+
+// Dev (the route census drill): one raw write to a container's contents the way an accepted client slice is applied
+// -- the first record appended once more -- and, when `publish`, marked for the sweep like any local write; unpublished,
+// the host's contents move ahead of every client's base. False when the contents do not read or are empty. Game thread.
+bool DevRawAppend(uint32_t eid, bool publish);
 
 // Call fn once per live world container, boundary 1 applied: the set the connect seed walks. Game thread.
 void ForEachWorldContainer(void (*fn)(uint32_t eid, void* ctx), void* ctx);
