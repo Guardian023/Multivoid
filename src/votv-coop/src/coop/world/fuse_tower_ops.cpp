@@ -13,16 +13,15 @@
 #include "coop/props/prop_lifecycle.h"  // a refused pull's fuse reaped
 #include "coop/props/remote_prop.h"     // the destroys this host applies: a spent fuse
 #include "coop/session/net_pump.h"      // IsInAnnouncedWorld
+#include "coop/world/fuse_tower_kind.h"
 #include "coop/world/fuse_tower_rows.h"
 
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/core/script_gate.h"
-#include "ue_wrap/devices/coord_tower.h"
 #include "ue_wrap/engine/engine.h"             // TryGetActorLocation
 #include "ue_wrap/engine/engine_mainplayer.h"  // what the local player holds
 #include "ue_wrap/facts/function_row.h"
-#include "ue_wrap/world/game_rules.h"          // the difficulty an insert reads
 
 #include <algorithm>
 #include <atomic>
@@ -35,7 +34,7 @@
 namespace coop::fuse_tower_ops {
 namespace {
 
-namespace CT = ue_wrap::coord_tower;
+namespace FK = coop::fuse_tower_kind;
 namespace EL = coop::element;
 namespace R  = ue_wrap::reflection;
 namespace sg = ue_wrap::script_gate;
@@ -83,23 +82,6 @@ const char* OpName(uint8_t op) {
     }
 }
 
-CT::LookAt PartOf(uint8_t op, int32_t index) {
-    switch (op) {
-    case coop::net::kFuseTowerOpButton:  return {CT::Part::Button, index};
-    case coop::net::kFuseTowerOpLever:   return {CT::Part::Lever, -1};
-    case coop::net::kFuseTowerOpRetract: return {CT::Part::Retract, -1};
-    default:                              return {CT::Part::Fuse, index};
-    }
-}
-
-void* TowerById(int32_t id) {
-    void* towers[coop::net::kFuseTowers];
-    const int32_t n = CT::ReadAll(towers, coop::net::kFuseTowers);
-    for (int32_t i = 0; i < n; ++i)
-        if (CT::IdOf(towers[i]) == id) return towers[i];
-    return nullptr;
-}
-
 uint64_t g_rollsRefused = 0;
 
 // ---- the host ------------------------------------------------------------------------------------------------
@@ -119,20 +101,20 @@ uint64_t g_taken = 0, g_refusedCount = 0, g_refunds = 0, g_queuesFull = 0, g_out
 void OnDestroyHeard(int senderSlot, void* actor) {
     auto* s = Connected();
     if (!s || s->role() != coop::net::Role::Host) return;
-    if (senderSlot <= 0 || senderSlot >= coop::net::kMaxPeers || !CT::IsFuse(actor)) return;
+    if (senderSlot <= 0 || senderSlot >= coop::net::kMaxPeers || !FK::IsFuse(actor)) return;
     const auto sender = static_cast<uint8_t>(senderSlot);
-    void* towers[coop::net::kFuseTowers];
-    const int32_t n = CT::ReadAll(towers, coop::net::kFuseTowers);
+    FK::Tower towers[coop::net::kFuseTowers];
+    const int32_t n = FK::ReadAll(towers, coop::net::kFuseTowers);
     const EL::IntentTarget target = EL::IntentTarget::ForClientIntent(*s, sender, kTowerReachUU);
     for (int32_t i = 0; i < n; ++i) {
         ue_wrap::FVector at{};
-        if (!CT::PartLocation(towers[i], CT::LookAt{CT::Part::Fuse, 0}, at)) continue;
+        if (!FK::PartLocation(towers[i].kind, towers[i].obj, coop::net::kFuseTowerOpPull, 0, at)) continue;
         const EL::IntentSubject reach = target.AuthorizeSegment(at, at);
         if (!reach) continue;
         Spends& sp = g_spends[sender];
-        sp.ring[sp.next] = {CT::IdOf(towers[i]), NowMs()};
+        sp.ring[sp.next] = {towers[i].id, NowMs()};
         sp.next = static_cast<uint8_t>((sp.next + 1) % kSpendsPerSlot);
-        UE_LOGI("fuse_tower: slot %u spent a fuse at tower %d (%.0f uu, allowed %.0f)", sender, CT::IdOf(towers[i]),
+        UE_LOGI("fuse_tower: slot %u spent a fuse at tower %d (%.0f uu, allowed %.0f)", sender, towers[i].id,
                 reach.distUU, reach.reachUU);
         return;
     }
@@ -151,29 +133,19 @@ bool TakeSpend(uint8_t slot, int32_t id) {
 
 // A refused insert's fuse, given back where its inserter stands (above the tower's fuses when the body is unread);
 // the host's spawn watcher gives it to every peer.
-void Refund(uint8_t slot, void* tower) {
+void Refund(uint8_t slot, FK::Kind kind, void* tower) {
     ue_wrap::FVector at{};
     coop::RemotePlayer* rp = coop::players::Registry::Get().Puppet(slot);
     void* body = rp ? rp->GetActor() : nullptr;
     bool placed = body && ue_wrap::engine::TryGetActorLocation(body, at);
-    if (!placed && CT::PartLocation(tower, CT::LookAt{CT::Part::Fuse, 0}, at)) {
+    if (!placed && FK::PartLocation(kind, tower, coop::net::kFuseTowerOpPull, 0, at)) {
         at.Z += 80.f;
         placed = true;
     }
-    void* fuse = placed ? CT::SpawnFuse(at) : nullptr;
+    void* fuse = placed ? FK::SpawnFuse(at) : nullptr;
     if (fuse) ++g_refunds;
     UE_LOGW("fuse_tower: slot %u's refused insert refunded -- %s", slot,
             fuse ? "a fuse spawned where it stands" : "NOT spawned (the fuse is lost)");
-}
-
-// The insert's own branch on the difficulty (coordRadarDish playerUsedOn @4823): on the two easiest, the
-// puzzle is solved with it.
-bool InsertSolves() {
-    ue_wrap::game_rules::Snapshot rules;
-    if (!ue_wrap::game_rules::ReadLocal(rules)) return false;
-    for (const auto& f : rules.fields)
-        if (f.key == "difficulty") return f.ival <= 1;
-    return false;
 }
 
 enum class Take : uint8_t { Done, Wait };
@@ -181,16 +153,16 @@ enum class Take : uint8_t { Done, Wait };
 Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     const FuseTowerPayload& p = wt.p;
     const bool waited = NowMs() - wt.arrivedMs >= kWaitMs;
-    if (!CT::EnsureResolved() && !waited) return Take::Wait;
+    const FK::Kind kind = FK::Kind::Coordinate;
+    if (!FK::Resolved(kind) && !waited) return Take::Wait;
     if (!SeqAfter(p.seq, g_ack[sender])) {
         UE_LOGW("fuse_tower: host dropped slot %u's %s seq %u (last taken %u)", sender, OpName(p.op), p.seq,
                 g_ack[sender]);
         return Take::Done;
     }
-    void* tower = TowerById(p.tower);
-    const CT::LookAt part = PartOf(p.op, p.index);
+    void* tower = FK::Find(kind, p.tower);
     ue_wrap::FVector at{};
-    const bool located = tower && CT::PartLocation(tower, part, at);
+    const bool located = tower && FK::PartLocation(kind, tower, p.op, p.index, at);
     EL::IntentSubject reach{};
     if (located) reach = EL::IntentTarget::ForClientIntent(*s, sender, kTowerReachUU).AuthorizeSegment(at, at);
     if (located && reach.outcome == EL::IntentOutcome::NoBody && !waited) return Take::Wait;
@@ -201,20 +173,14 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
         spent = TakeSpend(sender, p.tower);
         if (!spent && !waited) return Take::Wait;
     }
-    CT::State st;
+    FK::View st;
     const char* refusal = !tower ? "no tower of that id" : !located ? "that part is not there"
-                        : !reach ? EL::OutcomeName(reach.outcome) : !CT::Read(tower, st) ? "the tower does not read"
-                        : nullptr;
-    const bool slotOk = p.index < st.fuseCount;
+                        : !reach ? EL::OutcomeName(reach.outcome) : !FK::ReadView(kind, tower, st)
+                        ? "the tower does not read" : nullptr;
     if (!refusal && p.op == coop::net::kFuseTowerOpPull) {
-        // The pull's own gates (coordRadarDish actionOptionIndex @3586-@3782), on the host's copy.
-        if (!st.opened) refusal = "its panel is closed";
-        else if (st.isAnim) refusal = "its panel is moving";
-        else if (st.leverMoving) refusal = "its lever is moving";
-        else if (!slotOk || st.fuses[p.index] != 2) refusal = "that fuse is not blown on the host";
+        refusal = FK::CanPull(kind, tower, st, p.index);
     } else if (!refusal && p.op == coop::net::kFuseTowerOpInsert) {
-        if (!spent) refusal = "no fuse of the inserter's was spent at it";
-        else if (!slotOk || st.fuses[p.index] != 0) refusal = "that fuse slot is not empty on the host";
+        refusal = !spent ? "no fuse of the inserter's was spent at it" : FK::CanInsert(kind, st, p.index);
     }
     g_ack[sender] = p.seq;
     if (refusal) {
@@ -226,7 +192,7 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
             UE_LOGW("fuse_tower: host refused slot %u's %s of tower %d (seq %u) -- %s (%.0f uu, allowed %.0f)",
                     sender, OpName(p.op), p.tower, p.seq, refusal, reach.distUU, reach.reachUU);
         if (IsClaim(p.op)) g_refused[sender] = p.seq;
-        if (spent) Refund(sender, tower);
+        if (spent) Refund(sender, kind, tower);
         coop::fuse_tower_rows::HostSendNow();  // answered before the sender's next op is taken
         return Take::Done;
     }
@@ -237,20 +203,13 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     case coop::net::kFuseTowerOpLever:
     case coop::net::kFuseTowerOpRetract:
         // The tower's own use, on its own gates: the panel open, the lever at rest, the tower broken.
-        CT::Use(tower, puppet, part);
+        FK::Use(kind, tower, puppet, p.op, p.index);
         break;
     case coop::net::kFuseTowerOpPull:
-        // The pull's writes on the host's copy; its fuse is already in its puller's hand.
-        CT::WriteFuse(tower, p.index, 0);
-        CT::UpdFuses(tower);
-        CT::Play(tower, CT::Sound::FusePulled);
+        FK::TakePull(kind, tower, p.index);
         break;
     case coop::net::kFuseTowerOpInsert:
-        // The insert's writes (playerUsedOn @4823..@5317), on the host's copy; its fuse is already spent.
-        if (InsertSolves()) CT::SolvePuzzle(tower);
-        CT::WriteFuse(tower, p.index, 1);
-        CT::Play(tower, CT::Sound::FuseInserted);
-        CT::UpdFuses(tower);
+        FK::TakeInsert(kind, tower, p.index);
         break;
     default: break;
     }
@@ -281,7 +240,8 @@ void HostOffer(coop::net::Session* s, const FuseTowerPayload& p, uint8_t sender)
             if (!IsClaim(r.p.op)) continue;
             g_refused[sender] = r.p.seq;
             if (r.p.op == coop::net::kFuseTowerOpInsert && TakeSpend(sender, r.p.tower))
-                if (void* tower = TowerById(r.p.tower)) Refund(sender, tower);
+                if (void* tower = FK::Find(FK::Kind::Coordinate, r.p.tower))
+                    Refund(sender, FK::Kind::Coordinate, tower);
             coop::fuse_tower_rows::HostSendNow();
         }
         q.clear();
@@ -342,7 +302,7 @@ void Reap(const Claim& c) {
     ue_wrap::engine::MainPlayerGrabState gs{};
     if (player && ue_wrap::engine::ReadMainPlayerGrabState(player, gs)) {
         void* held = gs.grabbingActor ? gs.grabbingActor : gs.holdingActor;
-        if (held && CT::IsPulledFuse(held)) {
+        if (held && FK::IsPulledFuse(held)) {
             coop::prop_lifecycle::DestroyLocalProp(held, /*deferred*/true);
             ++g_reaped;
             UE_LOGW("fuse_tower: my pull of tower %d's fuse %u was refused -- the fuse it handed me is reaped",
@@ -383,27 +343,19 @@ sg::Verdict OnUsePre(const sg::Call& call) {
         g_actionOff = R::FindParamOffset(call.function, L"action");
     }
     if (g_actionOff < 0 || call.locals[g_actionOff] != 4) return sg::Verdict::Run;
-    CT::LookAt at;
-    const int32_t id = CT::IdOf(call.object);
-    if (id < 0 || !CT::ReadLookAt(call.object, at)) return sg::Verdict::Run;
-    switch (at.part) {
-    case CT::Part::Button:
-        ClientSend(Connected(), coop::net::kFuseTowerOpButton, id, at.index);
+    FK::Kind kind;
+    int32_t id;
+    uint8_t op = 0;
+    int32_t index = -1;
+    if (!FK::Identify(call.object, kind, id)) return sg::Verdict::Run;
+    switch (FK::ReadUse(kind, call.object, op, index)) {
+    case FK::Look::Send:
+        ClientSend(Connected(), op, id, index);
         return sg::Verdict::Cancel;
-    case CT::Part::Lever:
-        ClientSend(Connected(), coop::net::kFuseTowerOpLever, id, -1);
-        return sg::Verdict::Cancel;
-    case CT::Part::Retract:
-        ClientSend(Connected(), coop::net::kFuseTowerOpRetract, id, -1);
-        return sg::Verdict::Cancel;
-    case CT::Part::Fuse: {
-        CT::State st;
-        if (CT::Read(call.object, st) && at.index >= 0 && at.index < st.fuseCount && st.fuses[at.index] == 2) {
-            g_pullTower = call.object;
-            g_pullSlot = at.index;
-        }
+    case FK::Look::Pull:
+        g_pullTower = call.object;
+        g_pullSlot = index;
         return sg::Verdict::Run;
-    }
     default:
         return sg::Verdict::Run;
     }
@@ -412,10 +364,14 @@ sg::Verdict OnUsePre(const sg::Call& call) {
 void OnUsePost(const sg::Call& call) {
     if (!call.object || call.object != g_pullTower) return;
     g_pullTower = nullptr;
-    CT::State st;
+    FK::Kind kind;
+    int32_t id;
+    FK::View st;
     auto* s = Connected();
-    if (!IsClient(s) || !CT::Read(call.object, st) || g_pullSlot >= st.fuseCount || st.fuses[g_pullSlot] != 0) return;
-    ClientSend(s, coop::net::kFuseTowerOpPull, CT::IdOf(call.object), g_pullSlot);
+    if (!IsClient(s) || !FK::Identify(call.object, kind, id) || !FK::ReadView(kind, call.object, st) ||
+        g_pullSlot >= st.fuseCount || st.fuses[g_pullSlot] != 0)
+        return;
+    ClientSend(s, coop::net::kFuseTowerOpPull, id, g_pullSlot);
 }
 
 // A client's insert runs here, and its move is claimed as it ends.
@@ -430,26 +386,30 @@ sg::Verdict OnInsertPre(const sg::Call& call) {
     }
     if (g_holdOff < 0) return sg::Verdict::Run;
     void* held = *reinterpret_cast<void* const*>(call.locals + g_holdOff);
-    CT::State st;
+    FK::Kind kind;
+    int32_t id;
+    FK::View st;
     int32_t slot = -1;
-    if (!CT::IsFuse(held) || !CT::Read(call.object, st) || !CT::ReadFuseLook(call.object, slot) || slot < 0 ||
-        slot >= st.fuseCount || st.fuses[slot] != 0)
+    if (!FK::IsFuse(held) || !FK::Identify(call.object, kind, id) || !FK::ReadView(kind, call.object, st) ||
+        !FK::ReadFuseLook(kind, call.object, slot) || slot < 0 || slot >= st.fuseCount || st.fuses[slot] != 0)
         return sg::Verdict::Run;
     g_insertTower = call.object;
     g_insertSlot = slot;
-    g_insertWasBroken = st.isBroken;
+    g_insertWasBroken = st.broken;
     return sg::Verdict::Run;
 }
 
 void OnInsertPost(const sg::Call& call) {
     if (!call.object || call.object != g_insertTower) return;
     g_insertTower = nullptr;
-    CT::State st;
+    FK::Kind kind;
+    int32_t id;
+    FK::View st;
     auto* s = Connected();
-    if (!IsClient(s) || !CT::Read(call.object, st) || g_insertSlot >= st.fuseCount || st.fuses[g_insertSlot] != 1)
+    if (!IsClient(s) || !FK::Identify(call.object, kind, id) || !FK::ReadView(kind, call.object, st) ||
+        g_insertSlot >= st.fuseCount || st.fuses[g_insertSlot] != 1)
         return;
-    ClientSend(s, coop::net::kFuseTowerOpInsert, CT::IdOf(call.object), g_insertSlot,
-               g_insertWasBroken && !st.isBroken);
+    ClientSend(s, coop::net::kFuseTowerOpInsert, id, g_insertSlot, g_insertWasBroken && !st.broken);
 }
 
 UE_FACT_FN(kRowScrambleRadarDish, "fuse_tower_ops", L"coordRadarDish_C", L"Scramble Radar Dish", Declared);

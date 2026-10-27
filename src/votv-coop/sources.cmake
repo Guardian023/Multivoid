@@ -271,6 +271,7 @@ set(VOTVCOOP_SOURCES
     src/coop/world/power_upgrade.cpp
     src/coop/world/fuse_tower_ops.cpp
     src/coop/world/fuse_tower_rows.cpp
+    src/coop/world/fuse_tower_kind.cpp
     src/coop/interactables/atv_sync.cpp
     src/coop/interactables/atv_stream_gates.cpp
     src/coop/interactables/atv_authority.cpp

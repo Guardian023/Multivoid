@@ -4,12 +4,12 @@
 
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"
+#include "coop/world/fuse_tower_kind.h"
 #include "coop/world/fuse_tower_ops.h"  // the acknowledgements, and my untaken claims
 
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
-#include "ue_wrap/devices/coord_tower.h"
 
 #include <algorithm>
 #include <atomic>
@@ -20,14 +20,13 @@
 namespace coop::fuse_tower_rows {
 namespace {
 
-namespace CT = ue_wrap::coord_tower;
+namespace FK = coop::fuse_tower_kind;
 namespace R  = ue_wrap::reflection;
 using coop::net::FuseTowerPayload;
 using coop::net::FuseTowerRow;
 using coop::net::kFuseTowers;
 
 static_assert(coop::net::kMaxPeers <= 8, "the owed rows are one bit a slot");
-static_assert(CT::kMaxFuses <= 8 && CT::kMaxLights <= 16, "a row holds eight fuses and sixteen lights");
 
 // A client brings a panel to the host's with its own retract; a retract that left the panel idle (a montage
 // that would not start) is asked again no sooner than this.
@@ -46,44 +45,26 @@ uint64_t NowMs() {
 }
 
 // This world's towers, by id; re-read when one dies or the class set moves.
-void*    g_towers[kFuseTowers] = {};
-int32_t  g_towerCount = 0;
-uint64_t g_classVersion = ~0ull;
+FK::Tower g_towers[kFuseTowers] = {};
+int32_t   g_towerCount = 0;
+uint64_t  g_classVersion = ~0ull;
 
 bool Towers() {
     const uint64_t v = ue_wrap::object_index::ClassSetVersion();
     bool stale = v != g_classVersion || g_towerCount <= 0;
-    for (int32_t i = 0; !stale && i < g_towerCount; ++i) stale = !R::IsLive(g_towers[i]);
+    for (int32_t i = 0; !stale && i < g_towerCount; ++i) stale = !R::IsLive(g_towers[i].obj);
     if (stale) {
-        const int32_t n = CT::ReadAll(g_towers, kFuseTowers);
+        const int32_t n = FK::ReadAll(g_towers, kFuseTowers);
         g_towerCount = n < 0 ? 0 : n;
         g_classVersion = v;
     }
     return g_towerCount > 0;
 }
 
-void* TowerById(int32_t id) {
+void* TowerById(FK::Kind kind, int32_t id) {
     for (int32_t i = 0; i < g_towerCount; ++i)
-        if (CT::IdOf(g_towers[i]) == id) return g_towers[i];
+        if (g_towers[i].kind == kind && g_towers[i].id == id) return g_towers[i].obj;
     return nullptr;
-}
-
-bool FillRow(void* tower, FuseTowerRow& w) {
-    CT::State st;
-    if (!CT::Read(tower, st)) return false;
-    w = FuseTowerRow{};
-    w.id = st.id;
-    w.flags = static_cast<uint8_t>((st.isBroken ? coop::net::kFuseTowerBroken : 0) |
-                                   (st.opened ? coop::net::kFuseTowerOpened : 0) |
-                                   (st.isAnim ? coop::net::kFuseTowerAnim : 0) |
-                                   (st.leverMoving ? coop::net::kFuseTowerLeverMoving : 0) |
-                                   (st.leverUp ? coop::net::kFuseTowerLeverUp : 0));
-    w.fuseCount = st.fuseCount;
-    for (int i = 0; i < st.fuseCount; ++i) w.fuses[i] = st.fuses[i];
-    w.lightCount = st.lightCount;
-    for (int i = 0; i < st.lightCount; ++i)
-        if (st.lights[i]) w.lights = static_cast<uint16_t>(w.lights | (1u << i));
-    return true;
 }
 
 bool ReadRows(FuseTowerPayload& p) {
@@ -91,7 +72,7 @@ bool ReadRows(FuseTowerPayload& p) {
     p.op = coop::net::kFuseTowerOpRows;
     p.count = 0;
     for (int32_t i = 0; i < g_towerCount && p.count < kFuseTowers; ++i)
-        if (FillRow(g_towers[i], p.rows[p.count])) ++p.count;
+        if (FK::ReadRow(g_towers[i], p.rows[p.count])) ++p.count;
     return p.count > 0;
 }
 
@@ -150,71 +131,10 @@ Edges    g_edges;
 // One tower brought to the host's row with my untaken claims on it, each change made as the tower's own graph
 // makes it, so it paints, sounds and animates as the host's did. The first rows a world takes are its state, not a
 // player's act: their changes make no sound of their own.
-void ApplyOne(void* tower, const FuseTowerRow& host, bool live) {
+void ApplyOne(FK::Kind kind, void* tower, const FuseTowerRow& host, bool live) {
     FuseTowerRow c = host;
     coop::fuse_tower_ops::Overlay(c);
-    CT::State l;
-    if (!CT::Read(tower, l)) return;
-    const bool broken = (c.flags & coop::net::kFuseTowerBroken) != 0;
-    bool lights[CT::kMaxLights] = {};
-    bool lightsDiffer = false;
-    if (c.lightCount == l.lightCount) {
-        for (int i = 0; i < c.lightCount; ++i) {
-            lights[i] = ((c.lights >> i) & 1u) != 0;
-            lightsDiffer = lightsDiffer || lights[i] != l.lights[i];
-        }
-    } else if (!g_sizeWarned) {
-        // Every peer plays under the host's rules (ue_wrap/world/game_rules.h), which size the puzzle.
-        g_sizeWarned = true;
-        UE_LOGW("fuse_tower: tower %d's puzzle has %u lights here and %u on the host -- its lights are not applied",
-                c.id, l.lightCount, c.lightCount);
-    }
-    if (lightsDiffer) CT::WriteLights(tower, lights, c.lightCount);
-    if (l.isBroken && !broken) {
-        CT::SolvePuzzle(tower);  // the repair: every light lit, painted, its success sound, isBroken off, painted
-        ++g_edges.repairs;
-        UE_LOGI("fuse_tower: tower %d repaired as the host's", c.id);
-    } else if (!l.isBroken && broken) {
-        CT::WriteBroken(tower, true);
-        CT::UpdPuzzle(tower);
-        CT::UpdBroken(tower);
-        ++g_edges.breaks;
-        UE_LOGI("fuse_tower: tower %d broke as the host's", c.id);
-    } else if (lightsDiffer) {
-        CT::UpdPuzzle(tower);
-        if (live) CT::Play(tower, CT::Sound::Click);  // a press, the host's route's own click
-        ++g_edges.presses;
-    }
-    bool fusesDiffer = false, pulled = false, inserted = false;
-    if (c.fuseCount == l.fuseCount) {
-        for (int i = 0; i < c.fuseCount; ++i) {
-            if (c.fuses[i] == l.fuses[i]) continue;
-            pulled = pulled || (l.fuses[i] == 2 && c.fuses[i] == 0);
-            inserted = inserted || (l.fuses[i] == 0 && c.fuses[i] == 1);
-            CT::WriteFuse(tower, i, c.fuses[i]);
-            fusesDiffer = true;
-        }
-    }
-    if (fusesDiffer) {
-        CT::UpdFuses(tower);
-        if (live && pulled) CT::Play(tower, CT::Sound::FusePulled);
-        if (live && inserted) CT::Play(tower, CT::Sound::FuseInserted);
-        g_edges.pulls += pulled ? 1 : 0;
-        g_edges.inserts += inserted ? 1 : 0;
-    }
-    const bool up = (c.flags & coop::net::kFuseTowerLeverUp) != 0;
-    if (up != l.leverUp) {
-        // A lever that goes down on a tower broken before and after is the judgement's fail branch: its other
-        // caller, a scramble, breaks a whole tower (Scramble Radar Dish's end, and loadData, before any join).
-        if (!up && l.isBroken && broken) {
-            if (live) CT::Play(tower, CT::Sound::Fail);
-            ++g_edges.fails;
-        }
-        CT::MoveLever(tower, up);
-        ++g_edges.levers;
-    }
-    // The lever's end, which judges the puzzle, is refused here, and it is what clears the flag: the host's.
-    CT::WriteLeverMoving(tower, (c.flags & coop::net::kFuseTowerLeverMoving) != 0);
+    FK::ApplyRow(kind, tower, c, live, g_edges, g_sizeWarned);
 }
 
 void ApplyAll() {
@@ -226,7 +146,8 @@ void ApplyAll() {
     g_applying = true;
     const bool live = g_applied > 0;
     for (int i = 0; i < g_rows.count && i < kFuseTowers; ++i)
-        if (void* t = TowerById(g_rows.rows[i].id)) ApplyOne(t, g_rows.rows[i], live);
+        if (void* t = TowerById(FK::Kind::Coordinate, g_rows.rows[i].id))
+            ApplyOne(FK::Kind::Coordinate, t, g_rows.rows[i], live);
     g_applying = false;
     ++g_applied;
 }
@@ -240,18 +161,16 @@ void ConvergePanels() {
     const uint64_t now = NowMs();
     for (int i = 0; i < g_rows.count && i < kFuseTowers; ++i) {
         const FuseTowerRow& w = g_rows.rows[i];
-        void* t = TowerById(w.id);
-        CT::State l;
-        if (!t || !CT::Read(t, l) || l.isAnim) continue;
-        const bool open = (w.flags & coop::net::kFuseTowerOpened) != 0;
-        const bool target = (w.flags & coop::net::kFuseTowerAnim) ? !open : open;
-        if (l.opened == target || now - g_panelAskedMs[i] < kPanelRetryMs) continue;
-        g_panelAskedMs[i] = now;
+        void* t = TowerById(FK::Kind::Coordinate, w.id);
+        if (!t || now - g_panelAskedMs[i] < kPanelRetryMs) continue;
         g_applying = true;
-        const bool ran = CT::Use(t, player, CT::LookAt{CT::Part::Retract, -1});
+        bool opens = false, ran = false;
+        const bool asked = FK::ConvergePanel(FK::Kind::Coordinate, t, player, w, opens, ran);
         g_applying = false;
+        if (!asked) continue;
+        g_panelAskedMs[i] = now;
         ++g_edges.panels;
-        UE_LOGI("fuse_tower: tower %d's panel %s as the host's (retract ran=%d)", w.id, target ? "opens" : "closes",
+        UE_LOGI("fuse_tower: tower %d's panel %s as the host's (retract ran=%d)", w.id, opens ? "opens" : "closes",
                 ran ? 1 : 0);
     }
 }
