@@ -9,7 +9,8 @@
 //   join -- the host breaks the drill's tower as it hosts; the joiner's tower must read the host's, its own
 //           load-time roll refused.
 //   red, joinred -- the controls: a client's gates stand open and it applies no rows, as before the lane.
-//   radioreach, radio, radiored -- the radio tower's arms (one actor, no ladder): tower_drill_radio.cpp says each.
+//   radioreach, radio, radiored -- the radio tower's arms (one actor; radioreach also climbs its ladder):
+//           tower_drill_radio.cpp says each.
 // Each peer says its towers on "[TOWER-DRILL]" lines; the client's DONE line ends it.
 
 #pragma once

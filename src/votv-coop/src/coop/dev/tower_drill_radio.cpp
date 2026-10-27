@@ -11,6 +11,7 @@
 #include "tower_drill_detail.h"
 
 #include "coop/dev/director/director.h"
+#include "coop/dev/director/ladder_climb.h"
 #include "coop/dev/director/routes.h"
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
@@ -31,8 +32,9 @@
 #include <utility>
 #include <vector>
 
-// The arms. radioreach: the client walks to the tower with the director and prints the route and how far the walk
-// ended from each part a use reaches; a measurement, no verdict. radio: the host scrambles its tower until it reads
+// The arms. radioreach: the client walks to the tower with the director, then to the foot of the tower's ladder,
+// takes hold and climbs it through the game's own verb and key, and prints the ladder's ends, whether it stood at
+// the top, and how far it ended from each part a use reaches; a measurement, no verdict. radio: the host scrambles its tower until it reads
 // broken; the client reads the break, walks as above and, when every part it uses is within the lane's reach,
 // solves the puzzle with presses through the tower's own use and pulls the confirm lever; PASS when its copy and the
 // host's last row read whole 20 s at most after the lever. radiored: radio with the client's gates open and no rows
@@ -45,6 +47,7 @@ using namespace detail;
 
 namespace RT = ue_wrap::radio_tower;
 namespace DR = coop::director;
+namespace LD = coop::director::ladder;
 using coop::net::FuseTowerRow;
 using ue_wrap::FVector;
 
@@ -57,6 +60,8 @@ constexpr int      kWalkDeadlineS = 300;     // the director's own bound on the 
 constexpr float    kRingCm = 150.f;          // the standpoints about the confirm lever
 constexpr int      kStandpoints = 8;
 constexpr float    kStandReachCm = 60.f;     // a walk ends this near its standpoint, flat
+constexpr float    kLadderRingCm = 100.f;    // the standpoints about the ladder's foot (the mount takes 125 uu)
+constexpr float    kLadderReachCm = 25.f;    // a walk to the foot ends this near its standpoint, flat
 
 // ---- the puzzle: the torus the radio tower's presses act on ----
 
@@ -179,7 +184,7 @@ void HostTick(coop::net::Session& s) {
 
 // ---- the client: walks to the tower, reads the reach, then repairs it ------------------------------------------
 
-enum class Step : uint8_t { Arm, Break, Walk, Press, Lever, Done };
+enum class Step : uint8_t { Arm, Break, Walk, LadderWalk, LadderClimb, Press, Lever, Done };
 Step     g_step = Step::Arm;
 uint64_t g_stepMs = 0;
 bool     g_acted = false;
@@ -187,6 +192,11 @@ uint16_t g_actSeq = 0;
 std::shared_ptr<DR::BackgroundWalk> g_walk;
 bool     g_walkAsked = false;
 float    g_routeUU = -1.f;
+void*    g_ladder = nullptr;       // the radioreach arm's: the tower's ladder, its ends, the walk to its foot, the climb
+FVector  g_foot{}, g_top{};
+bool     g_ladderWalkAsked = false;
+bool     g_footReached = false;
+LD::Climb g_climb;
 std::vector<int> g_presses;
 size_t   g_pressNext = 0;
 uint64_t g_leverMs = 0;
@@ -308,6 +318,43 @@ void LogTrace(const std::string& trace) {
     }
 }
 
+// The walk to the confirm lever's ring ended. The reach arm goes on to the tower's ladder; the others measure here.
+void WalkEnded(void* tower, void* player, bool reached) {
+    if (ArmOf() == Arm::RadioReach) {
+        UE_LOGI("[TOWER-DRILL] radioreach base walk ended: route=%.0f reached=%d", g_routeUU, reached ? 1 : 0);
+        Go(Step::LadderWalk);
+        return;
+    }
+    if (AfterWalk(tower, player, reached)) Go(Step::Press);
+}
+
+// The reach arm's ladder steps ended, whichever way: the distances line from where the client stands, then DONE.
+void LadderEnded(void* tower, void* player) { AfterWalk(tower, player, g_footReached); }
+
+void LadderAbandoned(void* tower, void* player, const char* why) {
+    UE_LOGW("[TOWER-DRILL] radioreach ladder ABANDONED: %s", why);
+    LadderEnded(tower, player);
+}
+
+// What the climb measured: the ladder's ends, whether it mounted, how long it climbed, where it ended.
+void LadderReport(void* tower, void* player) {
+    const LD::Outcome& o = g_climb.Result();
+    UE_LOGI("[TOWER-DRILL] radioreach ladder foot=(%.0f,%.0f,%.0f) top=(%.0f,%.0f,%.0f) mounted=%d climbMs=%llu "
+            "end=(%.0f,%.0f,%.0f) top=%d", g_foot.X, g_foot.Y, g_foot.Z, g_top.X, g_top.Y, g_top.Z, o.mounted ? 1 : 0,
+            static_cast<unsigned long long>(o.climbMs), o.end.X, o.end.Y, o.end.Z, o.atTop ? 1 : 0);
+    if (o.why) {
+        LadderAbandoned(tower, player, o.why);
+        return;
+    }
+    if (!o.atTop) {
+        char why[96];
+        std::snprintf(why, sizeof why, "the ladder let go %.0f uu from its top", Dist(o.end, g_top));
+        LadderAbandoned(tower, player, why);
+        return;
+    }
+    LadderEnded(tower, player);
+}
+
 void ClientTick(void* player) {
     void* tower = RT::Instance();
     RT::State l;
@@ -378,8 +425,7 @@ void ClientTick(void* player) {
                 ring = RingAtHeight(player, lever, root.Z, trace);
             if (ring.empty()) {
                 LogTrace(trace);
-                if (!AfterWalk(tower, player, false)) return;
-                Go(Step::Press);
+                WalkEnded(tower, player, false);
                 return;
             }
             float len = -1.f;
@@ -394,10 +440,55 @@ void ClientTick(void* player) {
         const int state = g_walk->state.load();
         if (state == 0) return;
         g_walk.reset();
-        if (!AfterWalk(tower, player, state == 1)) return;
-        Go(Step::Press);
+        WalkEnded(tower, player, state == 1);
         return;
     }
+    case Step::LadderWalk: {
+        if (!tower) return;
+        if (!g_ladderWalkAsked) {
+            // The walk is the director's, to a standpoint about the ladder's foot at the foot's height; the mount
+            // takes the closest point of the ladder within 125 uu of the walker.
+            g_ladderWalkAsked = true;
+            g_ladder = LD::Find(tower);
+            FVector me{};
+            if (!g_ladder || !LD::Foot(g_ladder, g_foot) || !LD::Top(g_ladder, g_top) ||
+                !ue_wrap::engine::TryGetActorLocation(player, me)) {
+                LadderAbandoned(tower, player, "the tower's ladder or the walker's place does not read");
+                return;
+            }
+            std::string trace;
+            const float z = g_foot.Z;
+            const std::vector<FVector> ring =
+                DR::ReachableStandpoints(player, g_foot, kLadderRingCm, kStandpoints, kLadderReachCm, &z, &trace);
+            UE_LOGI("[TOWER-DRILL] radioreach ladder standpoints about the foot (%.0f, %.0f, %.0f): %zu", g_foot.X,
+                    g_foot.Y, g_foot.Z, ring.size());
+            if (ring.empty()) {
+                LogTrace(trace);
+                LadderAbandoned(tower, player, "no route reaches a standpoint about the ladder's foot");
+                return;
+            }
+            g_walk = DR::StartBackgroundWalk(ring[0], kLadderReachCm, kWalkDeadlineS);
+            return;
+        }
+        if (!g_walk) return;
+        const int state = g_walk->state.load();
+        if (state == 0) return;
+        g_walk.reset();
+        g_footReached = state == 1;
+        FVector me{};
+        const bool read = ue_wrap::engine::TryGetActorLocation(player, me);
+        UE_LOGI("[TOWER-DRILL] radioreach ladder foot walk ended: reached=%d, the walker stands %.0f uu from the foot",
+                g_footReached ? 1 : 0, read ? Dist(me, g_foot) : -1.f);
+        if (!g_footReached) {
+            LadderAbandoned(tower, player, "the walk to the ladder's foot ended short");
+            return;
+        }
+        Go(Step::LadderClimb);
+        return;
+    }
+    case Step::LadderClimb:
+        if (g_climb.Tick(player, g_ladder)) LadderReport(tower, player);
+        return;
     case Step::Press: {
         if (!haveL) return;
         if (g_pressNext < g_presses.size()) {
@@ -483,6 +574,11 @@ void RadioReset() {
     g_walk.reset();
     g_walkAsked = false;
     g_routeUU = -1.f;
+    g_ladder = nullptr;
+    g_foot = g_top = FVector{};
+    g_ladderWalkAsked = false;
+    g_footReached = false;
+    g_climb = LD::Climb{};
     g_presses.clear();
     g_pressNext = 0;
     g_step = Step::Arm;

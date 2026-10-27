@@ -264,6 +264,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/director/aim_fan.cpp
     src/coop/dev/director/background_walk.cpp
     src/coop/dev/director/input_stub.cpp
+    src/coop/dev/director/ladder_climb.cpp
     src/coop/dev/director/aimed_grab.cpp
     src/coop/dev/force_weather.cpp
     src/coop/dev/weather_probe.cpp
