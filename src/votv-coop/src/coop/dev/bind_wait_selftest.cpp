@@ -361,20 +361,24 @@ const char* CheckGreen() {
     if (!Calls("b")) return "the hold of the slot that stayed did not replay alone";
     g_calls.clear();
     if (const char* b = Balanced(15)) return b;
-    // 16. A pump skips the holds of an eid a replay gave up, and counts them into GivenUpOf.
+    // 16. A pump skips the holds of an eid a replay gave up, and counts them into GivenUpOf. The flagged hold is
+    // of a kind of its own: it coalesces latest-wins onto an earlier hold of its (kind, slot), so on kind 99 it
+    // would replace the unflagged one and the count would be one.
     const uint32_t e18 = kBase + 17, e19 = kBase + 18;
     g_giveUpEid = e19;
-    const uint32_t givenUp99 = BW::GivenUpOf(99), replayed99 = BW::ReplayedOf(99);
+    const uint32_t givenUp99 = BW::GivenUpOf(99), givenUp167 = BW::GivenUpOf(167);
+    const uint32_t replayed99 = BW::ReplayedOf(99), replayed167 = BW::ReplayedOf(167);
     BW::MarkDeferred(e18, "selftest: giver tally");
     BW::MarkDeferred(e19, "selftest: given up in flight tally");
     HoldTag(e18, 98, 1, 'K', false);
     HoldTag(e19, 99, 1, 'Y', false);
-    HoldFlagged(e19, 99, 1, 'y');
+    HoldFlagged(e19, 167, 1, 'y');
     BW::OnBound(e18);
     BW::OnBound(e19);
     BW::Pump();
     if (!Calls("K")) return "a pump replayed the holds of an eid a replay gave up";
-    if (BW::GivenUpOf(99) != givenUp99 + 2 || BW::ReplayedOf(99) != replayed99)
+    if (BW::GivenUpOf(99) != givenUp99 + 1 || BW::GivenUpOf(167) != givenUp167 + 1 ||
+        BW::ReplayedOf(99) != replayed99 || BW::ReplayedOf(167) != replayed167)
         return "the holds a pump skipped by a give-up were not counted into GivenUpOf";
     g_calls.clear();
     if (const char* b = Balanced(16)) return b;
