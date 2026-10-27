@@ -110,6 +110,7 @@ struct Current {
     uint32_t           imageIndex;
     uint64_t           now;
     uint8_t            windows;
+    VulkanFrame        vf;  // vf.waitOut: the semaphore the present must wait on once our submit has gone in
 };
 
 std::mutex g_mu;  // not recursive: destroy never runs inside our present
@@ -121,6 +122,8 @@ Window     g_win[2] = {{"frames", kWinFrames, true, false, 0, 0, 0, 0, 0},
                        {"reinit", kWinReinit, false, false, 0, 0, 0, 0, 0}};
 Current    g_cur{};
 uint32_t   g_skipped = 0;
+uint32_t   g_unreadPresents = 0;  // presents passed through because the viewport could not be read
+uint32_t   g_badImagePresents = 0;  // presents passed through because the image index was out of range
 bool       g_warnedWaits = false;
 bool       g_drillDone = false;
 
@@ -343,6 +346,7 @@ void Reinit(const rhi::ViewportState& st) {
         if (s.chain) FreeSet(s);
     DestroyRing();
     ShutdownBackend();
+    if (IsDown()) return;  // the backend could not be shut down cleanly: it is not rebuilt on top of itself
     c.st = st;
     RingReset();
     if (!InitBackend()) MarkDown("the ImGui Vulkan backend could not be rebuilt");
@@ -359,7 +363,12 @@ FrameResult RunFrameBody(void* viewport, VkQueue queue, const VkPresentInfoKHR* 
     if (IsDown()) return {};
     CheckSlots(now);
     PrintVerdicts();
-    if (!rhi::ReadViewport(viewport, g_cur.st)) return {};
+    if (!rhi::ReadViewport(viewport, g_cur.st)) {
+        // Transient while the engine recreates the swapchain; a count that keeps climbing is a defect.
+        if (++g_unreadPresents == 1 || g_unreadPresents % 300 == 0)
+            UE_LOGW("[VK-OVERLAY] %u present(s) passed untouched: the viewport could not be read", g_unreadPresents);
+        return {};
+    }
     const rhi::ViewportState& st = g_cur.st;
     // Only the viewport's own swapchain on the present queue is ours; anything else goes through untouched.
     if (st.vkSwapchain != reinterpret_cast<std::uintptr_t>(info->pSwapchains[0]) ||
@@ -375,7 +384,12 @@ FrameResult RunFrameBody(void* viewport, VkQueue queue, const VkPresentInfoKHR* 
         return {};
     }
     const uint32_t image = info->pImageIndices[0];
-    if (image >= st.imageCount) return {};
+    if (image >= st.imageCount) {
+        if (++g_badImagePresents == 1 || g_badImagePresents % 300 == 0)
+            UE_LOGW("[VK-OVERLAY] %u present(s) passed untouched: image index %u of %u", g_badImagePresents, image,
+                    st.imageCount);
+        return {};
+    }
     if (st.vkFormat != c.st.vkFormat || st.imageCount != c.st.imageCount) {
         Reinit(st);
         if (IsDown()) return {};
@@ -392,10 +406,10 @@ FrameResult RunFrameBody(void* viewport, VkQueue queue, const VkPresentInfoKHR* 
     g_cur.info = info;
     g_cur.imageIndex = image;
     g_cur.now = now;
-    VulkanFrame vf{viewport, const_cast<VkPresentInfoKHR*>(info), queue, image, nullptr};
-    FrameTarget t{Rhi::Vulkan, reinterpret_cast<HWND>(st.hwnd), nullptr, &vf};
+    g_cur.vf = {viewport, const_cast<VkPresentInfoKHR*>(info), queue, image, nullptr};
+    FrameTarget t{Rhi::Vulkan, reinterpret_cast<HWND>(st.hwnd), nullptr, &g_cur.vf};
     imgui_overlay::OverlayFrame(t);
-    return {reinterpret_cast<VkSemaphore>(vf.waitOut), g_cur.windows};
+    return {reinterpret_cast<VkSemaphore>(g_cur.vf.waitOut), g_cur.windows};
 }
 
 FrameResult RunFrameGuarded(void* viewport, VkQueue queue, const VkPresentInfoKHR* info) {
@@ -403,7 +417,8 @@ FrameResult RunFrameGuarded(void* viewport, VkQueue queue, const VkPresentInfoKH
         return RunFrameBody(viewport, queue, info);
     } __except (EXCEPTION_EXECUTE_HANDLER) {
         MarkDown("a fault or a failed Vulkan call in the present path");
-        return {};
+        // Once our submit went in it consumed the engine's wait semaphore: the present must wait on ours.
+        return {reinterpret_cast<VkSemaphore>(g_cur.vf.waitOut), g_cur.windows};
     }
 }
 

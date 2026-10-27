@@ -637,6 +637,7 @@ void ShutdownBackend() {
             g_ctx.renderPass = VK_NULL_HANDLE;
         }
     } __except (EXCEPTION_EXECUTE_HANDLER) {
+        MarkDown("a fault while shutting the ImGui Vulkan backend down");
     }
 }
 
