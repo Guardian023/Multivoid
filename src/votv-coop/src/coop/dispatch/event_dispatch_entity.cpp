@@ -15,6 +15,7 @@
 #include "coop/creatures/owner_entity_sync.h"
 #include "coop/items/hook_anchor.h"
 #include "coop/items/hook_sync.h"  // the hook lane
+#include "coop/element/bind_wait.h"  // Holds: a held convert is no failed spawn
 #include "coop/element/quiescence_drain.h"  // the pending position corrections
 #include "coop/props/save_identity_bind.h"  // UpdateChipHostPos
 #include "coop/player/players_registry.h"
@@ -324,8 +325,10 @@ bool HandleEntityEvent(net::Session& session,
         }
         // OnConvert spawns the pile through the mirror spawn path, which binds it so a later grab
         // resolves its eid. A null return is a failed spawn (a transient class miss), logged since
-        // the re-grab destroy would not propagate.
-        if (!remote_prop::OnConvert(p, localPlayer, msg.senderPeerSlot)) {
+        // the re-grab destroy would not propagate -- unless the convert was held for its eid's
+        // deferred bind (bind_wait), which replays it at the bind: that is no failure.
+        if (!remote_prop::OnConvert(p, localPlayer, msg.senderPeerSlot) &&
+            !coop::element::bind_wait::Holds(p.newEid, static_cast<uint16_t>(net::ReliableKind::PropConvert))) {
             UE_LOGW("event_feed: PropConvert newEid=%u pile spawn FAILED -- a re-grab of this "
                     "pile won't propagate its destroy", p.newEid);
         }
