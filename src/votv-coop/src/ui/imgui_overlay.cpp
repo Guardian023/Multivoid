@@ -46,7 +46,6 @@
 #include "coop/dev/input_focus_probe.h"
 #include "coop/dev/worldless_frames.h"
 #include "coop/input/input_owner.h"
-#include "ue_wrap/core/game_thread.h"
 #include "ue_wrap/core/hook.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/scan_ledger.h"  // the draw seam and the resize bracket, each found or missed
@@ -362,19 +361,6 @@ void OverlayFrame(IDXGISwapChain* sc) {
     // Count frames presented per WorldKind: the one place "does the game present frames when no
     // world exists" can be asked.
     coop::dev::worldless_frames::NoteFrame();
-    // Republish "does the game own typed text" on two cadences (input_owner.h): the cheap path at
-    // ~10 Hz, the GUObjectArray walk at ~1 Hz, both posted to the game thread because they call
-    // UFunctions.
-    {
-        static ULONGLONG sNextFast = 0, sNextFull = 0;
-        const ULONGLONG now = ::GetTickCount64();
-        if (now >= sNextFast) {
-            const bool full = now >= sNextFull;
-            if (full) sNextFull = now + 1000;
-            sNextFast = now + 100;
-            ue_wrap::game_thread::Post([full] { coop::input::input_owner::TickGameThread(full); });
-        }
-    }
     if (!g_imguiReady.load(std::memory_order_acquire)) {
         if (BringUpGuarded(sc)) g_imguiReady.store(true, std::memory_order_release);
         // Not brought up yet: present normally.
