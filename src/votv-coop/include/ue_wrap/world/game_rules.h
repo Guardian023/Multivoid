@@ -54,6 +54,10 @@ bool ReadLocal(Snapshot& out);
 // float among the floats, a combo row of its enum among the enums.
 const RuleField* NthOfKind(const std::vector<RuleField>& rules, Kind kind, int n);
 
+// The process copy's difficulty ordinal (0 the easiest), one byte read at an offset resolved once from the rules
+// struct: no snapshot, no allocation. -1 while the GameInstance or its rules struct is not resolvable. Game thread.
+int ReadDifficulty();
+
 // Put the save's rules in force: copy `save.localGameRules` over `gameInstance.gameRules`. The
 // game does this in its slot menu on the way into a world (ui_saveSlots, the one blueprint that
 // writes the process copy), so a load that does not pass that menu has to do it itself, and BEFORE

@@ -2677,7 +2677,8 @@ static_assert(sizeof(PowerGridPayload) <= 256 - 20 - 8, "PowerGridPayload must f
 // per session: 1 a press of puzzle button `index`, 2 the confirm lever (the coordinate tower's one lever), 3 the
 // coordinate tower's panel retract, 6 the radio tower's reset lever, which the host runs through the tower's own
 // use; 4 a pull of fuse `index` and 5 an insert into fuse slot `index`, which its own game made, the host takes
-// or refuses, and its rows answer.
+// or refuses, and its rows answer (on the two easiest difficulties the game spends no fuse, so a client's insert
+// is cancelled there, sent with no claim, and the host runs it).
 inline constexpr int kFuseTowers = 4;
 inline constexpr uint8_t kFuseTowerKindCoordinate = 0;
 inline constexpr uint8_t kFuseTowerKindRadio = 1;

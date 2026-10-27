@@ -182,10 +182,13 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     EL::IntentSubject reach{};
     if (located) reach = EL::IntentTarget::ForClientIntent(*s, sender, kTowerReachUU).AuthorizeSegment(at, at);
     if (located && reach.outcome == EL::IntentOutcome::NoBody && !waited) return Take::Wait;
-    // An insert rests on the fuse its own game spent, which the host saw destroyed beside this tower: taken here,
-    // whatever the outcome, so one spend answers one insert. None yet waits for the destroy behind it.
+    // Above the two easiest difficulties an insert rests on the fuse its own game spent, which the host saw
+    // destroyed beside this tower: taken here, whatever the outcome, so one spend answers one insert. None yet waits
+    // for the destroy behind it. On the two easiest the game spends none and the host runs the insert itself.
+    const bool easyInsert = p.op == coop::net::kFuseTowerOpInsert && FK::EasyInsert();
+    const bool needSpend = located && p.op == coop::net::kFuseTowerOpInsert && !easyInsert;
     bool spent = false;
-    if (located && p.op == coop::net::kFuseTowerOpInsert) {
+    if (needSpend) {
         spent = TakeSpend(sender, kind, p.tower);
         if (!spent && !waited) return Take::Wait;
     }
@@ -203,7 +206,8 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     if (!refusal && p.op == coop::net::kFuseTowerOpPull) {
         refusal = FK::CanPull(kind, tower, st, p.index);
     } else if (!refusal && p.op == coop::net::kFuseTowerOpInsert) {
-        refusal = !spent ? "no fuse of the inserter's was spent at it" : FK::CanInsert(kind, st, p.index);
+        refusal = (needSpend && !spent) ? "no fuse of the inserter's was spent at it"
+                                        : FK::CanInsert(kind, st, p.index);
     }
     g_ack[sender] = p.seq;
     if (refusal) {
@@ -233,7 +237,8 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
         FK::TakePull(kind, tower, p.index);
         break;
     case coop::net::kFuseTowerOpInsert:
-        FK::TakeInsert(kind, tower, p.index);
+        if (easyInsert) FK::TakeEasyInsert(kind, tower, p.index);
+        else FK::TakeInsert(kind, tower, p.index);
         break;
     default: break;
     }
@@ -311,7 +316,7 @@ void HostDrainWaiting(coop::net::Session* s) {
 // ---- a client ------------------------------------------------------------------------------------------------
 
 // My claims the host has not answered, oldest first.
-struct Claim { uint16_t seq; uint8_t op; FK::Kind kind; int32_t tower; uint8_t slot; bool solved; };
+struct Claim { uint16_t seq; uint8_t op; FK::Kind kind; int32_t tower; uint8_t slot; };
 std::vector<Claim> g_claims;
 uint16_t g_seq = 0;
 uint16_t g_lastAck = 0;
@@ -321,16 +326,17 @@ void*   g_pullTower = nullptr;
 int32_t g_pullSlot = -1;
 void*   g_insertTower = nullptr;
 int32_t g_insertSlot = -1;
-bool    g_insertWasBroken = false;
 
-void ClientSend(coop::net::Session* s, uint8_t op, FK::Kind kind, int32_t tower, int32_t index, bool solved = false) {
+// A pull or an insert whose fuse this client's own game moved is a claim the rows answer; an insert the gate
+// cancelled (the two easiest difficulties) moved nothing here and claims nothing.
+void ClientSend(coop::net::Session* s, uint8_t op, FK::Kind kind, int32_t tower, int32_t index, bool claim = true) {
     FuseTowerPayload p{};
     p.op = op;
     p.kind = static_cast<uint8_t>(kind);
     p.tower = tower;
     p.index = static_cast<uint8_t>(std::max(index, 0));
     p.seq = ++g_seq;
-    if (IsClaim(op)) g_claims.push_back({p.seq, op, kind, tower, p.index, solved});
+    if (claim && IsClaim(op)) g_claims.push_back({p.seq, op, kind, tower, p.index});
     s->SendReliableToSlot(0, coop::net::ReliableKind::FuseTowerState, &p, sizeof(p));
     ++g_sent;
     UE_LOGI("fuse_tower: local %s of tower %d (index %d, seq %u) -- sent to the host", OpName(op), tower, index,
@@ -415,7 +421,8 @@ void OnUsePost(const sg::Call& call) {
     ClientSend(s, coop::net::kFuseTowerOpPull, kind, id, g_pullSlot);
 }
 
-// A client's insert runs here, and its move is claimed as it ends.
+// A client's insert above the two easiest difficulties runs here, and its move is claimed as it ends; on those two
+// it keeps the fuse and solves, so it is refused here and sent to the host like a press.
 int32_t g_holdOff = -1;
 void* g_insertFn = nullptr;
 sg::Verdict OnInsertPre(const sg::Call& call) {
@@ -434,9 +441,12 @@ sg::Verdict OnInsertPre(const sg::Call& call) {
     if (!FK::IsFuse(held) || !FK::Identify(call.object, kind, id) || !FK::ReadView(kind, call.object, st) ||
         !FK::ReadFuseLook(kind, call.object, slot) || slot < 0 || slot >= st.fuseCount || st.fuses[slot] != 0)
         return sg::Verdict::Run;
+    if (FK::EasyInsert()) {
+        ClientSend(Connected(), coop::net::kFuseTowerOpInsert, kind, id, slot, /*claim*/false);
+        return sg::Verdict::Cancel;
+    }
     g_insertTower = call.object;
     g_insertSlot = slot;
-    g_insertWasBroken = st.broken;
     return sg::Verdict::Run;
 }
 
@@ -450,7 +460,7 @@ void OnInsertPost(const sg::Call& call) {
     if (!IsClient(s) || !FK::Identify(call.object, kind, id) || !FK::ReadView(kind, call.object, st) ||
         g_insertSlot >= st.fuseCount || st.fuses[g_insertSlot] != 1)
         return;
-    ClientSend(s, coop::net::kFuseTowerOpInsert, kind, id, g_insertSlot, g_insertWasBroken && !st.broken);
+    ClientSend(s, coop::net::kFuseTowerOpInsert, kind, id, g_insertSlot);
 }
 
 // Each kind's four bodies (coop/world/fuse_tower_kind), under one tag a kind and a role.
@@ -549,11 +559,6 @@ void Overlay(coop::net::FuseTowerRow& row) {
             row.fuses[c.slot] = 0;
         } else {
             row.fuses[c.slot] = 1;
-            if (c.solved) {
-                // The insert solved the puzzle here, as the host's copy will once it takes the claim.
-                row.flags = static_cast<uint8_t>(row.flags & ~coop::net::kFuseTowerBroken);
-                row.lights = (1u << row.lightCount) - 1u;
-            }
         }
     }
 }

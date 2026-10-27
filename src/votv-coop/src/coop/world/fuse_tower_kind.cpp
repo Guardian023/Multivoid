@@ -48,16 +48,6 @@ const WatchRows kWatches[kKinds] = {
     { &kRowRadioRoll, &kRowRadioJudge, &kRowRadioUse, &kRowRadioInsert },
 };
 
-// The insert's own branch on the difficulty (coordRadarDish playerUsedOn @4823, radiotower playerUsedOn :696): on
-// the two easiest, the puzzle is solved with it.
-bool InsertSolves() {
-    ue_wrap::game_rules::Snapshot rules;
-    if (!ue_wrap::game_rules::ReadLocal(rules)) return false;
-    for (const auto& f : rules.fields)
-        if (f.key == "difficulty") return f.ival <= 1;
-    return false;
-}
-
 bool LightBit(uint32_t lights, int i) { return ((lights >> i) & 1u) != 0; }
 
 // ---- the coordinate towers -----------------------------------------------------------------------------------
@@ -459,20 +449,36 @@ void TakePull(Kind kind, void* tower, int32_t slot) {
     CT::Play(tower, CT::Sound::FusePulled);
 }
 
+// The insert's own branch on the difficulty (coordRadarDish playerUsedOn @4823, radiotower playerUsedOn :696):
+// difficulty 0 and 1 keep the fuse and solve, anything above spends it.
+bool EasyInsert() {
+    const int difficulty = ue_wrap::game_rules::ReadDifficulty();
+    return difficulty >= 0 && difficulty <= 1;
+}
+
 void TakeInsert(Kind kind, void* tower, int32_t slot) {
-    // The insert's writes on the host's copy; its fuse is already spent.
+    // The insert's writes on the host's copy; its fuse is already spent (playerUsedOn @5129..@5317, :681-701).
     if (kind == Kind::Radio) {
         RT::WriteFuse(tower, slot, 1);
         RT::Play(tower, RT::Sound::FuseInserted);
         RT::UpdFuses(tower);
-        if (InsertSolves()) RT::CompleteMinigame(tower);
         return;
     }
-    // (playerUsedOn @4823..@5317)
-    if (InsertSolves()) CT::SolvePuzzle(tower);
     CT::WriteFuse(tower, slot, 1);
     CT::Play(tower, CT::Sound::FuseInserted);
     CT::UpdFuses(tower);
+}
+
+void TakeEasyInsert(Kind kind, void* tower, int32_t slot) {
+    if (kind == Kind::Radio) {
+        // radiotower playerUsedOn :681-696: the slot good, its sound, updFuses, completeMinigame; the fuse stays.
+        RT::WriteFuse(tower, slot, 1);
+        RT::Play(tower, RT::Sound::FuseInserted);
+        RT::UpdFuses(tower);
+        RT::CompleteMinigame(tower);
+        return;
+    }
+    CT::SolvePuzzle(tower);  // coordRadarDish playerUsedOn @5354: solvePuzzle and nothing else
 }
 
 bool IsFuse(void* actor) { return CT::IsFuse(actor); }

@@ -304,8 +304,8 @@ puzzle button, the lever or the panel's retract is refused and sent to the host,
 tower's own use with the look-at answered and then gives its own player's look-at back. A pull or an
 insert moves a fuse into or out of the player's own hand, so the client's own game makes it and
 claims the slot. The host takes a pull when its copy has the panel open, the lever at rest and that
-fuse blown, and an insert when the slot is empty and the host saw that player spend a good fuse at
-the tower; it refuses one otherwise, answering in the rows, and a refused pull's fuse is taken back
+fuse blown, and an insert when the slot is empty and, above the two easiest difficulties, the host saw
+that player spend a good fuse at the tower; it refuses one otherwise, answering in the rows, and a refused pull's fuse is taken back
 out of the puller's hand, a refused insert's fuse given back where the player stands. Every act is
 judged within reach of the part it acts on, in the player's order, at a few a second.
 
@@ -324,9 +324,13 @@ a fuse blowing or the tower breaking raises the console's "Radio tower has been 
 down!" alert by hand (the handler the host's broadcast would call), never for a tower's first applied
 row, since the handler also wakes the player. A client's press of a puzzle button or of either lever is
 sent to the host when its own copy is broken and idle; a whole tower answers with its own hint on the
-client. The host takes a pull of a blown fuse when no lever runs, and an insert on an empty slot; at
-the two easiest difficulties the insert also lights the puzzle. A client keeps the host's last row of
-each tower and applies it when that tower resolves, looking it up again once a second meanwhile.
+client. The host takes a pull of a blown fuse when no lever runs, and an insert on an empty slot. At
+the two easiest difficulties the game keeps the held fuse and the insert solves the puzzle (the radio
+tower also writes the slot, the coordinate tower does not): a client's insert there is refused at the
+gate and sent to the host like a press, which judges reach and the slot on its copy and runs the solve,
+its rows answering. No spend is asked, since the game spends none, so a client holding no fuse can
+solve an easy tower. A client keeps the host's last row of each tower and applies it when that tower
+resolves, looking it up again once a second meanwhile.
 
 ### The drone
 

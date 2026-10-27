@@ -153,6 +153,27 @@ bool ReadLocal(Snapshot& out) {
     return out.valid;
 }
 
+int ReadDifficulty() {
+    static void*   sGiClass = nullptr;
+    static int32_t sOff = -1;
+    void* gi = world_singleton::GameInstance();
+    void* giClass = gi ? R::ClassOf(gi) : nullptr;
+    if (!giClass) return -1;
+    if (giClass != sGiClass) {
+        const int32_t rulesOff = R::FindPropertyOffset(giClass, L"gameRules");
+        void* rules = rulesOff >= 0 ? R::PropertyInnerStruct(giClass, L"gameRules") : nullptr;
+        if (!rules) return -1;
+        sGiClass = giClass;
+        sOff = -1;
+        for (const R::StructFieldInfo& fi : R::EnumerateStructFields(rules))
+            if (TrimmedKey(fi.name) == "difficulty") {
+                sOff = rulesOff + fi.offset;
+                break;
+            }
+    }
+    return sOff >= 0 ? static_cast<int>(reinterpret_cast<const uint8_t*>(gi)[sOff]) : -1;
+}
+
 const RuleField* NthOfKind(const std::vector<RuleField>& rules, Kind kind, int n) {
     for (const RuleField& f : rules) {
         if (f.kind != kind) continue;
