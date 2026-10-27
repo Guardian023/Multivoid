@@ -45,6 +45,9 @@ void Focus(Field* f);
 void Blur(Field* f);
 bool Focused(const Field* f);
 
+// The framed box widget, for a caller that aims a pointer at it (a drill's click), or null.
+void* Box(const Field* f);
+
 // The content. `Text` is UTF-8 (the wire and the ini both take UTF-8; the widget layer
 // converts once, on write).
 const std::string& Text(const Field* f);

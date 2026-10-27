@@ -51,6 +51,11 @@ bool IsOpen();
 // What the selftest reads back after typing into the window. Game thread.
 std::string FieldText(Kind kind);
 
+// The first box of `kind`'s screen as a widget and whether it holds the keyboard focus, for a drill
+// that clicks it as a player does. Null / false before the screen is built. Game thread.
+void* FieldBox(Kind kind);
+bool FieldFocused(Kind kind);
+
 // Driven from the main-menu tick observer, beside the browser's own.
 void OnMenuTick(void* menu, void* switcher);
 

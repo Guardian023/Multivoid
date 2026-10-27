@@ -149,32 +149,38 @@ constexpr int kHostEscVerify  = 348;
 // holds long enough to be photographed.
 constexpr int kInputDirectShot = 354;
 constexpr int kInputDirectHold = 355;
-constexpr int kInputTypePost   = 356;   // kInputDirectHold + 1, since the counter advances by one after a break
-constexpr int kInputTypeCharsVerify = 357;
-constexpr int kInputTypeBackPost    = 358;
-constexpr int kInputTypeVerify      = 359;
-constexpr int kInputNameOpen   = 362;
-constexpr int kInputNameShot   = 368;
-constexpr int kInputNameHold   = 369;
+// The typing is preceded by a click on the address box, as a player focuses it: the field's own
+// focus is not assumed, since a stale Escape release from the hosting phases blurs it.
+constexpr int kInputClickMove       = 356;   // kInputDirectHold + 1, since the counter advances by one after a break
+constexpr int kInputClickDown       = 362;
+constexpr int kInputClickUp         = 366;
+constexpr int kInputFocusVerify     = 370;
+constexpr int kInputTypePost        = 371;
+constexpr int kInputTypeCharsVerify = 372;
+constexpr int kInputTypeBackPost    = 373;
+constexpr int kInputTypeVerify      = 374;
+constexpr int kInputNameOpen   = 377;
+constexpr int kInputNameShot   = 383;
+constexpr int kInputNameHold   = 384;
 // Session settings, step two of hosting and the only caller of HostWithSave: reached by pressing
 // Next on the hosting window and by nothing else (no dev auto-open for it), so these phases drive
 // the real path. The Host button itself is never pressed: it would leave the rig hosting.
-constexpr int kSessOpen       = 376;
-constexpr int kSessNextMove   = 384;
-constexpr int kSessNextDown   = 390;
-constexpr int kSessNextUp     = 394;
-constexpr int kSessVerify     = 402;
-constexpr int kSessShotHold   = 403;
-constexpr int kSessWarnHold   = 404;   // the version warning, held for the eye; then Next again
-constexpr int kSessLockMove   = 410;
-constexpr int kSessLockDown   = 416;
-constexpr int kSessLockUp     = 420;
-constexpr int kSessLockVerify = 428;
-constexpr int kSessLockHold   = 429;
-constexpr int kSessBackMove   = 436;
-constexpr int kSessBackDown   = 442;
-constexpr int kSessBackUp     = 446;
-constexpr int kSessBackVerify = 454;
+constexpr int kSessOpen       = 391;
+constexpr int kSessNextMove   = 399;
+constexpr int kSessNextDown   = 405;
+constexpr int kSessNextUp     = 409;
+constexpr int kSessVerify     = 417;
+constexpr int kSessShotHold   = 418;
+constexpr int kSessWarnHold   = 419;   // the version warning, held for the eye; then Next again
+constexpr int kSessLockMove   = 425;
+constexpr int kSessLockDown   = 431;
+constexpr int kSessLockUp     = 435;
+constexpr int kSessLockVerify = 443;
+constexpr int kSessLockHold   = 444;
+constexpr int kSessBackMove   = 451;
+constexpr int kSessBackDown   = 457;
+constexpr int kSessBackUp     = 461;
+constexpr int kSessBackVerify = 469;
 
 // The forced offset for the positive control, far past any real extent: a getter that returns it
 // unchanged echoes the request rather than reading Slate.
@@ -1147,7 +1153,42 @@ void Tick(void* scrim, void* list, void* exitBtn) {
             // Holding: a window for the rig's 3 s capture poll. Returning without advancing is how
             // every hold here works; the counter increments after the switch.
             if (nowMs < g_holdUntilMs) return;
-            break;   // the typing phases below act on this same window
+            break;   // the click and typing phases below act on this same window
+        case kInputClickMove: {
+            // Focus the address box the way a player does, with a click: the field's own focus is not
+            // assumed. The hosting phases' Escape release can land just after this window opens and
+            // blur the field, so whether it was still focused is logged for the run to show.
+            namespace BIS = ui::browser_input_screens;
+            UE_LOGW("server_browser_native: INPUT TYPE -- the address field is %s before the click "
+                    "(unfocused means a stray Escape release blurred it)",
+                    BIS::FieldFocused(BIS::Kind::DirectConnect) ? "focused" : "NOT focused");
+            void* box = BIS::FieldBox(BIS::Kind::DirectConnect);
+            ue_wrap::FVector2D tl{}, sz{};
+            if (!box || !U::WidgetScreenRect(box, tl, sz) || sz.X < 1.f) {
+                UE_LOGE("server_browser_native: INPUT TYPE FAIL -- the address box %s, so it cannot "
+                        "be clicked.", box ? "has no readable rect" : "does not exist");
+                g_selfCheckStep = -1;
+                return;
+            }
+            PlaceCursorOnAbsolute(tl.X + sz.X * 0.5f, tl.Y + sz.Y * 0.5f);
+            break;
+        }
+        case kInputClickDown:
+            ::mouse_event(MOUSEEVENTF_LEFTDOWN, 0, 0, 0, 0);
+            break;
+        case kInputClickUp:
+            ::mouse_event(MOUSEEVENTF_LEFTUP, 0, 0, 0, 0);
+            g_holdUntilMs = nowMs + kTypeWaitMs;
+            break;
+        case kInputFocusVerify:
+            if (ui::browser_input_screens::FieldFocused(ui::browser_input_screens::Kind::DirectConnect))
+                break;
+            if (nowMs < g_holdUntilMs) return;
+            UE_LOGE("server_browser_native: INPUT TYPE FAIL -- the field did not take focus from a "
+                    "click, so typed characters have nowhere to go.");
+            ui::browser_input_screens::Open(ui::browser_input_screens::Kind::ChangeName);
+            g_selfCheckStep = kInputTypeVerify;   // past the typing steps
+            break;
         case kInputTypePost: {
             // Real window messages, the way a keyboard delivers them, so the whole route is measured:
             // the window procedure seam, then the focused native field. The characters and the
