@@ -55,33 +55,51 @@ HWND FindBestUnrealWindow() {
 
 // The overlay is consulted first and the close handling second: with the close handler installed
 // at boot and the overlay's hook on the first present, the overlay sat on top of the close
-// handler in a running game. Nothing the overlay consumes is a close message (it takes keys, the
-// mouse and the cursor), so a close signal reaches the shutdown handler either way.
+// handler in a running game. The X click reaches the close handler as WM_SYSCOMMAND, which the
+// overlay never takes; Alt+F4 arrives as WM_SYSKEYDOWN, which a capturing surface swallows, so it
+// closes nothing while one is up, as before.
 LRESULT CALLBACK GameWindowProc(HWND hwnd, UINT msg, WPARAM wp, LPARAM lp) {
     LRESULT swallowed = 0;
     if (ui::imgui_overlay::HandleWindowMessage(hwnd, msg, wp, lp, swallowed)) return swallowed;
 
     coop::shutdown::OnWindowMessage(hwnd, msg, wp);
 
+    // Subclass publishes the original before ours goes in, so a null here is a broken invariant,
+    // not a state to carry on from: say so once, and give the message to the default handler.
     WNDPROC orig = g_origProc.load(std::memory_order_acquire);
-    const LRESULT result = orig ? ::CallWindowProcW(orig, hwnd, msg, wp, lp)
-                                : ::DefWindowProcW(hwnd, msg, wp, lp);
+    LRESULT result;
+    if (orig) {
+        result = ::CallWindowProcW(orig, hwnd, msg, wp, lp);
+    } else {
+        static std::atomic<bool> sLogged{false};
+        if (!sLogged.exchange(true))
+            UE_LOGE("game_window_proc: a message reached the subclass with no original procedure "
+                    "(HWND=%p msg=0x%X) -- forwarding to DefWindowProc", hwnd, msg);
+        result = ::DefWindowProcW(hwnd, msg, wp, lp);
+    }
 
     coop::shutdown::OnWindowMessageForwarded(msg, result);
     return result;
 }
 
 void Subclass(HWND best) {
+    // The window's current procedure is published before ours replaces it, so no message can reach
+    // GameWindowProc with nothing to forward to. SetWindowLongPtrW returns what was really there.
+    WNDPROC before = reinterpret_cast<WNDPROC>(::GetWindowLongPtrW(best, GWLP_WNDPROC));
+    g_origProc.store(before, std::memory_order_release);
     WNDPROC orig = reinterpret_cast<WNDPROC>(
         ::SetWindowLongPtrW(best, GWLP_WNDPROC, reinterpret_cast<LONG_PTR>(&GameWindowProc)));
     if (!orig) {
-        UE_LOGW("game_window_proc: SetWindowLongPtrW failed on HWND=%p err=%lu", best,
-                ::GetLastError());
+        // Retried by Tick at its own pace; the failure is logged once per window.
+        static HWND sFailed = nullptr;
+        if (sFailed != best) {
+            sFailed = best;
+            UE_LOGW("game_window_proc: SetWindowLongPtrW failed on HWND=%p err=%lu", best,
+                    ::GetLastError());
+        }
         return;
     }
-    // origProc first: our procedure is already the one called for `best`, and it forwards to
-    // whatever origProc holds when a message arrives between the two stores.
-    g_origProc.store(orig, std::memory_order_release);
+    if (orig != before) g_origProc.store(orig, std::memory_order_release);
     g_hwnd.store(best, std::memory_order_release);
 
     wchar_t title[128] = {};
