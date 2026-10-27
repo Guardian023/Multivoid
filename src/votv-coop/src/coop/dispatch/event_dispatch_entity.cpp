@@ -11,6 +11,7 @@
 
 #include "coop/player/item_activate.h"
 #include "coop/session/join_progress.h"
+#include "coop/dev/dronesack_drill.h"  // NoteWirePropDestroy (the drone sack drill's record)
 #include "coop/creatures/npc_mirror.h"
 #include "coop/creatures/owner_entity_sync.h"
 #include "coop/items/hook_anchor.h"
@@ -277,6 +278,7 @@ bool HandleEntityEvent(net::Session& session,
                 dkey.push_back(static_cast<wchar_t>(static_cast<unsigned char>(p.key.data[i])));
             coop::trash_pile_sync::NotifyWireDestroy(dkey);
         }
+        coop::dev::dronesack_drill::NoteWirePropDestroy(p.elementId, p.key.data, p.key.len, msg.senderPeerSlot);
         remote_prop::OnDestroy(p, localPlayer, msg.senderPeerSlot);
         break;
     }

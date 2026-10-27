@@ -96,4 +96,9 @@ bool NoReadyRefusedEid(uint32_t eid);
 // Does the host hold a "what every peer has" hash for this container (a fan-out succeeded for it)?
 bool SentBaselineKnown(uint32_t eid);
 
+// Dev: what the host's arbitration last decided about a client-authored slice for this container (None: no slice was
+// judged since the session began). A slice held for a body not yet posed is not a judgement. Host; reset at session end.
+enum class ClientSliceOutcome : uint8_t { None, Refused, Accepted };
+ClientSliceOutcome LastClientSliceOutcome(uint32_t eid);
+
 }  // namespace coop::props::container_contents_sync

@@ -94,6 +94,8 @@ std::set<uint32_t> g_retry;
 uint64_t g_noReadyRefusals = 0;
 uint64_t g_noReadyRetries = 0;
 std::set<uint32_t> g_noReadyEids;   // the containers whose fan-out met such a refusal
+// Dev instrument: the host's last judgement of a client-authored slice, per container. Reset at session end.
+std::map<uint32_t, ClientSliceOutcome> g_clientSlice;
 
 bool NoReadyRetryRed() {
     static const bool s = coop::config::ResolveFlag(coop::config_registry::rows::container_retry_red);
@@ -395,6 +397,7 @@ Ingest ParseAndApply(const std::vector<uint8_t>& blob, uint32_t& outEid, uint8_t
         // the reach is judged the moment that peer has posed; the hold is bounded per author and
         // by the TTL, so a peer that never poses costs the host eight slices for thirty seconds.
         if (d == wp::Decision::NoBodyYet) return Ingest::Park;
+        g_clientSlice[outEid] = d == wp::Decision::Accept ? ClientSliceOutcome::Accepted : ClientSliceOutcome::Refused;
         if (d != wp::Decision::Accept) {
             // Every refusal answers with the host's truth so the author converges -- except the
             // rate one, because a bound on how fast an author may spend the host must not make
@@ -692,6 +695,10 @@ uint64_t NoReadyRefusals() { return g_noReadyRefusals; }
 uint64_t NoReadyRetries() { return g_noReadyRetries; }
 bool NoReadyRefusedEid(uint32_t eid) { return g_noReadyEids.count(eid) != 0; }
 bool SentBaselineKnown(uint32_t eid) { return g_sentHash.count(eid) != 0; }
+ClientSliceOutcome LastClientSliceOutcome(uint32_t eid) {
+    const auto it = g_clientSlice.find(eid);
+    return it == g_clientSlice.end() ? ClientSliceOutcome::None : it->second;
+}
 
 void OnDisconnect() {
     g_wrongClassSaid.clear();
@@ -700,6 +707,7 @@ void OnDisconnect() {
     g_noReadyRefusals = 0;
     g_noReadyRetries = 0;
     g_noReadyEids.clear();
+    g_clientSlice.clear();
     wp::Reset();
     pk::Reset();
     g_sentHash.clear();
