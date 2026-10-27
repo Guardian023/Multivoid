@@ -12,6 +12,7 @@
 #include "coop/dev/container_writer_probe.h"  // [dev] a container writer the container lane never saw
 #include "coop/dev/container_selftest.h"  // [dev] container-lane e2e circle (organic addLoot)
 #include "coop/dev/container_view_drill.h"  // [dev] a container view closes as its opener leaves reach
+#include "coop/dev/container_route_census.h"  // [dev] each container verb counted by the route on its stack
 #include "coop/dev/death_seam_census.h"  // [dev] every element end the death seam announces
 #include "coop/dev/damage_probe.h"  // [dev] every player damage verb call, and by whom
 #include "coop/dev/delivery_census_probe.h"  // COUNT the delivery-path actors
@@ -204,6 +205,7 @@ void EndSession() {
     coop::dev::light_drill::OnDisconnect();  // [dev] the switch, its group and the phase belong to one world
     coop::dev::keypad_drill::OnDisconnect();  // [dev] the keypad and the legs belong to one world
     coop::dev::container_view_drill::OnDisconnect();  // [dev] the ATV, the view and the walks belong to one world
+    coop::dev::container_route_census::OnDisconnect();  // [dev] the census reports and starts over
     coop::dev::physmods_drill::OnDisconnect();  // [dev] the client arms again, so a rejoin says its line
     coop::dev::throw_drill::OnDisconnect();  // [dev] the backpack and its copy belong to one session
     coop::dev::atv_spawn_drill::OnDisconnect();  // [dev] the spawn belongs to one session
@@ -333,6 +335,7 @@ void TickDrills(coop::net::Session& session) {
     coop::dev::container_opener_probe::Tick(&session);  // [dev] far containers' openers and the reach to them (latched read when off)
     coop::dev::container_writer_probe::Tick(&session);  // [dev] a container changed by a writer nothing watches (latched read when off)
     coop::dev::container_view_drill::Tick(&session);  // [dev] the view-close drill (a single bool read when off)
+    coop::dev::container_route_census::Tick(&session);  // [dev] the route census (a latched string read when off)
     coop::dev::physmods_drill::Tick(&session);  // [dev] the module-plug drill (a single bool read when off)
     coop::dev::throw_drill::Tick(&session);  // [dev] the throw drill (latched string compares when off)
     coop::dev::atv_spawn_drill::Tick(&session);  // [dev] the ATV spawn drill (latched string compares when off)

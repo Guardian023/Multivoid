@@ -15,6 +15,7 @@
 
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
+#include "coop/dev/container_route_census.h"  // the census counts the slices a route sends and the host judges
 #include "coop/dev/dronesack_drill.h"  // IsEnabled -- the drill's judgement record is kept only while it runs
 #include "coop/element/bind_wait.h"
 #include "coop/element/registry.h"
@@ -188,6 +189,7 @@ bool BroadcastContainer(coop::net::Session* s, uint32_t eid, void* inv, int toSl
     if (ok) {
         if (toSlot < 0) cb::FirstSent(eid);
         if (toSlot < 0) g_sentHash[eid] = h;  // only a FAN-OUT establishes what every peer has
+        if (toSlot < 0 && !IsHost()) coop::dev::container_route_census::NoteSliceSent(eid);   // dev: the route census
         // A client's own accepted slice IS the host's next published truth, and the author is
         // deliberately excluded from the relay that carries it -- so it advances its base here.
         // Optimistic and self-correcting: a refusal is answered by the host re-publishing its
@@ -371,6 +373,7 @@ Ingest ParseAndApply(const std::vector<uint8_t>& blob, uint32_t& outEid, uint8_t
         // the reach is judged the moment that peer has posed; the hold is bounded per author and
         // by the TTL, so a peer that never poses costs the host eight slices for thirty seconds.
         if (d == wp::Decision::NoBodyYet) return Ingest::Park;
+        coop::dev::container_route_census::NoteSliceJudged(senderSlot, d == wp::Decision::Accept);   // dev: the route census
         if (coop::dev::dronesack_drill::IsEnabled())
             g_clientSlice[outEid] = d == wp::Decision::Accept ? ClientSliceOutcome::Accepted : ClientSliceOutcome::Refused;
         if (d != wp::Decision::Accept) {

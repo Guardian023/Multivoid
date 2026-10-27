@@ -35,3 +35,10 @@ CFG_FLAG(container_view_drill, "container_view_drill", "dev", false, "VOTVCOOP_C
     "Drill (client): walks to the ATV, opens its container through the game's own openPropInv, then walks "
     "back; the view must stay open while the ATV is within reach and close on the tick it leaves it. Run it "
     "with join_at_host=1. Lines tagged [CVIEW-DRILL]; the client's DONE line, carrying the verdict, ends it.")
+CFG_STRING(container_route_census, "container_route_census", "dev", "", "VOTVCOOP_CONTAINER_ROUTE_CENSUS", false,
+    "Census (BOTH peers): counts each container verb on a shared world container by the route on its stack (the "
+    "slot press, the take key, hold+run, the overlap, the vacuum; none is the game's own logic) and the slices "
+    "each route sends, every 30 s and at session end. Lines tagged [CI-CENSUS]. 1 -- the census alone. drill -- "
+    "also drives each route once on the client against a container the host places beside it, and reads the "
+    "open screen and the record hashes on both peers. drill-vacuumcancel -- the drill with the client's "
+    "addObject refused while the vacuum gathers (the only cancel). drill-before -- the take the host refuses.")
