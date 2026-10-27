@@ -40,6 +40,12 @@ bool Init();
 bool HandleWindowMessage(void* hwnd, unsigned msg, uintptr_t wParam, intptr_t lParam,
                          intptr_t& result);
 
+// Called with every readiness milestone the rig is told (coop/session/rig_ready.h). The first one that
+// means a gameplay world is up (hosting, world-ready, solo-world) judges the draw seams: none of the three
+// present seams having fired by then is reported once, and the scan ledger's draw row is marked missed.
+// Any thread.
+void OnMilestone(const char* milestone);
+
 // Force visibility (e.g. a future main-menu button opening the server browser).
 void SetVisible(bool visible);
 

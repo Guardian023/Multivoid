@@ -18,16 +18,22 @@
 
 #include "coop/dev/dependency_dump.h"
 #include "ue_wrap/core/log.h"
+#include "ui/imgui_overlay.h"
 
 namespace coop::rig_ready {
+
+// Each milestone also reaches the dependency dump and the overlay, which judges its draw seams at the first
+// of hosting, world-ready and solo-world.
 
 inline void Say(const char* milestone) {
     UE_LOGI("rig: READY %s", milestone);
     coop::dev::dependency_dump::OnMilestone(milestone);
+    ui::imgui_overlay::OnMilestone(milestone);
 }
 inline void Say(const char* milestone, int slot) {
     UE_LOGI("rig: READY %s slot=%d", milestone, slot);
     coop::dev::dependency_dump::OnMilestone(milestone);
+    ui::imgui_overlay::OnMilestone(milestone);
 }
 
 }  // namespace coop::rig_ready

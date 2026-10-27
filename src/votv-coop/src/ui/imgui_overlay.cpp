@@ -52,6 +52,7 @@
 
 #include <atomic>
 #include <cstdint>
+#include <cstring>
 
 #include "imgui.h"
 #include "backends/imgui_impl_win32.h"
@@ -502,6 +503,12 @@ bool Init() {
             "engine seams armed) -- ImGui brings up on the first frame; press F1 "
             "in-game for the menu", seamsArmed, seamsTotal);
     return true;
+}
+
+void OnMilestone(const char* milestone) {
+    if (milestone && (std::strcmp(milestone, "hosting") == 0 || std::strcmp(milestone, "world-ready") == 0 ||
+                      std::strcmp(milestone, "solo-world") == 0))
+        ui::overlay_seams::NoteWorldUp();
 }
 
 void SetVisible(bool visible) { g_visible.store(visible, std::memory_order_relaxed); }

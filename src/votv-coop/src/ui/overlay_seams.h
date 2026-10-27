@@ -30,4 +30,9 @@ namespace ui::overlay_seams {
 // seams installed. false = no draw seam resolved, so the overlay cannot draw this run.
 bool Install(int& armed, int& total);
 
+// The first call after Install judges the draw seams: when seams were armed and none of them has fired,
+// the world is up without a present reaching the overlay, so the draw row of the scan ledger is marked
+// missed and one line names each seam resolved / armed / fired. Later calls do nothing. Any thread.
+void NoteWorldUp();
+
 }  // namespace ui::overlay_seams

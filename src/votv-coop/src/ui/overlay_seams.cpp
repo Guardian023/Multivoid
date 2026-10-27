@@ -25,10 +25,30 @@
 #include <windows.h>
 #include <dxgi.h>
 
+#include <atomic>
 #include <cstdint>
+#include <cstdio>
 
 namespace ui::overlay_seams {
 namespace {
+
+// The three draw seams, in the order the table of Install lists them. The exe holds all three RHIs, so every
+// seam resolves and arms on every run; only the seam of the RHI the game renders with ever fires.
+enum DrawSeam : int { kDrawDx11, kDrawDx12, kDrawVulkan, kDrawSeams };
+struct DrawSeamState {
+    const char* name;
+    bool        resolved;
+    bool        armed;
+};
+DrawSeamState g_drawSeams[kDrawSeams] = {{"FD3D11Viewport::PresentChecked", false, false},
+                                         {"FD3D12Viewport::PresentInternal", false, false},
+                                         {"FVulkanViewport::Present", false, false}};
+std::atomic<bool> g_drawFired[kDrawSeams];
+std::atomic<bool> g_worldJudged{false};
+
+void NoteFired(DrawSeam seam) {
+    if (!g_drawFired[seam].load(std::memory_order_relaxed)) g_drawFired[seam].store(true, std::memory_order_relaxed);
+}
 
 // Read `viewport + off`, SEH-guarded: a drifted offset must not fault the render thread.
 IDXGISwapChain* RawViewportSwapChain(void* viewport, size_t off) {
@@ -118,6 +138,7 @@ HWND BringUpWindow(IDXGISwapChain* sc) {
 }
 
 uintptr_t __fastcall D3D11PresentCheckedDetour(void* viewport, int32_t syncInterval) {
+    NoteFired(kDrawDx11);
     if (IDXGISwapChain* sc = ValidatedSwapChain(viewport, ue_wrap::profile::kD3D11Viewport_SwapChain,
                                                 "FD3D11Viewport::PresentChecked",
                                                 g_lastOkSc11))
@@ -129,6 +150,7 @@ uintptr_t __fastcall D3D11PresentCheckedDetour(void* viewport, int32_t syncInter
 }
 
 uintptr_t __fastcall D3D12PresentInternalDetour(void* viewport, int32_t syncInterval) {
+    NoteFired(kDrawDx12);
     if (IDXGISwapChain* sc = ValidatedSwapChain(viewport, ue_wrap::profile::kD3D12Viewport_SwapChain,
                                                 "FD3D12Viewport::PresentInternal",
                                                 g_lastOkSc12))
@@ -178,6 +200,7 @@ void VulkanBringUp(void* viewport, void* presentQueue) {
 
 bool __fastcall VulkanViewportPresentDetour(void* viewport, void* ctx, void* cmd, void* queue,
                                             void* presentQueue, bool lockToVsync) {
+    NoteFired(kDrawVulkan);
     if (!overlay_backend::SelectRhi(overlay_backend::Rhi::Vulkan))
         return g_vulkanPresentTrampoline(viewport, ctx, cmd, queue, presentQueue, lockToVsync);
     if (!g_vulkanBringUpTried) {
@@ -261,46 +284,50 @@ uintptr_t ResolveVulkanSeam() {
 
 bool Install(int& armed, int& total) {
     // Every RHI's seams are installed unconditionally: which one the game presents with is unknown
-    // at Init, and the other signatures simply do not resolve in a single-RHI build. A stale
+    // at Init, and the shipped exe holds all three RHIs, so all of them resolve on every run; the one
+    // that fires names the RHI, and NoteWorldUp reports a run where none did. A stale
     // signature is not fatal: the overlay keeps drawing and says loudly that resizes are
     // unprotected. The Vulkan seam has no signature string of its own: its resolver is the ue_wrap one.
-    struct Seam { const char* name; const char* sig; void* detour; void** tramp; bool draws; };
+    struct Seam { const char* name; const char* sig; void* detour; void** tramp; int draw; };
     const Seam seams[] = {
         {"FD3D11Viewport::PresentChecked", ue_wrap::profile::kSigD3D11ViewportPresentChecked,
          reinterpret_cast<void*>(&D3D11PresentCheckedDetour),
-         reinterpret_cast<void**>(&g_d3d11PresentTrampoline), true},
+         reinterpret_cast<void**>(&g_d3d11PresentTrampoline), kDrawDx11},
         {"FD3D12Viewport::PresentInternal", ue_wrap::profile::kSigD3D12ViewportPresentInternal,
          reinterpret_cast<void*>(&D3D12PresentInternalDetour),
-         reinterpret_cast<void**>(&g_d3d12PresentTrampoline), true},
+         reinterpret_cast<void**>(&g_d3d12PresentTrampoline), kDrawDx12},
         {"FVulkanViewport::Present", nullptr, reinterpret_cast<void*>(&VulkanViewportPresentDetour),
-         reinterpret_cast<void**>(&g_vulkanPresentTrampoline), true},
+         reinterpret_cast<void**>(&g_vulkanPresentTrampoline), kDrawVulkan},
         {"FD3D11Viewport::Resize", ue_wrap::profile::kSigD3D11ViewportResize,
          reinterpret_cast<void*>(&D3D11ResizeDetour),
-         reinterpret_cast<void**>(&g_d3d11ResizeTrampoline), false},
+         reinterpret_cast<void**>(&g_d3d11ResizeTrampoline), -1},
         {"FD3D12Viewport::ResizeInternal", ue_wrap::profile::kSigD3D12ViewportResizeInternal,
          reinterpret_cast<void*>(&D3D12ResizeDetour),
-         reinterpret_cast<void**>(&g_d3d12ResizeTrampoline), false},
+         reinterpret_cast<void**>(&g_d3d12ResizeTrampoline), -1},
     };
     total = static_cast<int>(sizeof(seams) / sizeof(seams[0]));
     int drawArmed = 0;
-    // Each requirement is met by either RHI's signature, so the scan ledger's two rows are decided once
-    // the loop has tried all five.
+    // The draw row is first decided here by what resolved, and again at the world's first milestone by
+    // what fired; the resize row is decided once the loop has tried all five.
     bool drawFound = false, resizeFound = false;
     for (const Seam& sm : seams) {
         const uintptr_t at = sm.sig ? ue_wrap::FindPattern(sm.sig) : ResolveVulkanSeam();
-        if (at) (sm.draws ? drawFound : resizeFound) = true;
+        if (at) (sm.draw >= 0 ? drawFound : resizeFound) = true;
+        if (sm.draw >= 0) g_drawSeams[sm.draw].resolved = at != 0;
         if (!at) {
-            // Expected for the RHI this cook does not contain; zero draw seams is checked after
-            // the loop.
+            // A seam whose signature drifted; zero draw seams is checked after the loop.
             UE_LOGW("imgui_overlay: %s signature NOT found -- that seam is ABSENT this "
                     "run.", sm.name);
             continue;
         }
         if (ue_wrap::hook::Install(reinterpret_cast<void*>(at), sm.detour, sm.tramp)) {
             ++armed;
-            if (sm.draws) ++drawArmed;
+            if (sm.draw >= 0) {
+                ++drawArmed;
+                g_drawSeams[sm.draw].armed = true;
+            }
             UE_LOGI("imgui_overlay: %s %s armed @%p (image+0x%llX)", sm.name,
-                    sm.draws ? "DRAW seam" : "resize bracket",
+                    sm.draw >= 0 ? "DRAW seam" : "resize bracket",
                     reinterpret_cast<void*>(at),
                     static_cast<unsigned long long>(
                         at - reinterpret_cast<uintptr_t>(::GetModuleHandleW(nullptr))));
@@ -323,6 +350,28 @@ bool Install(int& armed, int& total) {
         return false;
     }
     return true;
+}
+
+void NoteWorldUp() {
+    if (g_worldJudged.exchange(true)) return;
+    bool anyArmed = false;
+    for (int i = 0; i < kDrawSeams; ++i) {
+        if (g_drawFired[i].load(std::memory_order_relaxed)) return;
+        anyArmed = anyArmed || g_drawSeams[i].armed;
+    }
+    if (!anyArmed) return;  // Install said so already, and the overlay was never set up
+    char states[320];
+    int at = 0;
+    for (int i = 0; i < kDrawSeams && at < static_cast<int>(sizeof states); ++i)
+        at += std::snprintf(states + at, sizeof states - static_cast<size_t>(at), "%s%s resolved=%s armed=%s fired=no",
+                            i ? "; " : "", g_drawSeams[i].name, g_drawSeams[i].resolved ? "yes" : "no",
+                            g_drawSeams[i].armed ? "yes" : "no");
+    ue_wrap::scan_ledger::Record(ue_wrap::scan_ledger::Scan::OverlayDraw, false);
+    UE_LOGE("imgui_overlay: NO DRAW SEAM. The world is up and no present seam has fired, so the overlay "
+            "cannot draw this run (%s). The seam of the RHI the game renders with has drifted -- re-derive "
+            "the signatures per docs/versioning.md.",
+            states);
+    ue_wrap::log::Flush();
 }
 
 }  // namespace ui::overlay_seams

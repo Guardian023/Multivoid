@@ -15,7 +15,7 @@ constexpr const char* kNames[] = {
     "FMemory::Realloc (GMalloc)",
     "the script-body gate (GNatives, then the VM loop by code)",
     "SaveGameToSlot",
-    "the overlay's draw seam (D3D11 PresentChecked or D3D12 PresentInternal)",
+    "the overlay's draw seam (the present of the RHI the game runs: D3D11, D3D12 or Vulkan)",
     "the overlay's resize bracket (D3D11 Resize or D3D12 ResizeInternal)",
     "AActor::EndPlay (by code)",
     "the Vulkan renderer's Present (FVulkanViewport::Present, by a stretch of its body)",
