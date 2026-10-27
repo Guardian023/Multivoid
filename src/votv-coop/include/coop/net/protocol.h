@@ -3994,7 +3994,9 @@ static_assert(sizeof(LinkProbePayload) == 4, "LinkProbePayload must be 4 bytes")
 // from what it can see. A value this receiver does not know is a phase change like any other: it
 // renews the wait once, and only its label is dropped.
 enum class HostJoinPhase : uint8_t {
-    CapturingWorld = 1,    // reading the host's save to a stable blob (no numerator: it retries until stable)
+    // Waiting for the host's world to finish starting (ms since it began / the settle ceiling once it has
+    // a gamemode, 0/0 before), then reading its save to a stable blob (no numerator: it retries until stable).
+    CapturingWorld = 1,
     StreamingWorld = 2,    // handing the blob to the transport: bytes accepted / blob bytes
     SnapshotDeferred = 3,  // the bracket is held because the host's registry does not express its world
     StreamingSnapshot = 4, // enqueueing the connect bracket: props sent / candidates
