@@ -183,6 +183,7 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/tower_drill.cpp
     src/coop/dev/tower_drill_coord.cpp
     src/coop/dev/tower_drill_radio.cpp
+    src/coop/dev/tower_drill_radio_arms.cpp
     src/coop/dev/dependency_dump.cpp
     src/coop/dev/end_play_probe.cpp
     src/coop/dev/death_seam_census.cpp

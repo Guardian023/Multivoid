@@ -38,12 +38,17 @@ CFG_STRING(tower_drill, "tower_drill", "dev", "", "VOTVCOOP_TOWER_DRILL", false,
     "puzzle, solves it and pulls the lever again, and the client reads each change applied as the tower's own. "
     "join: the host breaks the tower as it hosts, and the joiner's tower reads the host's without a roll of its "
     "own. red, joinred: the controls, a client whose gates stand open and who applies no rows, as before the "
-    "lane. The radio tower: radioreach -- the client walks to the tower with the director and prints how far the "
-    "walk ended from each part (a measurement, no verdict); radio -- the host scrambles its tower until it reads "
-    "broken, the client walks there, solves the puzzle with presses and pulls the confirm lever, and the verdict "
-    "is whether the host's tower reads whole (a part out of reach after the walk ends it ABANDONED); radiored -- "
-    "radio with the client's gates open, which fails as the lane's first build did. Lines tagged [TOWER-DRILL]; "
-    "the client's DONE line ends it.")
+    "lane. The radio tower (every client arm walks to the tower with the director, then to its ladder's foot, "
+    "mounts the ladder through its own use and climbs to the top, where the parts are within a use's reach; a "
+    "refused mount or a short climb ends it ABANDONED): radioreach -- prints how far the climb ended from each "
+    "part (a measurement, no verdict); radio -- the host scrambles its tower until it reads broken, the client "
+    "reads the break, solves the puzzle with presses through the tower's own use and pulls the confirm lever, and "
+    "the verdict is whether the host's tower and the client's copy both read whole; radiored -- radio with the "
+    "client's gates open, which fails as the lane's first build did; radioreset -- the client pulls the reset "
+    "lever: the host's cells must re-roll, this copy show them, and this copy's own roll be refused; radiojoin -- "
+    "the host breaks its tower before the client joins, which finds it broken with the host's cells and repairs "
+    "it as radio does; radiojoinred -- radiojoin with the client's gates open, which fails as the break never "
+    "reaches its copy. Lines tagged [TOWER-DRILL]; the client's DONE line ends it.")
 CFG_STRING(desk_ping_drill, "desk_ping_drill", "dev", "", "VOTVCOOP_DESK_PING_DRILL", false,
     "Drill (BOTH peers): a client's ping is rolled on the host. run: the client walks to the main desk, enters the "
     "coordinates screen, commits a triangle and presses its coord_ping key on the game window; legs: miss (a clear "

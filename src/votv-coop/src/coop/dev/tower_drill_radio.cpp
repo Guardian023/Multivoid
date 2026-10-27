@@ -1,5 +1,7 @@
-// coop/dev/tower_drill_radio.cpp -- the tower drill's radio arms (radioreach, radio, radiored); see
-// coop/dev/tower_drill.h. The arm table and what the arms share are tower_drill.cpp's and tower_drill_detail.h.
+// coop/dev/tower_drill_radio.cpp -- the tower drill's radio arms: the host's break, the client's route to the top of
+// the tower's ladder, and the repair (radioreach, radio, radiored, radiojoin, radiojoinred); the reset lever's arm
+// (radioreset) is tower_drill_radio_arms.cpp's. See coop/dev/tower_drill.h. The arm table and what the arms share
+// are tower_drill.cpp's, tower_drill_detail.h and tower_drill_radio_steps.h.
 //
 // The BP fact the solver stands on (bp_cpp radiotower_C, line numbers are its pseudo-C++): a press of cell `i` runs
 // switchNeighbors (:1414), which toggles the five cells (row + dr, col + dc) for (dr, dc) in (0,0), (-1,0), (1,0),
@@ -8,7 +10,7 @@
 // (:1430-:1470); each toggle is switchSwitch (:1345), so a neighbour the wrap names twice (a 2-wide torus) is
 // toggled twice and ends unchanged.
 
-#include "tower_drill_detail.h"
+#include "tower_drill_radio_steps.h"
 
 #include "coop/dev/director/director.h"
 #include "coop/dev/director/ladder_climb.h"
@@ -32,13 +34,17 @@
 #include <utility>
 #include <vector>
 
-// The arms. radioreach: the client walks to the tower with the director, then to the foot of the tower's ladder,
-// takes hold and climbs it through the game's own verb and key, and prints the ladder's ends, whether it stood at
-// the top, and how far it ended from each part a use reaches; a measurement, no verdict. radio: the host scrambles its tower until it reads
-// broken; the client reads the break, walks as above and, when every part it uses is within the lane's reach,
-// solves the puzzle with presses through the tower's own use and pulls the confirm lever; PASS when its copy and the
+// The arms. Every client arm starts on one route: the client walks to the tower with the director, then to the foot
+// of the tower's ladder, takes hold and climbs it through the game's own verb and key, so it ends at the top, within
+// a use's reach of every part. radioreach prints the ladder's ends, whether it stood at the top, and how far it ended
+// from each part a use reaches; a measurement, no verdict. radio: the host scrambles its tower until it reads
+// broken; the client, at the top, reads the break and, when every part it uses is within the lane's reach, solves
+// the puzzle with presses through the tower's own use and pulls the confirm lever; PASS when its copy and the
 // host's last row read whole 20 s at most after the lever. radiored: radio with the client's gates open and no rows
-// applied, which ends `radio FAIL: the host's tower stays broken`.
+// applied, which ends `radio FAIL: the host's tower stays broken`. radiojoin: the host breaks its tower before the
+// client joins; the client finds it broken, with the host's cells, as it arrives, and repairs it as radio does;
+// radiojoinred has the gates open, which ends `radiojoin FAIL: the host's break never reached this copy`.
+// radioreset: at the top the client pulls the reset lever instead (tower_drill_radio_arms.cpp).
 
 namespace coop::dev::tower_drill {
 namespace {
@@ -55,7 +61,7 @@ using ue_wrap::FVector;
 constexpr int      kMaxScrambles = 20;       // the host's calls to break its tower, one a second
 constexpr uint64_t kScrambleGapMs = 1000;
 constexpr uint64_t kCrossMs = 30000;         // the host's break reaching this copy; a press answered
-constexpr uint64_t kVerdictMs = 20000;       // the lever's repair reaching the host's row and this copy
+constexpr uint64_t kPressGapMs = 300;        // the least time between two presses
 constexpr int      kWalkDeadlineS = 300;     // the director's own bound on the walk
 constexpr float    kRingCm = 150.f;          // the standpoints about the confirm lever
 constexpr int      kStandpoints = 8;
@@ -126,27 +132,30 @@ bool AllLit(const RT::State& st) {
     return true;
 }
 
-bool CellsEqual(const RT::State& l, const FuseTowerRow& w) {
-    if (l.cellCount != w.lightCount) return false;
-    for (int i = 0; i < l.cellCount; ++i)
-        if (l.cells[i] != (((w.lights >> i) & 1u) != 0)) return false;
-    return true;
-}
+// The client's gates stand open and it applies no rows (the controls), so the host's row is read as it is kept.
+bool GatesOpen() { return ArmOf() == Arm::RadioRed || ArmOf() == Arm::RadioJoinRed; }
 
-std::string Digits(const RT::State& st, bool fuses) {
-    std::string s;
-    const int n = fuses ? st.fuseCount : st.cellCount;
-    for (int i = 0; i < n; ++i) s += fuses ? static_cast<char>('0' + st.fuses[i] % 10) : (st.cells[i] ? '1' : '0');
-    return s;
-}
-
-bool IsRed() { return ArmOf() == Arm::RadioRed; }
+// The control whose copy is not asked to read the host's break: it reads the break from the kept row alone, and its
+// own repair then runs on its own copy, which the lever's verdict tells from the host's.
+bool BreakFromRowAlone() { return ArmOf() == Arm::RadioRed; }
 
 const char* ArmName() {
     switch (ArmOf()) {
-    case Arm::RadioReach: return "radioreach";
-    case Arm::RadioRed:   return "radiored";
-    default:              return "radio";
+    case Arm::RadioReach:   return "radioreach";
+    case Arm::RadioRed:     return "radiored";
+    case Arm::RadioReset:   return "radioreset";
+    case Arm::RadioJoin:    return "radiojoin";
+    case Arm::RadioJoinRed: return "radiojoinred";
+    default:                return "radio";
+    }
+}
+
+// The name an arm's verdict lines carry: a control prints its green arm's name, so one fail marker serves both.
+const char* VerdictName() {
+    switch (ArmOf()) {
+    case Arm::RadioReset:                       return "radioreset";
+    case Arm::RadioJoin: case Arm::RadioJoinRed: return "radiojoin";
+    default:                                    return "radio";
     }
 }
 
@@ -169,7 +178,9 @@ void HostTick(coop::net::Session& s) {
         UE_LOGI("[TOWER-DRILL] host radio broken=%d", st.isBroken ? 1 : 0);
     }
     if (st.isBroken) g_hostBroke = true;
-    if (ArmOf() == Arm::RadioReach || g_hostBroke || g_hostGaveUp || !s.IsSlotWorldReady(1)) return;
+    // The join arms break the tower as the host hosts, before any client is in its world; the others wait for one.
+    if (ArmOf() == Arm::RadioReach || g_hostBroke || g_hostGaveUp || (!IsRadioJoin(ArmOf()) && !s.IsSlotWorldReady(1)))
+        return;
     if (g_hostScrambles >= kMaxScrambles) {
         g_hostGaveUp = true;
         UE_LOGW("[TOWER-DRILL] host radio could not break the tower in %d scrambles -- FAIL", kMaxScrambles);
@@ -182,9 +193,9 @@ void HostTick(coop::net::Session& s) {
     ++g_hostScrambles;
 }
 
-// ---- the client: walks to the tower, reads the reach, then repairs it ------------------------------------------
+// ---- the client: walks to the tower, climbs to its parts, then repairs it ---------------------------------------
 
-enum class Step : uint8_t { Arm, Break, Walk, LadderWalk, LadderClimb, Press, Lever, Done };
+enum class Step : uint8_t { Arm, JoinCheck, Walk, LadderWalk, LadderClimb, Break, Press, Lever, Reset, Done };
 Step     g_step = Step::Arm;
 uint64_t g_stepMs = 0;
 bool     g_acted = false;
@@ -200,6 +211,8 @@ LD::Climb g_climb;
 std::vector<int> g_presses;
 size_t   g_pressNext = 0;
 uint64_t g_leverMs = 0;
+uint64_t g_pressMs = 0;            // when the last press was sent
+uint32_t g_pressExpect = 0;        // the host's cells once the press now awaited is its own
 
 void Go(Step s) {
     g_step = s;
@@ -209,18 +222,26 @@ void Go(Step s) {
 
 bool Overdue(uint64_t bound) { return NowMs() - g_stepMs > bound; }
 
-void Done(const char* verdict) {
+// The DONE line, which every arm's end prints once: `what` is the arm and its verdict.
+void SayDone(const char* what) {
     g_step = Step::Done;
     const auto e = coop::fuse_tower_rows::AppliedEdges(coop::net::kFuseTowerKindRadio);
     UE_LOGI("[TOWER-DRILL] client DONE %s (ops sent %llu, claims unanswered %zu, rolls refused %llu; applied: "
-            "breaks %u repairs %u presses %u pulls %u inserts %u levers %u fails %u)", verdict,
+            "breaks %u repairs %u presses %u pulls %u inserts %u levers %u fails %u)", what,
             static_cast<unsigned long long>(coop::fuse_tower_ops::OpsSent()), coop::fuse_tower_ops::PendingClaims(),
             static_cast<unsigned long long>(coop::fuse_tower_ops::RollsRefused()), e.breaks, e.repairs, e.presses,
             e.pulls, e.inserts, e.levers, e.fails);
 }
 
+// An arm's end: "<arm> <PASS|FAIL|ABANDONED>".
+void Done(const char* verdict) {
+    char what[64];
+    std::snprintf(what, sizeof what, "%s %s", ArmName(), verdict);
+    SayDone(what);
+}
+
 void Fail(const char* why) {
-    UE_LOGW("[TOWER-DRILL] radio FAIL: %s", why);
+    UE_LOGW("[TOWER-DRILL] %s FAIL: %s", VerdictName(), why);
     Done("FAIL");
 }
 
@@ -241,9 +262,9 @@ void Measure(void* tower, const FVector& me, PartDist& p) {
     p.uu = RT::PartLocation(tower, p.at, where) ? Dist(me, where) : -1.f;
 }
 
-// What the walk ended on: the line every radio arm prints, and for the radio arms the reach check of the parts
-// they use. Returns false when the arm ended here.
-bool AfterWalk(void* tower, void* player, bool reached) {
+// Where the client stands once the route ended: the line every radio arm prints, and for the repair arms the reach
+// check of the parts they use. Returns false when the arm ended here.
+bool AtTheParts(void* tower, void* player, bool reached) {
     FVector me{};
     if (!ue_wrap::engine::TryGetActorLocation(player, me)) {
         UE_LOGW("[TOWER-DRILL] %s: the walker's place does not read", ArmName());
@@ -258,19 +279,24 @@ bool AfterWalk(void* tower, void* player, bool reached) {
     UE_LOGI("[TOWER-DRILL] %s route=%.0f reached=%d dist button0=%.0f confirm=%.0f reset=%.0f fuse0=%.0f", ArmName(),
             g_routeUU, reached ? 1 : 0, button0.uu, confirm.uu, reset.uu, fuse0.uu);
     if (ArmOf() == Arm::RadioReach) {
-        Done("radioreach");
+        SayDone("radioreach");
         return false;
     }
     // Every part this client uses must be within the lane's reach, or the fixture, not the lane, is what ended it.
-    std::vector<PartDist> used{confirm};
-    for (int i : g_presses) {
-        PartDist p{"puzzle button", {RT::Part::Button, i}};
-        Measure(tower, me, p);
-        used.push_back(p);
+    std::vector<PartDist> used;
+    if (ArmOf() == Arm::RadioReset) {
+        used.push_back(reset);
+    } else {
+        used.push_back(confirm);
+        for (int i : g_presses) {
+            PartDist p{"puzzle button", {RT::Part::Button, i}};
+            Measure(tower, me, p);
+            used.push_back(p);
+        }
     }
     for (const PartDist& p : used)
         if (p.uu < 0.f || p.uu > coop::fuse_tower_ops::kTowerReachUU) {
-            UE_LOGW("[TOWER-DRILL] radio ABANDONED: %s at %.0f after the walk", p.name, p.uu);
+            UE_LOGW("[TOWER-DRILL] %s ABANDONED: %s at %.0f after the climb", ArmName(), p.name, p.uu);
             Done("ABANDONED");
             return false;
         }
@@ -318,29 +344,26 @@ void LogTrace(const std::string& trace) {
     }
 }
 
-// The walk to the confirm lever's ring ended. The reach arm goes on to the tower's ladder; the others measure here.
-void WalkEnded(void* tower, void* player, bool reached) {
-    if (ArmOf() == Arm::RadioReach) {
-        UE_LOGI("[TOWER-DRILL] radioreach base walk ended: route=%.0f reached=%d", g_routeUU, reached ? 1 : 0);
-        Go(Step::LadderWalk);
-        return;
-    }
-    if (AfterWalk(tower, player, reached)) Go(Step::Press);
+// The walk to the confirm lever's ring ended; every arm goes on to the tower's ladder, whatever the walk reached.
+void WalkEnded(bool reached) {
+    UE_LOGI("[TOWER-DRILL] %s base walk ended: route=%.0f reached=%d", ArmName(), g_routeUU, reached ? 1 : 0);
+    Go(Step::LadderWalk);
 }
 
-// The reach arm's ladder steps ended, whichever way: the distances line from where the client stands, then DONE.
-void LadderEnded(void* tower, void* player) { AfterWalk(tower, player, g_footReached); }
-
+// The ladder steps ended short. The reach arm prints the distances from where the client stands, then DONE; a
+// repair arm ends ABANDONED, since the parts are out of reach.
 void LadderAbandoned(void* tower, void* player, const char* why) {
-    UE_LOGW("[TOWER-DRILL] radioreach ladder ABANDONED: %s", why);
-    LadderEnded(tower, player);
+    UE_LOGW("[TOWER-DRILL] %s ladder ABANDONED: %s", ArmName(), why);
+    if (ArmOf() == Arm::RadioReach) AtTheParts(tower, player, g_footReached);
+    else Done("ABANDONED");
 }
 
 // What the climb measured: the ladder's ends, whether it mounted, how long it climbed, where it ended.
 void LadderReport(void* tower, void* player) {
     const LD::Outcome& o = g_climb.Result();
-    UE_LOGI("[TOWER-DRILL] radioreach ladder foot=(%.0f,%.0f,%.0f) top=(%.0f,%.0f,%.0f) mounted=%d climbMs=%llu "
-            "end=(%.0f,%.0f,%.0f) top=%d", g_foot.X, g_foot.Y, g_foot.Z, g_top.X, g_top.Y, g_top.Z, o.mounted ? 1 : 0,
+    UE_LOGI("[TOWER-DRILL] %s ladder foot=(%.0f,%.0f,%.0f) top=(%.0f,%.0f,%.0f) mounted=%d climbMs=%llu "
+            "end=(%.0f,%.0f,%.0f) top=%d", ArmName(), g_foot.X, g_foot.Y, g_foot.Z, g_top.X, g_top.Y, g_top.Z,
+            o.mounted ? 1 : 0,
             static_cast<unsigned long long>(o.climbMs), o.end.X, o.end.Y, o.end.Z, o.atTop ? 1 : 0);
     if (o.why) {
         LadderAbandoned(tower, player, o.why);
@@ -352,16 +375,25 @@ void LadderReport(void* tower, void* player) {
         LadderAbandoned(tower, player, why);
         return;
     }
-    LadderEnded(tower, player);
+    // At the top: the reach arm measures here; the others wait for the host's break to read on this copy.
+    if (ArmOf() == Arm::RadioReach) AtTheParts(tower, player, g_footReached);
+    else Go(Step::Break);
 }
 
 void ClientTick(void* player) {
-    void* tower = RT::Instance();
-    RT::State l;
-    const bool haveL = tower && RT::Read(tower, l);
-    FuseTowerRow w{};
-    const bool haveW = FindRow(coop::net::kFuseTowerKindRadio, 0, w);
-    const bool radio = ArmOf() != Arm::RadioReach;
+    RadioView v;
+    v.tower = RT::Instance();
+    v.player = player;
+    v.haveL = v.tower && RT::Read(v.tower, v.l);
+    v.haveW = FindRow(coop::net::kFuseTowerKindRadio, 0, v.w);
+    void* const tower = v.tower;
+    const RT::State& l = v.l;
+    const bool haveL = v.haveL;
+    const FuseTowerRow& w = v.w;
+    const bool haveW = v.haveW;
+    // The host's break as this copy reads it: the host's row says broken and this copy shows its cells; the control
+    // that applies no rows reads the row alone.
+    const bool crossed = haveW && RowBroken(w) && (BreakFromRowAlone() || (haveL && l.isBroken && CellsEqual(l, w)));
     switch (g_step) {
     case Step::Arm: {
         if (!coop::net_pump::HasAnnouncedWorldReady() ||
@@ -380,27 +412,34 @@ void ClientTick(void* player) {
         UE_LOGI("[TOWER-DRILL] client %s census: the radio tower at (%.0f, %.0f, %.0f), puzzle %dx%d, broken %d, "
                 "fuses %s cells %s", ArmName(), at.X, at.Y, at.Z, l.width, l.height, l.isBroken ? 1 : 0,
                 Digits(l, true).c_str(), Digits(l, false).c_str());
-        Go(radio ? Step::Break : Step::Walk);
+        Go(IsRadioJoin(ArmOf()) ? Step::JoinCheck : Step::Walk);
         return;
     }
-    case Step::Break: {
-        // The control applies no rows, so there the host's break is read from the kept row alone.
-        const bool crossed = haveW && RowBroken(w) && (IsRed() || (haveL && l.isBroken && CellsEqual(l, w)));
+    case Step::JoinCheck:
+        // A joiner's tower reads the host's break as it arrives, before it walks anywhere.
         if (crossed) {
-            if (!haveL || !SolveTorus(l, g_presses)) {
-                UE_LOGW("[TOWER-DRILL] radio ABANDONED: no set of presses lights this puzzle (the fixture)");
+            UE_LOGI("[TOWER-DRILL] client PASS the joiner's copy reads the host's break: cells %s",
+                    Digits(l, false).c_str());
+            Go(Step::Walk);
+            return;
+        }
+        if (Overdue(kCrossMs)) Fail("the host's break never reached this copy");
+        return;
+    case Step::Break: {
+        // At the top of the ladder: the break is read here, the puzzle solved, the reach of the parts checked.
+        if (crossed) {
+            const bool reset = ArmOf() == Arm::RadioReset;
+            if (!reset && (!haveL || !SolveTorus(l, g_presses))) {
+                UE_LOGW("[TOWER-DRILL] %s ABANDONED: no set of presses lights this puzzle (the fixture)", ArmName());
                 Done("ABANDONED");
                 return;
             }
             UE_LOGI("[TOWER-DRILL] client PASS the host's break reached this copy: cells %s, %zu presses solve it",
                     Digits(l, false).c_str(), g_presses.size());
-            Go(Step::Walk);
+            if (AtTheParts(tower, player, g_footReached)) Go(reset ? Step::Reset : Step::Press);
             return;
         }
-        if (Overdue(kCrossMs)) {
-            UE_LOGW("[TOWER-DRILL] FAIL: the host's break never reached this copy");
-            Done("FAIL");
-        }
+        if (Overdue(kCrossMs)) Fail("the host's break never reached this copy");
         return;
     }
     case Step::Walk: {
@@ -425,7 +464,7 @@ void ClientTick(void* player) {
                 ring = RingAtHeight(player, lever, root.Z, trace);
             if (ring.empty()) {
                 LogTrace(trace);
-                WalkEnded(tower, player, false);
+                WalkEnded(false);
                 return;
             }
             float len = -1.f;
@@ -440,7 +479,7 @@ void ClientTick(void* player) {
         const int state = g_walk->state.load();
         if (state == 0) return;
         g_walk.reset();
-        WalkEnded(tower, player, state == 1);
+        WalkEnded(state == 1);
         return;
     }
     case Step::LadderWalk: {
@@ -460,7 +499,7 @@ void ClientTick(void* player) {
             const float z = g_foot.Z;
             const std::vector<FVector> ring =
                 DR::ReachableStandpoints(player, g_foot, kLadderRingCm, kStandpoints, kLadderReachCm, &z, &trace);
-            UE_LOGI("[TOWER-DRILL] radioreach ladder standpoints about the foot (%.0f, %.0f, %.0f): %zu", g_foot.X,
+            UE_LOGI("[TOWER-DRILL] %s ladder standpoints about the foot (%.0f, %.0f, %.0f): %zu", ArmName(), g_foot.X,
                     g_foot.Y, g_foot.Z, ring.size());
             if (ring.empty()) {
                 LogTrace(trace);
@@ -477,8 +516,8 @@ void ClientTick(void* player) {
         g_footReached = state == 1;
         FVector me{};
         const bool read = ue_wrap::engine::TryGetActorLocation(player, me);
-        UE_LOGI("[TOWER-DRILL] radioreach ladder foot walk ended: reached=%d, the walker stands %.0f uu from the foot",
-                g_footReached ? 1 : 0, read ? Dist(me, g_foot) : -1.f);
+        UE_LOGI("[TOWER-DRILL] %s ladder foot walk ended: reached=%d, the walker stands %.0f uu from the foot",
+                ArmName(), g_footReached ? 1 : 0, read ? Dist(me, g_foot) : -1.f);
         if (!g_footReached) {
             LadderAbandoned(tower, player, "the walk to the ladder's foot ended short");
             return;
@@ -490,31 +529,39 @@ void ClientTick(void* player) {
         if (g_climb.Tick(player, g_ladder)) LadderReport(tower, player);
         return;
     case Step::Press: {
-        if (!haveL) return;
+        if (!haveL || !haveW) return;
         if (g_pressNext < g_presses.size()) {
             if (!g_acted) {
+                if (NowMs() - g_pressMs < kPressGapMs) return;
+                // What the host's cells read once this press is its own: the press is the host's, so its effect
+                // arrives in the rows and nowhere else.
+                bool cells[RT::kMaxCells] = {};
+                for (int i = 0; i < w.lightCount && i < RT::kMaxCells; ++i) cells[i] = ((w.lights >> i) & 1u) != 0;
+                Toggle(cells, l.width, l.height, g_presses[g_pressNext]);
+                g_pressExpect = 0;
+                for (int i = 0; i < w.lightCount && i < RT::kMaxCells; ++i)
+                    if (cells[i]) g_pressExpect |= 1u << i;
                 const uint64_t before = coop::fuse_tower_ops::OpsSent();
                 RT::Use(tower, player, RT::LookAt{RT::Part::Button, g_presses[g_pressNext]});
-                if (!IsRed() && coop::fuse_tower_ops::OpsSent() == before) {
+                if (!GatesOpen() && coop::fuse_tower_ops::OpsSent() == before) {
                     Fail("a puzzle press was not sent to the host");
                     return;
                 }
                 g_actSeq = coop::fuse_tower_ops::LastSentSeq();
                 g_acted = true;
-                g_stepMs = NowMs();
+                g_stepMs = g_pressMs = NowMs();
                 return;
             }
-            if (IsRed() || Answered()) {
+            if (GatesOpen() || (Answered() && w.lights == g_pressExpect)) {
                 ++g_pressNext;
                 g_acted = false;
-                g_stepMs = NowMs();
             } else if (Overdue(kCrossMs)) {
-                Fail("the host never answered a press");
+                Fail(Answered() ? "the host's row never showed a press" : "the host never answered a press");
             }
             return;
         }
-        // Every press answered: the host's rows must have lit this copy's puzzle before the lever is pulled.
-        if (!IsRed() && !AllLit(l)) {
+        // Every press shown: the host's rows must have lit this copy's puzzle before the lever is pulled.
+        if (!GatesOpen() && !AllLit(l)) {
             if (Overdue(kCrossMs)) Fail("the host's presses never lit this copy's puzzle");
             return;
         }
@@ -528,7 +575,7 @@ void ClientTick(void* player) {
         if (!g_acted) {
             const uint64_t before = coop::fuse_tower_ops::OpsSent();
             RT::Use(tower, player, RT::LookAt{RT::Part::Confirm, -1});
-            if (!IsRed() && coop::fuse_tower_ops::OpsSent() == before) {
+            if (!GatesOpen() && coop::fuse_tower_ops::OpsSent() == before) {
                 Fail("the confirm lever's press was not sent to the host");
                 return;
             }
@@ -541,15 +588,20 @@ void ClientTick(void* player) {
         const bool copyWhole = !l.isBroken;
         const bool hostWhole = haveW && !RowBroken(w);
         if (copyWhole && hostWhole) {
-            UE_LOGI("[TOWER-DRILL] radio PASS (presses=%zu, route=%.0f)", g_presses.size(), g_routeUU);
+            UE_LOGI("[TOWER-DRILL] %s PASS (presses=%zu, climbMs=%llu)", VerdictName(), g_presses.size(),
+                    static_cast<unsigned long long>(g_climb.Result().climbMs));
             Done("PASS");
             return;
         }
-        if (NowMs() - g_leverMs > kVerdictMs) {
-            Fail(!hostWhole ? "the host's tower stays broken" : "this copy still reads broken");
-        }
+        if (NowMs() - g_leverMs > kRadioVerdictMs)
+            Fail(!hostWhole && !copyWhole ? "the host's tower stays broken and this copy reads broken too"
+                 : !hostWhole             ? "the host's tower stays broken"
+                                          : "this copy still reads broken");
         return;
     }
+    case Step::Reset:
+        ResetArmTick(v);
+        return;
     case Step::Done:
         return;
     }
@@ -558,6 +610,29 @@ void ClientTick(void* player) {
 }  // namespace
 
 namespace detail {
+
+bool CellsEqual(const RT::State& l, const FuseTowerRow& w) {
+    if (l.cellCount != w.lightCount) return false;
+    for (int i = 0; i < l.cellCount; ++i)
+        if (l.cells[i] != (((w.lights >> i) & 1u) != 0)) return false;
+    return true;
+}
+
+std::string Digits(const RT::State& st, bool fuses) {
+    std::string s;
+    const int n = fuses ? st.fuseCount : st.cellCount;
+    for (int i = 0; i < n; ++i) s += fuses ? static_cast<char>('0' + st.fuses[i] % 10) : (st.cells[i] ? '1' : '0');
+    return s;
+}
+
+std::string RowCells(const FuseTowerRow& w) {
+    std::string s;
+    for (int i = 0; i < w.lightCount; ++i) s += ((w.lights >> i) & 1u) ? '1' : '0';
+    return s;
+}
+
+void RadioDone(const char* verdict) { Done(verdict); }
+void RadioFail(const char* why) { Fail(why); }
 
 void RadioHostTick(coop::net::Session& s) { HostTick(s); }
 
@@ -586,6 +661,9 @@ void RadioReset() {
     g_acted = false;
     g_actSeq = 0;
     g_leverMs = 0;
+    g_pressMs = 0;
+    g_pressExpect = 0;
+    ResetArmReset();
 }
 
 }  // namespace detail

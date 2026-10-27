@@ -17,8 +17,11 @@ namespace coop::dev::tower_drill::detail {
 
 // Every value of the config row `tower_drill`: the coordinate towers' run and join and their controls (red,
 // joinred: the client's gates open and no rows applied), then the radio tower's: the walk that measures the reach
-// (radioreach), the repair (radio) and its control (radiored).
-enum class Arm : uint8_t { Off, Run, Red, Join, JoinRed, RadioReach, Radio, RadioRed };
+// (radioreach), the repair (radio) and its control (radiored), the reset lever (radioreset), and the repair of a
+// tower the host broke before the client joined (radiojoin) with its control (radiojoinred).
+enum class Arm : uint8_t {
+    Off, Run, Red, Join, JoinRed, RadioReach, Radio, RadioRed, RadioReset, RadioJoin, RadioJoinRed
+};
 
 // The arm the row names, read once.
 Arm ArmOf();
@@ -27,6 +30,8 @@ inline bool IsRadio(Arm a) { return a >= Arm::RadioReach; }
 // The coordinate arms' two shapes, each with its control.
 inline bool IsRun(Arm a) { return a == Arm::Run || a == Arm::Red; }
 inline bool IsJoin(Arm a) { return a == Arm::Join || a == Arm::JoinRed; }
+// The radio arms whose host breaks the tower before any client stands in its world.
+inline bool IsRadioJoin(Arm a) { return a == Arm::RadioJoin || a == Arm::RadioJoinRed; }
 
 uint64_t NowMs();
 float Dist(const ue_wrap::FVector& a, const ue_wrap::FVector& b);
@@ -41,7 +46,8 @@ void CoordHostTick(coop::net::Session& s);
 void CoordClientTick();
 void CoordReset();
 
-// The radio arms (tower_drill_radio.cpp): the host's break on its own roll, the client's walk, presses and lever.
+// The radio arms (tower_drill_radio.cpp, and tower_drill_radio_arms.cpp for the reset lever's; what the two share is
+// tower_drill_radio_steps.h): the host's break on its own roll, the client's walk, climb, presses and levers.
 void RadioHostTick(coop::net::Session& s);
 void RadioClientTick();
 void RadioReset();

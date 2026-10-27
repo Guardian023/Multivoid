@@ -27,6 +27,9 @@ Arm ArmOf() {
         if (v == "radioreach") return Arm::RadioReach;
         if (v == "radio") return Arm::Radio;
         if (v == "radiored") return Arm::RadioRed;
+        if (v == "radioreset") return Arm::RadioReset;
+        if (v == "radiojoin") return Arm::RadioJoin;
+        if (v == "radiojoinred") return Arm::RadioJoinRed;
         return Arm::Off;
     }();
     return a;
