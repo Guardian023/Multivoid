@@ -267,6 +267,47 @@ bool AfterWalk(void* tower, void* player, bool reached) {
     return true;
 }
 
+// Where the tower and each part a use reaches stand, printed once before the walk is asked.
+void LogParts(void* tower) {
+    FVector root{};
+    const bool haveRoot = ue_wrap::engine::TryGetActorLocation(tower, root);
+    const RT::LookAt asks[] = {{RT::Part::Button, 0}, {RT::Part::Confirm, -1}, {RT::Part::Reset, -1}, {RT::Part::Fuse, 0}};
+    char at[4][64];
+    for (int i = 0; i < 4; ++i) {
+        FVector v{};
+        if (RT::PartLocation(tower, asks[i], v)) std::snprintf(at[i], sizeof at[i], "(%.0f,%.0f,%.0f)", v.X, v.Y, v.Z);
+        else std::snprintf(at[i], sizeof at[i], "(unread)");
+    }
+    char rootAt[64];
+    if (haveRoot) std::snprintf(rootAt, sizeof rootAt, "(%.0f,%.0f,%.0f)", root.X, root.Y, root.Z);
+    else std::snprintf(rootAt, sizeof rootAt, "(unread)");
+    UE_LOGI("[TOWER-DRILL] radio parts root=%s button0=%s confirm=%s reset=%s fuse0=%s", rootAt, at[0], at[1], at[2],
+            at[3]);
+}
+
+// The standpoints about the lever with the ring at height `z`, and the route's trace of that try; printed counts.
+std::vector<FVector> RingAtHeight(void* player, const FVector& lever, float z, std::string& trace) {
+    trace.clear();
+    std::vector<FVector> ring =
+        DR::ReachableStandpoints(player, lever, kRingCm, kStandpoints, kStandReachCm, &z, &trace);
+    UE_LOGI("[TOWER-DRILL] radio standpoints at z=%.0f: %zu", z, ring.size());
+    return ring;
+}
+
+// The trace of a try that found nothing, one line per leg, capped.
+void LogTrace(const std::string& trace) {
+    constexpr int kMaxLines = 40;
+    int printed = 0;
+    size_t pos = 0;
+    while (pos < trace.size() && printed < kMaxLines) {
+        size_t nl = trace.find('\n', pos);
+        if (nl == std::string::npos) nl = trace.size();
+        UE_LOGI("[TOWER-DRILL] radio %s", trace.substr(pos, nl - pos).c_str());
+        pos = nl + 1;
+        ++printed;
+    }
+}
+
 void ClientTick(void* player) {
     void* tower = RT::Instance();
     RT::State l;
@@ -329,8 +370,14 @@ void ClientTick(void* player) {
                 return;
             }
             g_walkAsked = true;
-            const std::vector<FVector> ring = DR::ReachableStandpoints(player, lever, kRingCm, kStandpoints, kStandReachCm);
+            LogParts(tower);
+            std::string trace;
+            std::vector<FVector> ring = RingAtHeight(player, lever, lever.Z, trace);
+            FVector root{};
+            if (ring.empty() && ue_wrap::engine::TryGetActorLocation(tower, root))
+                ring = RingAtHeight(player, lever, root.Z, trace);
             if (ring.empty()) {
+                LogTrace(trace);
                 if (!AfterWalk(tower, player, false)) return;
                 Go(Step::Press);
                 return;
