@@ -36,10 +36,13 @@ namespace {
 
 constexpr DWORD    kVkFailure     = 0xE0564B01u;  // the SEH code Check raises
 constexpr uint32_t kMaxImages     = 16;           // the engine reader refuses more
-constexpr uint32_t kPoolSize      = 64;           // combined-image-sampler descriptors: fonts + skin previews
 constexpr uint32_t kSelfTestSide  = 64;           // the selftest image is kSelfTestSide x kSelfTestSide
 constexpr uint64_t kSelfTestWaitNs = 2000000000ull;
-constexpr size_t   kMaxTextures   = 64;
+constexpr size_t   kMaxTextures   = 64;           // skin previews held at once
+// Combined-image-sampler descriptors of the backend's own pool: every preview, plus the font atlas (twice while
+// it is rebuilt) and spare, so a preview can never be what exhausts the pool.
+constexpr uint32_t kPoolHeadroom  = 8;
+constexpr uint32_t kPoolSize      = static_cast<uint32_t>(kMaxTextures) + kPoolHeadroom;
 
 Context            g_ctx{};
 std::atomic<bool>  g_down{false};
@@ -561,7 +564,16 @@ void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH) {
     UserTexture* slot = nullptr;
     for (UserTexture& u : g_textures)
         if (!u.tex) { slot = &u; break; }
-    if (!slot) return nullptr;
+    if (!slot) {
+        static bool s_said = false;  // the render thread only
+        if (!s_said) {
+            s_said = true;
+            UE_LOGW("[VK-OVERLAY] a skin preview was refused: all %zu texture slots are in use (the overlay keeps "
+                    "running without it)",
+                    kMaxTextures);
+        }
+        return nullptr;
+    }
     std::vector<uint8_t> bgra;
     unsigned w = 0, h = 0;
     if (!detail::DecodeImageFileBgra(path, bgra, w, h)) return nullptr;
