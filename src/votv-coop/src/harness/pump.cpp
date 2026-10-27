@@ -7,6 +7,7 @@
 #include "coop/dev/class_lifetime_probe.h"
 #include "coop/dev/init_seam_probe.h"
 #include "coop/dev/key_parity_probe.h"
+#include "coop/dev/vulkan_path_probe.h"
 #include "coop/dev/mannequin_drill.h"
 #include "coop/dev/object_overlay.h"
 #include "coop/dev/ragdoll_bone_overlay.h"
@@ -119,6 +120,8 @@ void TickFrameTail() {
     // [dev] A key index fed only at the key writes, and the one we keep, against the world; a latched read
     // when off.
     coop::dev::key_parity_probe::Tick();
+    // [dev] The Vulkan renderer's present path, at the menu and in a world alike; a latched read when off.
+    coop::dev::vulkan_path_probe::Tick();
     // [dev] The walking mannequin's spawn sequence, in session or not; a single atomic read when idle.
     coop::dev::mannequin_drill::TickFrame();
     // [dev] The join-abort proof presses Cancel mid-join here (this tail runs in the transfer wait and
