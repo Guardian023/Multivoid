@@ -35,13 +35,6 @@ CFG_FLAG(drone_probe_drive, "drone_probe_drive", "dev", false, nullptr,
     "Diagnostic probe: drive the delivery drone (test driver).")
 CFG_FLAG(pile_dup_probe, "pile_dup_probe", "dev", false, nullptr,
     "Diagnostic probe: pile duplicate/identity mismatches.")
-CFG_INT(pile_key_probe, "pile_key_probe", "dev", 0, 0, 1, "VOTVCOOP_PILE_KEY_PROBE",
-    "Diagnostic probe (both roles; read-only, the matching is unchanged): the pile save-time key against the "
-    "native it should find. HOST, at the join capture: each chipPile moving faster than 0.5 cm/s, then a "
-    "count. JOINER: each native chipPile's first-seen place, and for a pending save-time twin at the "
-    "bind's miss, at sweep passes 1, 10, 20, 30 and 39 and at the give-up, the nearest unbound native of "
-    "its form and chip type: its distance from the key now, at first sight, and the drift between; a "
-    "twin adopted later says its pass. Prints [PILE-KEY] lines. The env twin arms both peers for one run.")
 CFG_FLAG(perf_probe, "perf_probe", "dev", false, "VOTVCOOP_PERF_PROBE",
     "Performance probe: per-frame subsystem timing lines, the reflected-call rate and the ParamFrame allocation rate. The env twin exists so a launcher can arm BOTH peers for one run: an ini-only dev row has to be edited per install, which is how a perf number ends up measured on one peer and assumed on the other.")
 CFG_FLAG(perf_probe_selftime, "perf_probe_selftime", "dev", false, nullptr,

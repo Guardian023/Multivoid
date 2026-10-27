@@ -3,7 +3,6 @@
 
 #include "pile_defer_drill_detail.h"  // co-located private header (src tree, not include/)
 
-#include "coop/dev/pile_key_probe.h"  // [MEASURE sync-order-wp5, temporary] the host's turn of a failed eid
 #include "coop/element/registry.h"
 
 #include "ue_wrap/actors/prop.h"
@@ -114,11 +113,7 @@ void JudgeReport(const coop::dev::pile_defer_report::Report& report) {
         worstCm = std::max(worstCm, cm);
         worstDeg = std::max(worstDeg, deg);
         if (cm > kPlaceCm) fail("[PILE-DEFER] host FAIL: eid=%u place off by %.1f cm", j.eid, cm);
-        if (deg > kTurnDeg) {
-            fail("[PILE-DEFER] host FAIL: eid=%u turn off by %.1f deg", j.eid, deg);
-            if (coop::dev::pile_key_probe::On())   // [MEASURE sync-order-wp5, temporary]
-                coop::dev::pile_key_probe::LogHostNowRot(j.eid, h.pitch, h.yaw, h.roll);
-        }
+        if (deg > kTurnDeg) fail("[PILE-DEFER] host FAIL: eid=%u turn off by %.1f deg", j.eid, deg);
     }
     for (const auto& h : mine) {
         if (reported.count(h.eid)) continue;

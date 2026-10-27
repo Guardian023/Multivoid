@@ -13,7 +13,6 @@
 #include "coop/config/config.h"  // ResolveFlag -- the [PILE-DELTA] probe flag (multivoid.ini [dev], not bats/env)
 #include "coop/dev/pile_defer_drill.h"  // [dev] the pile deferral drill's counts
 #include "coop/dev/pile_late_load.h"    // [dev] the late-load seam's chosen clump
-#include "coop/dev/pile_key_probe.h"  // [MEASURE sync-order-wp5, temporary] the key against the native, at the bind miss
 #include "coop/element/registry.h"  // Element::SetSaveNative on the bound native
 #include "coop/props/join_membership_sweep.h"  // RecordClaimIfTracking (a bound native is expressed this bracket)
 #include "coop/props/prop_element_tracker.h"  // IsBoundMirrorNative / GetPropElementIdForActor
@@ -86,17 +85,6 @@ bool DeltaProbeOn() {
     return on;
 }
 
-// [MEASURE sync-order-wp5, temporary] The live candidates of the bind index as the key probe takes them.
-std::vector<coop::dev::pile_key_probe::Native> ProbeNatives() {
-    std::vector<coop::dev::pile_key_probe::Native> out;
-    out.reserve(g_pileBindIndex.size());
-    for (const auto& c : g_pileBindIndex) {
-        if (!R::IsLiveByIndex(c.actor, c.idx)) continue;
-        out.push_back({c.actor, c.idx, c.x, c.y, c.z, c.chipType, c.isClump});
-    }
-    return out;
-}
-
 // Build the bracket index lazily (idempotent). `claimed` = remote_prop_spawn's
 // g_claimedActors (skip a native already bound earlier this bracket).
 void EnsureIndex(const std::unordered_set<void*>& claimed) {
@@ -130,10 +118,6 @@ void EnsureIndex(const std::unordered_set<void*>& claimed) {
     for (const auto& c : g_pileBindIndex) if (c.isClump) ++clumpN;
     UE_LOGI("pile_spawn_bind: pile-bind index built -- %zu local chipPile candidate(s), %d garbage clump(s)",
             g_pileBindIndex.size() - static_cast<size_t>(clumpN), clumpN);
-    if (coop::dev::pile_key_probe::On()) {   // [MEASURE sync-order-wp5, temporary]
-        const auto seen = ProbeNatives();
-        coop::dev::pile_key_probe::NoteBindIndex(seen.data(), seen.size());
-    }
 }
 
 // [PILE-DELTA] dark probe on a bind MISS: during the join bracket every expression names a LEVEL
@@ -206,11 +190,6 @@ void* BindOwnSavePile(const coop::net::PropSpawnPayload& payload,
     // host has a pile the client can neither see nor aim at.
     auto armAndFail = [&](const char* why) -> void* {
         if (isSaveTimeKey && payload.elementId != 0) {
-            if (coop::dev::pile_key_probe::On()) {   // [MEASURE sync-order-wp5, temporary]
-                const auto unbound = ProbeNatives();
-                coop::dev::pile_key_probe::LogBindMiss(payload.elementId, matchPos, wantClump, payload.chipType,
-                                                       unbound.data(), unbound.size());
-            }
             coop::element::quiescence_drain::ArmPendingSaveTimeTwin(payload.elementId, matchPos, payload.chipType,
                                                                     wantClump);
             // Messages for the eid wait for the sweep's bind only while it owns no actor: the same twin is

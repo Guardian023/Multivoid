@@ -226,12 +226,10 @@ set(VOTVCOOP_DEV_SOURCES
     src/coop/dev/inventory_pickup_drill.cpp
     src/coop/dev/drone_probe.cpp
     src/coop/dev/native_pile_inert_probe.cpp
-    src/coop/dev/pile_key_probe.cpp
     src/coop/dev/pile_late_load.cpp
     src/coop/dev/pile_defer_report.cpp
     src/coop/dev/pile_defer_drill.cpp
     src/coop/dev/pile_defer_drill_host.cpp
-    src/coop/dev/pile_repile_drill.cpp
     src/coop/dev/client_model_probe.cpp
     src/coop/dev/atv_eject_drill.cpp
     src/coop/dev/atv_probe.cpp
