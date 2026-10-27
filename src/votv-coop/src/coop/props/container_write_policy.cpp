@@ -2,6 +2,8 @@
 
 #include "coop/props/container_write_policy.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/element.h"
 #include "coop/element/intent_authority.h"
 #include "coop/net/connect_history.h"
@@ -10,22 +12,11 @@
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
 
-#include <map>
 #include <set>
 #include <utility>
 
 namespace coop::props::container_write_policy {
 namespace {
-
-// Host: the content most recently published for an eid by any route, fan-out or a targeted
-// connect seed. This is the compare-and-swap baseline ("what did I tell that peer the world looked
-// like"); the lane's own g_sentHash answers a different question ("may I skip the next fan-out"),
-// and a targeted send must not answer yes to that one.
-std::map<uint32_t, uint64_t> g_publishedHash;
-
-// This peer's own last verb edge per eid; the host uses it to detect a client write that raced a
-// host-side change.
-std::map<uint32_t, uint64_t> g_localChangeMs;
 
 uint64_t g_refused = 0;
 
@@ -62,24 +53,17 @@ std::set<std::pair<uint32_t, uint8_t>> g_reachedThrough;
 
 }  // namespace
 
+// The compare-and-swap of MTA's sync time context (reference/mtasa-blue/Server/mods/deathmatch/logic/CElement.cpp:1281-1305:
+// GenerateSyncTimeContext at every write, CanUpdateSync at the remote's). Two deliberate differences: the context here
+// is a content hash read at the arbitration, not a counter bumped by each writer, so no writer needs a hook to be
+// judged (A to B to A reads as current, harmless for contents); and base 0 is refused, where MTA's remote 0 means ignore.
 Decision Judge(const Inputs& in) {
-    // An up-to-date author edited from what the host last published; an author that never received
+    // Nothing to compare a base with: refused, not guessed at.
+    if (!in.liveReadable) return Decision::Unreadable;
+    // An up-to-date author edited from what the container holds now; an author that never received
     // anything sends 0 and is refused rather than trusted.
-    if (in.baseHash == 0 || in.baseHash != in.publishedHash) return Decision::StaleBase;
-    // The author edited the published world; still refused if the host changed this container
-    // inside the conflict window, a change in flight the author provably had not seen.
-    if (in.lastLocalChangeMs != 0 && in.nowMs - in.lastLocalChangeMs <= kConflictWindowMs)
-        return Decision::HostChangeInFlight;
+    if (in.baseHash == 0 || in.baseHash != in.liveHash) return Decision::StaleBase;
     return Decision::Accept;
-}
-
-Decision JudgeAgainstState(uint32_t eid, uint64_t baseHash, uint64_t nowMs) {
-    Inputs in;
-    in.baseHash = baseHash;
-    in.nowMs    = nowMs;
-    if (auto it = g_publishedHash.find(eid); it != g_publishedHash.end()) in.publishedHash = it->second;
-    if (auto it = g_localChangeMs.find(eid); it != g_localChangeMs.end()) in.lastLocalChangeMs = it->second;
-    return Judge(in);
 }
 
 Decision SpendArrival(uint32_t eid, uint8_t authorSlot, uint64_t nowMs, coop::net::Session& session,
@@ -118,7 +102,7 @@ Decision SpendArrival(uint32_t eid, uint8_t authorSlot, uint64_t nowMs, coop::ne
     return Decision::Accept;
 }
 
-Decision Accept(uint32_t eid, uint64_t baseHash, uint8_t authorSlot, uint64_t nowMs,
+Decision Accept(uint32_t eid, uint64_t baseHash, LiveHashReader readLive, uint8_t authorSlot, uint64_t nowMs,
                 coop::net::Session& session, Source src) {
     if (SpendArrival(eid, authorSlot, nowMs, session, src) == Decision::TooFast) return Decision::TooFast;
 
@@ -151,29 +135,36 @@ Decision Accept(uint32_t eid, uint64_t baseHash, uint8_t authorSlot, uint64_t no
         return Decision::Unreachable;
     }
 
-    const Decision d = JudgeAgainstState(eid, baseHash, nowMs);
+    // The container is read only now, past the rate and the reach: a slice refused earlier costs no read.
+    Inputs in;
+    in.baseHash     = baseHash;
+    in.liveReadable = readLive(eid, in.liveHash);
+    const uint64_t liveHash = in.liveHash;
+    Decision d = Judge(in);
+    // Dev red arm: a stale base that is not zero is accepted (an unreadable read is still refused), as when the host
+    // judged against what it last published and never saw a write nothing published.
+    static const bool judgeRed = coop::config::ResolveFlag(coop::config_registry::rows::container_judge_red);
+    if (judgeRed && d == Decision::StaleBase && baseHash != 0) {
+        UE_LOGW("container_contents: eid=%u slot %u -- container_judge_red: base %llu accepted against live "
+                "contents %llu", eid, static_cast<unsigned>(authorSlot),
+                static_cast<unsigned long long>(baseHash), static_cast<unsigned long long>(liveHash));
+        d = Decision::Accept;
+    }
     if (d == Decision::Accept) return d;
 
-    uint64_t published = 0;
-    if (auto it = g_publishedHash.find(eid); it != g_publishedHash.end()) published = it->second;
     ++g_refused;
-    // The failed condition is named: reported together, a never-published container once read as a
-    // racing host change.
-    UE_LOGW("container_contents: CONFLICT eid=%u slot %u -- %s (author base=%llu, host published=%llu). "
+    // The failed condition is named.
+    UE_LOGW("container_contents: CONFLICT eid=%u slot %u -- %s (author base=%llu, host live=%llu). "
             "Write REFUSED; re-publishing host truth to the author. Total refused this session: %llu",
             eid, static_cast<unsigned>(authorSlot),
-            d == Decision::HostChangeInFlight
-                ? "a HOST-side change is in flight within the conflict window"
-                : "the author edited a state the host has not published (STALE BASE)",
+            d == Decision::Unreadable
+                ? "the container's live contents do not read (UNREADABLE)"
+                : "the author edited contents the container no longer holds (STALE BASE)",
             static_cast<unsigned long long>(baseHash),
-            static_cast<unsigned long long>(published),
+            static_cast<unsigned long long>(liveHash),
             static_cast<unsigned long long>(g_refused));
     return d;
 }
-
-void NotePublished(uint32_t eid, uint64_t contentHash) { g_publishedHash[eid] = contentHash; }
-
-void NoteLocalChange(uint32_t eid, uint64_t nowMs) { g_localChangeMs[eid] = nowMs; }
 
 bool RunSelftest() {
     Reset();
@@ -183,40 +174,33 @@ bool RunSelftest() {
         if (ok) { ++pass; return; }
         UE_LOGE("container_write_policy selftest FAIL: %s", what);
     };
-    constexpr uint32_t kEid = 4242;
     constexpr uint64_t kH0 = 0x1111, kH1 = 0x2222, kH2 = 0x3333;
+    auto judge = [](uint64_t base, uint64_t live, bool readable) {
+        Inputs in;
+        in.baseHash     = base;
+        in.liveHash     = live;
+        in.liveReadable = readable;
+        return Judge(in);
+    };
 
-    // The negatives first: nothing published yet, so no base can match.
-    check(JudgeAgainstState(kEid, 0, 1000) == Decision::StaleBase, "a base of zero is refused");
-    check(JudgeAgainstState(kEid, kH0, 1000) == Decision::StaleBase,
-          "any base is refused for a container the host has not published");
+    // The refused base: nothing, or contents the container no longer holds.
+    check(judge(0, kH0, true) == Decision::StaleBase, "a base of zero is refused");
+    check(judge(kH1, kH0, true) == Decision::StaleBase, "a base the container does not hold is refused");
 
-    NotePublished(kEid, kH0);
-    check(JudgeAgainstState(kEid, 0, 1000) == Decision::StaleBase,
-          "a base of zero is refused even once published");
-    check(JudgeAgainstState(kEid, kH1, 1000) == Decision::StaleBase,
-          "a base that is not what was published is refused");
-    check(JudgeAgainstState(kEid, kH0, 1000) == Decision::Accept,
-          "the base the host published is accepted");
-
-    // A host-side change inside the window refuses; outside it, the same base passes again.
-    NoteLocalChange(kEid, 1000);
-    check(JudgeAgainstState(kEid, kH0, 1000 + kConflictWindowMs) == Decision::HostChangeInFlight,
-          "a host change inside the conflict window refuses");
-    check(JudgeAgainstState(kEid, kH0, 1001 + kConflictWindowMs) == Decision::Accept,
-          "the window ends and the same base is accepted");
+    // The accepted base: what the container holds now.
+    check(judge(kH0, kH0, true) == Decision::Accept, "the base the container holds is accepted");
 
     // The sequence a third peer walks into. The host accepted client A's slice and relayed it, so
-    // the world it published is now that content; B, which applied the relay, declares it and must
-    // be accepted, while A's own older base must not be.
-    NotePublished(kEid, kH1);
-    check(JudgeAgainstState(kEid, kH1, 100'000) == Decision::Accept,
-          "the peer holding what the relay carried is accepted");
-    check(JudgeAgainstState(kEid, kH0, 100'000) == Decision::StaleBase,
-          "the peer still holding the older fan-out is refused");
-    NotePublished(kEid, kH2);
-    check(JudgeAgainstState(kEid, kH1, 100'000) == Decision::StaleBase,
-          "and one publication later that peer is behind in turn");
+    // the container holds that content; B, which applied the relay, declares it and must be
+    // accepted, while A's own older base must not be.
+    check(judge(kH1, kH1, true) == Decision::Accept, "the peer holding what the relay wrote is accepted");
+    check(judge(kH0, kH1, true) == Decision::StaleBase, "the peer still holding the older fan-out is refused");
+    check(judge(kH1, kH2, true) == Decision::StaleBase,
+          "and one write later that peer is behind in turn, whoever wrote it");
+
+    // Contents that do not read name no base to judge against.
+    check(judge(kH0, kH0, false) == Decision::Unreadable, "unreadable contents refuse a matching base");
+    check(judge(kH0, 0, false) == Decision::Unreadable, "unreadable contents refuse any base");
 
     Reset();
     if (pass == total) {
@@ -228,8 +212,6 @@ bool RunSelftest() {
 }
 
 void Reset() {
-    g_publishedHash.clear();
-    g_localChangeMs.clear();
     g_writes.Clear();
     g_refused = 0;
     g_reachedThrough.clear();

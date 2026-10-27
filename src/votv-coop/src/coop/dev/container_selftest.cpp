@@ -45,8 +45,8 @@ constexpr uint64_t kClientFireMs = 25000;
 constexpr uint64_t kDigestEveryMs = 5000;
 
 // A run with SEVERAL clients needs every client to fire after the LAST of them has joined, or
-// each one is judged against a baseline its own join seed had just refreshed and the peers never
-// exercise each other. Raw env, no registry row, like the other per-run drill triggers.
+// a later joiner's seed already carries an earlier client's write and the peers never exercise
+// each other. Raw env, no registry row, like the other per-run drill triggers.
 uint64_t ClientFireMs() {
     static const uint64_t ms = [] {
         const std::string v = coop::config::ReadEnv("VOTVCOOP_CONTAINER_FIRE_MS");

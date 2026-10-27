@@ -1,6 +1,6 @@
 // coop/config/config_registry_rows_dev_container.inc -- the [dev] container rows that sat together in the dev row list,
 // moved in their order: the contents selftest, the join drill with its two red arms, the opener probe and the
-// view drill. Included by config_registry_rows_dev.inc where they stood, so each row keeps its place in every
+// view drill, the writer probe and the two red arms of the drone sack drill. Included by config_registry_rows_dev.inc where they stood, so each row keeps its place in every
 // expansion of the list. The entry forms are config_registry_rows.inc's.
 
 CFG_FLAG(container_selftest, "container_selftest", "dev", false, "VOTVCOOP_CONTAINER_SELFTEST",
@@ -13,6 +13,17 @@ CFG_FLAG(container_join_drill, "container_join_drill", "dev", false, "VOTVCOOP_C
 CFG_FLAG(container_retry_red, "container_retry_red", "dev", false, "VOTVCOOP_CONTAINER_RETRY_RED",
     "Red arm for the container join drill: a container send refused with no world-ready peer is re-armed "
     "every sweep, as before the fix, and counted.")
+CFG_FLAG(drone_sale_watch_off, "drone_sale_watch_off", "dev", false, "VOTVCOOP_DRONE_SALE_WATCH_OFF",
+    "Red arm for the drone sack drill (HOST): the watch that publishes the drone's emptied container after a sale "
+    "is not registered, so the clients' copies keep the sold items until something else writes the container.")
+CFG_FLAG(container_judge_red, "container_judge_red", "dev", false, "VOTVCOOP_CONTAINER_JUDGE_RED",
+    "Red arm for the drone sack drill (HOST): a client container slice whose base is stale but not zero is "
+    "accepted (a zero base, and a live read that fails, are still refused), as when the host judged against what "
+    "it last published. With drone_sale_watch_off, the sold items come back into the drone's container.")
+CFG_FLAG(container_writer_probe, "container_writer_probe", "dev", false, "VOTVCOOP_CONTAINER_WRITER_PROBE",
+    "Probe (HOST): every 2 s reads each world container's content hash and says once per container when it "
+    "changed with no write the container lane saw (a local write, an applied remote slice or a connect seed's "
+    "send), naming a writer nothing watches. Read-only. Lines tagged container_writer_probe.")
 CFG_FLAG(container_parity_red, "container_parity_red", "dev", false, "VOTVCOOP_CONTAINER_PARITY_RED",
     "Red arm for the container parity report (the CLIENT): flips one bit of the first row's content hash "
     "before sending, so the host's judge must report a mismatch.")

@@ -3,7 +3,9 @@
 // addObject and takeObj by name; a hit on a world container's inventory resolves the owner's
 // element id and hands it to container_contents_sync::MarkHostWrite, which the lane's sweep
 // drains. The verbs are local virtual calls (EX_LocalVirtualFunction), so only the script gate
-// sees them; docs/coop-dispatch-visibility.md has the row.
+// sees them; docs/coop-dispatch-visibility.md has the row. One writer calls neither verb: the
+// drone's sale (droneSellLocation_C::sell) clears its container's save-slot row directly, so the
+// host watches that body too and marks the container it emptied.
 
 #pragma once
 

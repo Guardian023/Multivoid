@@ -1,6 +1,6 @@
 // coop/props/container_contents_sync.cpp -- world-container contents over the wire: a write to a
-// container (the verb edge, coop/props/container_writer_watch) marks it dirty, a 250 ms sweep ships its GObjStack slice as
-// a blob, the receiver writes the slice back and re-derives the volume and names through the
+// container (the writer watches, coop/props/container_writer_watch) marks it dirty, a 250 ms
+// sweep ships its GObjStack slice as a blob, the receiver writes the slice back and re-derives the volume and names through the
 // engine's own verbs; a client's edit is a compare-and-swap the host arbitrates and relays. See
 // coop/props/container_contents_sync.h.
 
@@ -14,6 +14,7 @@
 
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
+#include "coop/dev/dronesack_drill.h"  // IsEnabled -- the drill's judgement record is kept only while it runs
 #include "coop/element/bind_wait.h"
 #include "coop/element/registry.h"
 #include "coop/items/save_record_wire.h"
@@ -65,7 +66,7 @@ uint32_t g_nextSeq = 1;
 
 coop::blob_chunks::Assembler g_asm;
 
-// Containers marked dirty by the verb edge, drained on the next sweep, keyed by element id rather
+// Containers marked dirty by a writer watch, drained on the next sweep, keyed by element id rather
 // than the component pointer: IsLive cannot detect an address recycled by a new object between the
 // edge and the drain, and an eid re-resolves forward, so a destroyed container stops resolving.
 std::set<uint32_t> g_dirty;
@@ -96,6 +97,12 @@ uint64_t g_noReadyRetries = 0;
 std::set<uint32_t> g_noReadyEids;   // the containers whose fan-out met such a refusal
 // Dev instrument: the host's last judgement of a client-authored slice, per container. Reset at session end.
 std::map<uint32_t, ClientSliceOutcome> g_clientSlice;
+// Dev instrument: per container, how often this lane touched it (a local write, an applied remote slice, a
+// connect seed's send). The writer probe reads it to tell a change the lane saw from one it did not; kept only
+// while that probe is armed. Reset at session end.
+std::map<uint32_t, uint32_t> g_touchEpoch;
+// Containers whose accepted slice re-read to another hash, said once each. Reset at session end.
+std::set<uint32_t> g_rereadSaid;
 
 bool NoReadyRetryRed() {
     static const bool s = coop::config::ResolveFlag(coop::config_registry::rows::container_retry_red);
@@ -203,11 +210,6 @@ bool BroadcastContainer(coop::net::Session* s, uint32_t eid, void* inv, int toSl
         // Optimistic and self-correcting: a refusal is answered by the host re-publishing its
         // truth to this peer, which lands in this same map.
         if (!IsHost()) g_baseHash[eid] = h;
-        // Any publication, fan-out or a targeted seed, establishes what the receiver was told, the
-        // baseline a later client write is judged against. With the two maps fused the host refused
-        // every client write after a join: the seed is targeted, g_sentHash stayed empty, and the
-        // CAS compared against 0 for every container in the world.
-        if (IsHost()) wp::NotePublished(eid, h);
         // The author of a mutation re-derives its own volume, mass and names here: the host
         // excludes the author from the relay, and the native take path does not call
         // updateVolumesAndMass, so the mutator's own displayed volume went stale while every other
@@ -302,6 +304,18 @@ enum class Ingest {
     Applied,   // this peer's state actually changed. The only outcome the host may pass on.
 };
 
+// The lane's reader the policy calls at the base compare (wp::LiveHashReader).
+bool ReadLiveHash(uint32_t eid, uint64_t& outHash) {
+    uint32_t records = 0;
+    return ContentHashOf(eid, outHash, records);
+}
+
+// Dev: the touch epoch is kept only while the writer probe is armed.
+void Touch(uint32_t eid) {
+    static const bool on = coop::config::ResolveFlag(coop::config_registry::rows::container_writer_probe);
+    if (on) ++g_touchEpoch[eid];
+}
+
 // Applied, Handled, NoActor or Park; see Ingest.
 Ingest ApplyContents(uint32_t eid, const std::vector<SR::SaveRecord>& recs, uint64_t blobHash) {
     void* actor = LivePropActor(eid);
@@ -356,7 +370,8 @@ Ingest ApplyContents(uint32_t eid, const std::vector<SR::SaveRecord>& recs, uint
     SR::WriteArrHeader(slot, 0, buf, n);
 
     g_appliedHash[eid] = blobHash;
-    // The base a later local edit declares; never cleared by our own verb edge.
+    Touch(eid);
+    // The base a later local edit declares; never cleared by our own write edge.
     if (!IsHost()) g_baseHash[eid] = blobHash;
     ci::RederiveShownState(ci::OwnerOf(inv), inv);
     UE_LOGI("container_contents: eid=%u applied %d records", eid, n);
@@ -390,14 +405,18 @@ Ingest ParseAndApply(const std::vector<uint8_t>& blob, uint32_t& outEid, uint8_t
     if (IsHost() && senderSlot != 0 && !birth) {
         auto* s = g_session.load(std::memory_order_acquire);
         // No session, no arbitration, and a client slice is never applied unjudged: the refusal
-        // that cannot be explained is still a refusal.
-        const wp::Decision d = s ? wp::Accept(outEid, baseHash, senderSlot, NowMs(), *s, src)
+        // that cannot be explained is still a refusal. The base the author edited from is judged
+        // against what the container holds right now, whoever wrote it: a write nothing published yet
+        // (the drone's sale, a host-side take) leaves the author's base behind the live contents. The
+        // policy reads them through ReadLiveHash once the rate and the reach have passed.
+        const wp::Decision d = s ? wp::Accept(outEid, baseHash, &ReadLiveHash, senderSlot, NowMs(), *s, src)
                                  : wp::Decision::StaleBase;
         // No body to measure the author against yet: HOLD, do not refuse. The pen replays it and
         // the reach is judged the moment that peer has posed; the hold is bounded per author and
         // by the TTL, so a peer that never poses costs the host eight slices for thirty seconds.
         if (d == wp::Decision::NoBodyYet) return Ingest::Park;
-        g_clientSlice[outEid] = d == wp::Decision::Accept ? ClientSliceOutcome::Accepted : ClientSliceOutcome::Refused;
+        if (coop::dev::dronesack_drill::IsEnabled())
+            g_clientSlice[outEid] = d == wp::Decision::Accept ? ClientSliceOutcome::Accepted : ClientSliceOutcome::Refused;
         if (d != wp::Decision::Accept) {
             // Every refusal answers with the host's truth so the author converges -- except the
             // rate one, because a bound on how fast an author may spend the host must not make
@@ -459,12 +478,9 @@ Ingest ParseAndApply(const std::vector<uint8_t>& blob, uint32_t& outEid, uint8_t
     }
     const uint64_t contentHash = cw::ContentHash(outEid, recs);
     const Ingest outcome = ApplyContents(outEid, recs, contentHash);
-    // Host, client-authored and accepted. Two records, and the second one was missing: g_sentHash
-    // keeps the host's own drain from re-broadcasting the identical slice back the long way round,
-    // while NotePublished moves the compare-and-swap baseline onto what the relay is about to hand
-    // every other peer. Without it the baseline stayed at the last HOST fan-out while the receivers
-    // moved on, and the second peer to edit a container was refused for being as up to date as the
-    // first.
+    // Host, client-authored and accepted. g_sentHash keeps the host's own drain from re-broadcasting
+    // the identical slice back the long way round. The compare-and-swap needs no record of its own:
+    // the next author is judged against the contents this apply just wrote.
     if (outcome == Ingest::Applied && IsHost() && senderSlot != 0) {
         if (birth) cb::Complete(bornActor);
         if (merged) {
@@ -477,14 +493,18 @@ Ingest ParseAndApply(const std::vector<uint8_t>& blob, uint32_t& outEid, uint8_t
             return outcome;
         }
         g_sentHash[outEid] = contentHash;
-        wp::NotePublished(outEid, contentHash);
-        UE_LOGI("container_contents: eid=%u slot %u ACCEPTED -- the published baseline is now "
-                "%llu, which is what the relay carries", outEid, static_cast<unsigned>(senderSlot),
+        // The next author is judged against a fresh read of what was just written, so the write and the
+        // read must hash alike; if they do not, that author is refused as stale.
+        uint64_t reread = 0;
+        if (ReadLiveHash(outEid, reread) && reread != contentHash && g_rereadSaid.insert(outEid).second)
+            UE_LOGW("container_contents: eid=%u the applied slice re-reads to a different hash -- the next client "
+                    "will be judged stale", outEid);
+        UE_LOGI("container_contents: eid=%u slot %u ACCEPTED -- the container now holds content %llu, "
+                "which is what the relay carries", outEid, static_cast<unsigned>(senderSlot),
                 static_cast<unsigned long long>(contentHash));
         // The relay belongs HERE and not at the arrival site: a slice that waited in the pen and
         // applied on a replay is the host's new truth just as much as one that applied on arrival,
-        // and relaying only the second kind left every other peer without it, silently, while the
-        // baseline above told the host they had it.
+        // and relaying only the second kind left every other peer without it, silently.
         if (auto* s = g_session.load(std::memory_order_acquire))
             RelayToOthers(s, senderSlot, blob);
     }
@@ -546,14 +566,11 @@ void NoteJoinSnapshotBracket(bool open) { pk::NoteJoinBracket(open, NowMs()); }
 // dirty for the sweep, keyed by eid so nothing is dereferenced later. The applied hash is dropped: it
 // means "an identical blob is a no-op" only while our state still equals what we applied, and after
 // our own mutation a corrective re-publish of the unchanged host truth would look like a duplicate;
-// a client whose write was refused once kept its diverged contents forever that way. The local
-// change is stamped on the host, so it can tell a stale client write from a clean one; host-only,
-// since nothing on a client ever reads it and an ungated stamp grows a row per container that peer
-// has ever touched.
+// a client whose write was refused once kept its diverged contents forever that way.
 void MarkHostWrite(uint32_t eid) {
     g_dirty.insert(eid);
-    if (IsHost()) wp::NoteLocalChange(eid, NowMs());
     g_appliedHash.erase(eid);
+    Touch(eid);
 }
 
 void Install(coop::net::Session* session) {
@@ -573,7 +590,7 @@ void Tick() {
 
     if (!g_announced) {
         g_announced = true;
-        UE_LOGI("container_contents: installed (GObjStack slice lane, the addObject/takeObj watch)");
+        UE_LOGI("container_contents: installed (GObjStack slice lane, the container_writer_watch watches)");
     }
 
     const uint64_t now = NowMs();
@@ -636,7 +653,10 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
     WalkWorldContainers([&](uint32_t eid, void* actor, void* inv) {
         // A transfer in progress reaches the joiner with the fan-out that completes it.
         if (cb::Awaited(actor, 0)) return;
-        if (BroadcastContainer(s, eid, inv, peerSlot, /*force=*/true)) ++sent;
+        if (BroadcastContainer(s, eid, inv, peerSlot, /*force=*/true)) {
+            ++sent;
+            Touch(eid);
+        }
     });
     UE_LOGI("container_contents: connect seed -> slot %d: %zu world containers", peerSlot, sent);
 }
@@ -695,6 +715,10 @@ uint64_t NoReadyRefusals() { return g_noReadyRefusals; }
 uint64_t NoReadyRetries() { return g_noReadyRetries; }
 bool NoReadyRefusedEid(uint32_t eid) { return g_noReadyEids.count(eid) != 0; }
 bool SentBaselineKnown(uint32_t eid) { return g_sentHash.count(eid) != 0; }
+uint32_t TouchEpochOf(uint32_t eid) {
+    const auto it = g_touchEpoch.find(eid);
+    return it == g_touchEpoch.end() ? 0 : it->second;
+}
 ClientSliceOutcome LastClientSliceOutcome(uint32_t eid) {
     const auto it = g_clientSlice.find(eid);
     return it == g_clientSlice.end() ? ClientSliceOutcome::None : it->second;
@@ -708,6 +732,8 @@ void OnDisconnect() {
     g_noReadyRetries = 0;
     g_noReadyEids.clear();
     g_clientSlice.clear();
+    g_touchEpoch.clear();
+    g_rereadSaid.clear();
     wp::Reset();
     pk::Reset();
     g_sentHash.clear();

@@ -206,7 +206,7 @@ the presser's own machine, and no local body can wait for an answer from across 
 the peer whose verb fired authors the contents and the host arbitrates them (`coop/props/container_contents_sync`): one slice of its
 array per live container is sent at a joiner's ready edge and on change, a client's slice is
 accepted only if its author could have reached that container, has not sent more in the last
-second than an honest client produces, and edited the truth the host last published, and an
+second than an honest client produces, and edited the contents the container holds now, and an
 extraction on a client is a container-extract birth through the intent door above. The open and closed state is a keyed-device channel like a
 door's ([devices.md](devices.md)). The full break-and-spill behaviour, and the single-slot verbs, are reverse-engineered
 and designed and not built.

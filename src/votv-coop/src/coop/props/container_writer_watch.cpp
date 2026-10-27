@@ -3,12 +3,15 @@
 
 #include "coop/props/container_writer_watch.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "coop/element/registry.h"
 #include "coop/net/session.h"
 #include "coop/props/container_contents_sync.h"
 #include "ue_wrap/actors/container_inventory.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/script_gate.h"
+#include "ue_wrap/devices/drone.h"
 #include "ue_wrap/facts/function_row.h"
 
 #include <atomic>
@@ -25,9 +28,11 @@ namespace ci = ue_wrap::container_inventory;
 // drop intent).
 constexpr int kVerbDirty   = 1;   // addObject
 constexpr int kVerbTakeObj = 2;   // takeObj
+constexpr int kTagSale     = 3;   // droneSellLocation_C::sell
 
 UE_FACT_FN(kRowAddObject, "container_writer_watch", nullptr, L"addObject", AnyClass);
 UE_FACT_FN(kRowTakeObj,   "container_writer_watch", nullptr, L"takeObj",   AnyClass);
+UE_FACT_FN(kRowSell, "container_writer_watch", L"droneSellLocation_C", L"sell", Declared);
 
 std::atomic<coop::net::Session*> g_session{nullptr};
 
@@ -79,11 +84,93 @@ sg::Verdict OnVerbEntry(const sg::Call& br) {
     return sg::Verdict::Run;
 }
 
+// The drone's sale. droneSellLocation_C::sell reads the drone's container, then empties it with
+// Clear() on the save slot's GObjStack row and nameData and a direct updateVolumesAndMass: no
+// addObject or takeObj runs, so the verb watch above never sees the write. The host marks the
+// container dirty at the end of the body when it held records at the start, and the lane's sweep
+// publishes the emptied slice.
+// Declared on the drone's class: prop_coingun_C has a sell of its own and is not matched.
+// The element id of the container of the drone a droneSellLocation_C names, or kInvalidId.
+uint32_t SaleContainerEid(const sg::Call& br) {
+    void* const container = ue_wrap::drone::ContainerOf(ue_wrap::drone::OfSellLocation(br.object));
+    return container ? static_cast<uint32_t>(coop::element::Registry::Get().EidForActor(container))
+                     : static_cast<uint32_t>(coop::element::kInvalidId);
+}
+
+// The records the container held when the body began, so the post marks it only when the sale changed
+// it: the body can return early without clearing anything. -1 when it did not read.
+struct SaleBefore {
+    uint32_t eid = static_cast<uint32_t>(coop::element::kInvalidId);
+    int32_t records = -1;
+};
+SaleBefore g_saleBefore;
+
+sg::Verdict OnSalePre(const sg::Call& br) {
+    g_saleBefore = SaleBefore{};
+    if (!IsHost()) return sg::Verdict::Run;
+    const uint32_t eid = SaleContainerEid(br);
+    if (eid == static_cast<uint32_t>(coop::element::kInvalidId)) return sg::Verdict::Run;
+    float vol = 0.f;
+    int32_t records = -1;
+    coop::props::container_contents_sync::ContentsDigest(eid, records, vol);
+    g_saleBefore = SaleBefore{eid, records};
+    return sg::Verdict::Run;
+}
+
+void OnSalePost(const sg::Call& br) {
+    if (!IsHost()) return;
+    const uint32_t eid = SaleContainerEid(br);
+    if (eid == static_cast<uint32_t>(coop::element::kInvalidId)) {
+        UE_LOGW("container_contents: the drone's sale ran but its container has no element id -- "
+                "the emptied container is not published");
+        return;
+    }
+    const SaleBefore before = g_saleBefore;
+    g_saleBefore = SaleBefore{};
+    if (before.eid == eid && before.records == 0) return;   // already empty: the sale changed nothing
+    coop::props::container_contents_sync::MarkHostWrite(eid);
+    UE_LOGI("container_contents: the drone's sale cleared container eid=%u (%d records) -- marked for the sweep",
+            eid, before.eid == eid ? before.records : -1);
+}
+
+bool g_saleSettled = false;
+bool g_saleRegistered = false;
+
+// Host only: registers the sale watch, then says once whether the gate took it. The names resolve
+// on the caller's tick (script_gate::ResolvePendingNames).
+void TickSaleWatch() {
+    if (g_saleSettled || !IsHost()) return;
+    static const bool off = coop::config::ResolveFlag(coop::config_registry::rows::drone_sale_watch_off);
+    if (off) {
+        g_saleSettled = true;
+        UE_LOGI("container_contents: the drone sale watch is OFF (drone_sale_watch_off)");
+        return;
+    }
+    if (!g_saleRegistered) {
+        g_saleRegistered = sg::WatchName(kRowSell, kTagSale, &OnSalePre, &OnSalePost);
+        if (!g_saleRegistered) {
+            g_saleSettled = true;
+            UE_LOGE("container_contents: the drone sale watch was REFUSED by the gate -- a sold "
+                    "drone container reaches the clients only through a later write");
+        }
+        return;
+    }
+    if (sg::NameWatchLive(kRowSell, kTagSale)) {
+        g_saleSettled = true;
+        UE_LOGI("container_contents: the drone sale watch is LIVE (droneSellLocation_C.sell)");
+    } else if (sg::NameWatchSettled(kRowSell, kTagSale)) {
+        g_saleSettled = true;
+        UE_LOGE("container_contents: the drone sale watch is DEAD -- a sold drone container reaches "
+                "the clients only through a later write");
+    }
+}
+
 }  // namespace
 
 void Install(coop::net::Session* session) { g_session.store(session, std::memory_order_release); }
 
 void Tick() {
+    TickSaleWatch();
     if (g_verbsRegistered) return;
     g_verbsRegistered =
         sg::WatchName(kRowAddObject, kVerbDirty, &OnVerbEntry, nullptr) &&

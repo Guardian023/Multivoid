@@ -26,13 +26,12 @@ namespace coop::props::container_contents_sync {
 
 void Install(coop::net::Session* session);
 
-// Registers the mutating verbs on first call, then drives the FName resolve and the dirty-set
-// drain. Near-free when the dirty set is empty, the steady state.
+// Drives the writer watches' registration (container_writer_watch: the verbs, and the host's drone
+// sale), the FName resolve and the dirty-set drain. Near-free when the dirty set is empty, the steady state.
 void Tick();
 
 // The seam from the edge: this peer wrote the container `eid` (container_writer_watch). Marks it
-// dirty for the next sweep, drops the applied-hash no-op guard, and on the host stamps the local
-// change. Game thread.
+// dirty for the next sweep and drops the applied-hash no-op guard. Game thread.
 void MarkHostWrite(uint32_t eid);
 
 // ContainerContents chunks: a BlobChunkPayload whose blob is
@@ -95,6 +94,10 @@ bool NoReadyRefusedEid(uint32_t eid);
 
 // Does the host hold a "what every peer has" hash for this container (a fan-out succeeded for it)?
 bool SentBaselineKnown(uint32_t eid);
+
+// Dev: how often this lane touched the container: a local write (MarkHostWrite), an applied remote slice, a connect
+// seed's send. 0 when it never has. Game thread; reset at session end.
+uint32_t TouchEpochOf(uint32_t eid);
 
 // Dev: what the host's arbitration last decided about a client-authored slice for this container (None: no slice was
 // judged since the session began). A slice held for a body not yet posed is not a judgement. Host; reset at session end.
