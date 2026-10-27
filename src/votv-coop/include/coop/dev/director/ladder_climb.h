@@ -38,16 +38,21 @@ struct Outcome {
 
 // One climb: mount, hold forward, release. Tick it once per game-thread tick with the same player and ladder; it
 // returns true from the tick that finished it, and Result() is then final. A refused mount is final (no retry), and a
-// climb is bounded at 60 s.
+// climb is bounded at 60 s: a climb that runs out lets go with the game's own jump key, which the ladder answers
+// with its drop, so the player is not left hanging.
 class Climb {
 public:
     bool Tick(void* player, void* ladder);
     const Outcome& Result() const { return out_; }
 
+    // The caller is going away while the climb runs (the arm ended, the session ended): the forward key goes up as
+    // a person's does and the climb is over. A no-op in any other phase.
+    void Release(void* player, void* ladder);
+
 private:
     enum class Phase : uint8_t { Mount, Climb, Done };
 
-    void Finish(void* player, void* ladder, const char* why);
+    void Finish(void* player, void* ladder, const char* why, bool drop = false);
 
     Phase phase_ = Phase::Mount;
     Outcome out_;

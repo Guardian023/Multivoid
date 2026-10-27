@@ -78,15 +78,15 @@ float SegmentDist(const FVector& p, const FVector& a, const FVector& b) {
     return Dist(p, FVector{a.X + ab.X * t, a.Y + ab.Y * t, a.Z + ab.Z * t});
 }
 
-// The key the game's settings bind to "forward": lib_C::getKeybindFromName, the call the ladder compares its keys
-// against (ladder.cpp:2442). Its FKey is read as its name.
-bool ForwardKey(void* player, R::FName& out) {
+// The key the game's settings bind to `bindName` ("forward", "jump"): lib_C::getKeybindFromName, the call the ladder
+// compares its keys against (ladder.cpp:483, :490). Its FKey is read as its name.
+bool KeyBind(void* player, const wchar_t* bindName, R::FName& out) {
     void* libCls = R::FindClass(L"lib_C");
     void* lib = R::FindClassDefaultObject(L"lib_C");
     void* fn = libCls ? R::FindFunction(libCls, L"getKeybindFromName") : nullptr;
     if (!fn || !lib) return false;
     ue_wrap::ParamFrame f(fn);
-    const R::FName name = ue_wrap::fname_utils::StringToFName(L"forward");
+    const R::FName name = ue_wrap::fname_utils::StringToFName(bindName);
     if (!f.valid() || name.ComparisonIndex == 0 || !f.Set(L"name", name) || !f.Set<void*>(L"__WorldContext", player) ||
         !ue_wrap::Call(lib, f))
         return false;
@@ -120,7 +120,7 @@ void* Find(void* owner) {
 bool Foot(void* ladder, FVector& out) { return PointAt(ladder, g_pointA, out); }
 bool Top(void* ladder, FVector& out) { return PointAt(ladder, g_pointTop, out); }
 
-void Climb::Finish(void* player, void* ladder, const char* why) {
+void Climb::Finish(void* player, void* ladder, const char* why, bool drop) {
     out_.why = why;
     phase_ = Phase::Done;
     if (!out_.mounted) return;
@@ -129,9 +129,20 @@ void Climb::Finish(void* player, void* ladder, const char* why) {
         if (!E::TryGetActorLocation(player, out_.end) && !out_.why) out_.why = "the player's place does not read";
         // The key goes up as a person's does; on a ladder still held, that takes "forward" off the ladder's list.
         if (!PressKeyEvent(player, g_release, forward_)) UE_LOGW("director/ladder: the release of forward did not run");
+        // A climb that ran out is let go as a person lets go: the jump key, which the ladder answers with drop()
+        // (ladder.cpp:483-:422), so the player is not left hanging where the climb stopped.
+        if (drop) {
+            R::FName jump{};
+            if (!KeyBind(player, L"jump", jump) || !PressKeyEvent(player, g_press, jump))
+                UE_LOGW("director/ladder: the jump that lets go of the ladder did not run");
+        }
     }
     FVector top{};
-    out_.atTop = Top(ladder, top) && Dist(out_.end, top) <= kAtTopCm;
+    out_.atTop = ladder && R::IsLive(ladder) && Top(ladder, top) && Dist(out_.end, top) <= kAtTopCm;
+}
+
+void Climb::Release(void* player, void* ladder) {
+    if (phase_ == Phase::Climb) Finish(player, ladder, "the climb was let go before its end");
 }
 
 bool Climb::Tick(void* player, void* ladder) {
@@ -147,7 +158,7 @@ bool Climb::Tick(void* player, void* ladder) {
             return true;
         }
         out_.end = me;   // where a climb that never started stands
-        if (!ForwardKey(player, forward_)) {
+        if (!KeyBind(player, L"forward", forward_)) {
             Finish(player, ladder, "the game's forward key does not read");
             return true;
         }
@@ -181,7 +192,7 @@ bool Climb::Tick(void* player, void* ladder) {
         return true;
     }
     if (now - startMs_ > kClimbBoundMs) {
-        Finish(player, ladder, "the climb ran past its 60 s bound");
+        Finish(player, ladder, "the climb ran past its 60 s bound", /*drop*/true);
         return true;
     }
     if (now >= nextLogMs_) {
