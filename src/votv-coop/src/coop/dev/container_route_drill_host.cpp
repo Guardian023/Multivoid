@@ -42,6 +42,8 @@ constexpr uint64_t kFillBoundMs    = 5000;   // the spawn to the backpack's inve
 constexpr uint64_t kPublishBoundMs = 10000;  // the fill to the first fan-out
 constexpr uint64_t kViewBoundMs    = 5000;   // the open verb to the screen showing the backpack
 constexpr uint64_t kJudgeBoundMs   = 15000;  // the client's R1 slice sent to the host judging it
+constexpr const wchar_t* kSecondClass = L"prop_floppyDisc_R_C";   // the second class of read 7 (kerfur_serve_drill spawns it too)
+constexpr const wchar_t* kSecondPath  = L"/Game/objects/prop_floppyDisc_R.prop_floppyDisc_R_C";
 constexpr uint64_t kPlaceBoundMs   = 5000;   // the R5 drive's spawn to its element id
 constexpr uint64_t kThrownBoundMs  = 30000;  // r4-start to the host holding a drive made by the throw
 
@@ -57,6 +59,7 @@ void*    g_slot0 = nullptr;   // the screen's first slot widget before the raw w
 int      g_drives0 = 0;
 bool     g_opened = false;   // the open verb was sent for the host's screen
 int      g_r1Sent = 0;       // the slices the client had sent when it finished R1
+std::string g_slotText0;   // the screen's first slot before the raw write
 uint64_t g_placeMs = 0;      // R5: the drive at the intake spawned
 bool     g_r5Placed = false, g_r5Said = false;
 bool     g_r4Started = false, g_r4Over = false, g_r4Gone = false;
@@ -315,9 +318,22 @@ void StepViewOpen() {
         g_slotsBefore = SlotCount(Screen());
         g_gen0 = cen::GenCalls();
         g_slot0 = SlotAt(Screen(), 0);
-        if (!cs::DevRawAppend(g_eid, /*publish=*/true)) { Fail("the raw write to the backpack did not apply"); return; }
-        UE_LOGI("[CI-CENSUS] drill host: one raw write applied to eid=%u (%d record(s) now), published", g_eid,
-                RecordCount(g_eid));
+        g_slotText0 = FirstSlotText();
+        // The write adds a record of a second class (a small prop the backpack takes), so the screen's slots can move.
+        void* cls = R::FindClass(kSecondClass);
+        if (!cls) cls = ue_wrap::asset_load::LoadObjectByPath(kSecondPath);
+        ue_wrap::FVector put{};
+        void* item = cls && E::TryGetActorLocation(pack, put) ? E::SpawnActor(cls, {put.X, put.Y, put.Z + 90.f}) : nullptr;
+        if (!item) { Fail("the second item did not spawn"); return; }
+        bool written = false;
+        {
+            cen::Quiet quiet;
+            written = cs::DevRawAppendActor(g_eid, item, /*publish=*/true);
+        }
+        E::DestroyActor(item);
+        if (!written) { Fail("the raw write to the backpack did not apply"); return; }
+        UE_LOGI("[CI-CENSUS] drill host: one raw write of a second class applied to eid=%u (%d record(s) now), published",
+                g_eid, RecordCount(g_eid));
         Next(Step::ViewRegen);
         return;
     }
@@ -327,7 +343,8 @@ void StepViewOpen() {
 void StepViewRegen() {
     const bool regen = ScreenRebuilt(g_gen0, g_slot0);
     if (!regen && !Expired(kRegenWindowMs)) return;
-    UE_LOGI("[CI-CENSUS] host view regen=%d slots %d -> %d", regen ? 1 : 0, g_slotsBefore, SlotCount(Screen()));
+    UE_LOGI("[CI-CENSUS] host view regen=%d slots %d -> %d%s", regen ? 1 : 0, g_slotsBefore, SlotCount(Screen()),
+            SlotChange(g_slotText0, FirstSlotText()).c_str());
     CV::Close();
     LogHashes("host", g_eid, "after the raw write");
     LogSizes("host", "after the raw write", g_pack.Get());
@@ -399,6 +416,7 @@ void HostReset() {
     g_slotsBefore = 0;
     g_gen0 = 0;
     g_slot0 = nullptr;
+    g_slotText0.clear();
     g_r1Sent = 0;
     g_r4Prop.Reset();
     g_drives0 = 0;

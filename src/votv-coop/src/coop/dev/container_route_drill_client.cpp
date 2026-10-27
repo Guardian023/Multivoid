@@ -90,6 +90,7 @@ int32_t  g_count0 = 0, g_countTaken = 0;
 int      g_slots0 = 0;
 void*    g_slot0 = nullptr;      // the screen's first slot widget at the view-regen baseline
 uint64_t g_gen0 = 0;
+std::string g_slotText0;         // the screen's first slot at the view-regen baseline
 uint64_t g_changedMs = 0;
 int      g_rb = 0, g_ic = 0;
 bool     g_refilled = false;     // the host said it handed the backpack its fresh records
@@ -615,6 +616,7 @@ void StepViewOpenWait() {
     g_slots0 = SlotCount(Screen());
     g_gen0 = cen::GenCalls();
     g_slot0 = SlotAt(Screen(), 0);
+    g_slotText0 = FirstSlotText();
     g_count0 = RecordCount(g_eid);
     g_changedMs = 0;
     LogSizes("client", "after the routes", g_pack.Get());
@@ -630,13 +632,15 @@ void StepViewWait() {
     if (RecordCount(g_eid) != g_count0 + 1) {
         g_gen0 = cen::GenCalls();
         g_slot0 = SlotAt(Screen(), 0);
+        g_slotText0 = FirstSlotText();
         if (Expired(kHostBoundMs)) Skip("the open screen", "the host's publication never arrived", Step::BeforeReady);
         return;
     }
     if (!g_changedMs) g_changedMs = ::GetTickCount64();
     const bool regen = ScreenRebuilt(g_gen0, g_slot0);
     if (!regen && ::GetTickCount64() - g_changedMs < kRegenWindowMs) return;
-    UE_LOGI("[CI-CENSUS] client view regen=%d slots %d -> %d", regen ? 1 : 0, g_slots0, SlotCount(Screen()));
+    UE_LOGI("[CI-CENSUS] client view regen=%d slots %d -> %d%s", regen ? 1 : 0, g_slots0, SlotCount(Screen()),
+            SlotChange(g_slotText0, FirstSlotText()).c_str());
     LogHashes("client", g_eid, "after the host's raw write");
     LogSizes("client", "after the host's raw write", g_pack.Get());
     Finish("view", Step::BeforeReady);
@@ -768,6 +772,7 @@ void ClientReset() {
     g_noSpace0 = g_refilled = false;
     g_count0 = g_countTaken = 0;
     g_slot0 = nullptr;
+    g_slotText0.clear();
     g_intakeCm = g_radiusCm = 0.f;
     g_settled = 0;
     g_placedEid = g_thrownEid = g_mirrorEid = 0;

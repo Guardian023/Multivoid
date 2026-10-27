@@ -125,6 +125,26 @@ void* SlotAt(void* screen, int i) {
     return slot && R::IsLive(slot) ? slot : nullptr;
 }
 
+std::string FirstSlotText() {
+    void* slot = SlotAt(Screen(), 0);
+    const int32_t nameOff = slot ? R::FindPropertyOffset(R::ClassOf(slot), L"prop") : -1;
+    const int32_t amountOff = slot ? R::FindPropertyOffset(R::ClassOf(slot), L"amount") : -1;
+    if (nameOff < 0 || amountOff < 0) return {};
+    R::FName name{};
+    int32_t amount = 0;
+    std::memcpy(&name, static_cast<const uint8_t*>(slot) + nameOff, sizeof(name));
+    std::memcpy(&amount, static_cast<const uint8_t*>(slot) + amountOff, sizeof(amount));
+    const std::wstring w = R::ToString(name);
+    char text[96];
+    std::snprintf(text, sizeof(text), "prop=%s amount=%d", std::string(w.begin(), w.end()).c_str(), amount);
+    return text;
+}
+
+std::string SlotChange(const std::string& before, const std::string& after) {
+    if (after.empty()) return {};
+    return " first slot " + (before.empty() ? std::string("?") : before) + " -> " + after;
+}
+
 bool CallNoArg(void* obj, const wchar_t* fn) {
     void* f = obj ? R::FindDispatchFunctionCached(R::ClassOf(obj), fn) : nullptr;
     ue_wrap::ParamFrame frame(f);

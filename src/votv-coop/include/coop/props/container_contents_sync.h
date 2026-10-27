@@ -86,6 +86,10 @@ bool DevRecordHashes(uint32_t eid, std::vector<uint64_t>& out, uint64_t& whole);
 // the host's contents move ahead of every client's base. False when the contents do not read or are empty. Game thread.
 bool DevRawAppend(uint32_t eid, bool publish);
 
+// Dev (the route census drill): as DevRawAppend, with the record of a live item (its own getData, as addObject files
+// it) appended instead of a copy of the first. False as DevRawAppend, or when the item's record does not read.
+bool DevRawAppendActor(uint32_t eid, void* item, bool publish);
+
 // Call fn once per live world container, boundary 1 applied: the set the connect seed walks. Game thread.
 void ForEachWorldContainer(void (*fn)(uint32_t eid, void* ctx), void* ctx);
 

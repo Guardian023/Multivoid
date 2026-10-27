@@ -36,6 +36,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 #include <vector>
 
 namespace coop::props::container_contents_sync {
@@ -675,6 +676,16 @@ bool DevRecordHashes(uint32_t eid, std::vector<uint64_t>& out, uint64_t& whole) 
     return true;
 }
 
+// Applies `recs` (the container's own records plus one appended) as a client's accepted slice is applied, and when
+// `publish` marks the container for the sweep like any local write.
+namespace {
+bool ApplyAppended(uint32_t eid, const std::vector<SR::SaveRecord>& recs, bool publish) {
+    if (ApplyContents(eid, recs, cw::ContentHash(eid, recs)) != Ingest::Applied) return false;
+    if (publish) MarkHostWrite(eid);
+    return true;
+}
+}  // namespace
+
 bool DevRawAppend(uint32_t eid, bool publish) {
     void* actor = LivePropActor(eid);
     void* inv = actor && ci::IsContainer(actor) ? ci::InventoryOf(actor) : nullptr;
@@ -682,9 +693,20 @@ bool DevRawAppend(uint32_t eid, bool publish) {
     if (!inv || !ci::IsWorldInventory(inv) || !cio::ReadRecords(inv, recs, /*neuterNested=*/false) || recs.empty())
         return false;
     recs.push_back(recs.front());
-    if (ApplyContents(eid, recs, cw::ContentHash(eid, recs)) != Ingest::Applied) return false;
-    if (publish) MarkHostWrite(eid);
-    return true;
+    return ApplyAppended(eid, recs, publish);
+}
+
+// The item's record is the one the game's addObject files: the item's own getData (save_record's CaptureRecord).
+bool DevRawAppendActor(uint32_t eid, void* item, bool publish) {
+    void* actor = LivePropActor(eid);
+    void* inv = actor && ci::IsContainer(actor) ? ci::InventoryOf(actor) : nullptr;
+    std::vector<SR::SaveRecord> recs;
+    SR::SaveRecord rec;
+    if (!item || !inv || !ci::IsWorldInventory(inv) || !cio::ReadRecords(inv, recs, /*neuterNested=*/false) ||
+        !SR::CaptureRecord(item, rec))
+        return false;
+    recs.push_back(std::move(rec));
+    return ApplyAppended(eid, recs, publish);
 }
 
 void ForEachWorldContainer(void (*fn)(uint32_t eid, void* ctx), void* ctx) {

@@ -84,6 +84,12 @@ int SlotCount(void* screen);
 void* SlotAt(void* screen, int i);
 bool CallNoArg(void* obj, const wchar_t* fn);
 
+// The screen's first container slot as its widget holds it (its prop name and amount), or empty when it does not read.
+std::string FirstSlotText();
+
+// The first-slot part of a regen line (before and after the rebuild), or empty when the slot did not read after.
+std::string SlotChange(const std::string& before, const std::string& after);
+
 // The census's six watches, asked each tick until Go: Wait while they settle, Dead (the drill ended, ABANDONED: seam
 // <name> is dead) when one settled without a hook or the bound passed. `role` is "host" / "client".
 enum class SeamGate : uint8_t { Wait, Go, Dead };
