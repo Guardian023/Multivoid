@@ -259,12 +259,29 @@ void* BindOwnSavePile(const coop::net::PropSpawnPayload& payload,
     // host has it. Converge only on real divergence: save-aligned piles are sub-millimetre
     // identical, so the common case writes and wakes nothing. A native whose location cannot be read
     // is not known to be aligned, so the host's transform converges it.
+    // Aligned means the same place AND the same root turn: a pile the host re-piled in place keeps its spot but
+    // comes back with a fresh root (yaw 0), while the native the joiner's save holds kept the old pile's yaw. A
+    // location-only test bound it unturned, and the look then applied on that root showed it turned by the
+    // difference. A pile root is Static, which drops a transform write while reporting success
+    // (trash_mirror.cpp), so it is made Movable first.
     ue_wrap::FVector cur{};
+    ue_wrap::FRotator curRot{};
     const bool curRead = ue_wrap::engine::TryGetActorLocation(native, cur);
+    const bool rotRead = ue_wrap::engine::TryGetActorRotation(native, curRot);
     const float ddx = cur.X - payload.locX, ddy = cur.Y - payload.locY, ddz = cur.Z - payload.locZ;
     constexpr float kAlignedCm = 2.0f;
-    const bool aligned = curRead && (ddx * ddx + ddy * ddy + ddz * ddz) <= (kAlignedCm * kAlignedCm);
+    constexpr float kAlignedDeg = 1.0f;
+    auto angAligned = [](float a, float b) {
+        float d = std::fabs(std::fmod(std::fabs(a - b), 360.0f));
+        if (d > 180.0f) d = 360.0f - d;
+        return d <= kAlignedDeg;
+    };
+    const bool locAligned = curRead && (ddx * ddx + ddy * ddy + ddz * ddz) <= (kAlignedCm * kAlignedCm);
+    const bool rotAligned = rotRead && angAligned(curRot.Pitch, payload.rotPitch) &&
+                            angAligned(curRot.Yaw, payload.rotYaw) && angAligned(curRot.Roll, payload.rotRoll);
+    const bool aligned = locAligned && rotAligned;
     if (!aligned) {
+        ue_wrap::engine::SetActorRootMovable(native);
         ue_wrap::engine::SetActorLocation(native, ue_wrap::FVector{payload.locX, payload.locY, payload.locZ});
         ue_wrap::engine::SetActorRotation(native,
             ue_wrap::FRotator{payload.rotPitch, payload.rotYaw, payload.rotRoll});
