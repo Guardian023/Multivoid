@@ -471,10 +471,14 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRES
     ui::overlay_diag::NoteWndProcThread();
     // Losing focus drops the scoreboard: a background window never receives the tilde WM_KEYUP, so
     // a hold-to-peek would stick open. Falls through to the game.
+    // A surface that cannot draw must not open: the hotkeys below act only once ImGui is up, so under
+    // an RHI the overlay does not present through, CaptureActive() stays false and the cursor
+    // recentre and the game's keys are untouched. The native text fields are not gated.
+    const bool imguiUp = g_imguiReady.load(std::memory_order_acquire);
     if (msg == WM_KILLFOCUS) g_scoreboard.store(false, std::memory_order_relaxed);
     // F1 toggles the menu; the key is consumed. State, not the ShowCursor counter, drives the
     // cursor: VOTV shows the OS cursor during play, and the SetCursorPos no-op lets it track.
-    if (msg == WM_KEYDOWN && wParam == VK_F1 &&
+    if (msg == WM_KEYDOWN && wParam == VK_F1 && imguiUp &&
         (MenuOpen() || coop::input::input_owner::MayTakeKey(VK_F1))) {
         g_visible.store(!g_visible.load(std::memory_order_relaxed), std::memory_order_relaxed);
         result = 0;
@@ -484,7 +488,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRES
     // toggles the interactive board, a client holds to peek. Swallowed from the game and from
     // ImGui. Not TAB, which is the game's inventory key. On a fresh install this key also opens
     // UE4's developer console (DefaultInput.ini ConsoleKeys=Tilde), which the swallow takes away.
-    if (msg == WM_KEYDOWN && wParam == VK_OEM_3 &&
+    if (msg == WM_KEYDOWN && wParam == VK_OEM_3 && imguiUp &&
         (ScoreOpen() || coop::input::input_owner::MayTakeKey(VK_OEM_3))) {
         if (ui::scoreboard::LocalIsHost()) {
             if ((lParam & (1 << 30)) == 0)  // ignore auto-repeat while held
@@ -495,7 +499,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRES
         result = 0;
         return true;
     }
-    if (msg == WM_KEYUP && wParam == VK_OEM_3 &&
+    if (msg == WM_KEYUP && wParam == VK_OEM_3 && imguiUp &&
         (ScoreOpen() || coop::input::input_owner::MayTakeKey(VK_OEM_3))) {
         if (!ui::scoreboard::LocalIsHost()) g_scoreboard.store(false, std::memory_order_relaxed);
         result = 0;
@@ -506,7 +510,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRES
     // start with a "t". Known gap: !CaptureActive() means the loading screen and the host
     // scoreboard, which own input but no text, still swallow T, so chat is unreachable during a
     // join; curing it means splitting CaptureActive by whether the surface takes typed text.
-    if (msg == WM_KEYDOWN && wParam == 'T' && !CaptureActive() && !PauseMenuOpen() &&
+    if (msg == WM_KEYDOWN && wParam == 'T' && imguiUp && !CaptureActive() && !PauseMenuOpen() &&
         coop::input::input_owner::MayTakeKey('T') && coop::chat_sync::SessionActive()) {
         ProbeKeyMsg(msg, wParam, "SWALLOWED by the T-chat hotkey");
         ui::chat_input::Open();
@@ -516,7 +520,7 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRES
     // V toggles the voice settings panel: opens only while voice runs and no surface owns typed
     // input, closes whenever the panel is up; both edges are swallowed. Surfaces with text fields
     // never coexist with the panel, so the close path cannot eat a typed letter.
-    if (msg == WM_KEYDOWN && wParam == 'V' && (lParam & (1 << 30)) == 0) {
+    if (msg == WM_KEYDOWN && wParam == 'V' && imguiUp && (lParam & (1 << 30)) == 0) {
         if (VoiceOpen()) { ui::voice_panel::Close(); result = 0; return true; }
         if (!CaptureActive() && coop::input::input_owner::MayTakeKey('V') &&
             coop::voice_chat::Enabled()) {
@@ -527,12 +531,11 @@ bool HandleWindowMessage(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam, LRES
     }
     // ESC with the chat open closes it and falls through, so the pause menu opens as it normally
     // would; after Close() the capture block below no longer swallows this keydown.
-    if (msg == WM_KEYDOWN && wParam == VK_ESCAPE && ChatOpen()) {
+    if (msg == WM_KEYDOWN && wParam == VK_ESCAPE && imguiUp && ChatOpen()) {
         ui::chat_input::Close();
     }
-    // Everything above is overlay state and needs no ImGui; the block below calls ImGui, and every
-    // surface that captures needs ImGui to draw, so CaptureActive() cannot hold without it.
-    if (g_imguiReady.load(std::memory_order_acquire)) {
+    // The block below calls ImGui, so it too waits for the bring-up.
+    if (imguiUp) {
         // ImGui must see the release of every key it saw pressed: a surface can close on a key's
         // WM_KEYDOWN (chat's Enter-submit, the ESC-close above), and an up routed to the game would
         // latch that key down in ImGui, so every later InputText insta-submits. Releases and

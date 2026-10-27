@@ -30,8 +30,8 @@ namespace ui::imgui_overlay {
 // render thread the first time the game presents a frame.
 bool Init();
 
-// The overlay's share of one game-window message: the F1, tilde, T, V and ESC hotkeys, the
-// ImGui input feed and capture swallow (only once ImGui is up), and the native text field's
+// The overlay's share of one game-window message: the F1, tilde, T, V and ESC hotkeys and the
+// ImGui input feed and capture swallow (all only once ImGui is up), and the native text field's
 // keys. True means the message is consumed and `result` is the window procedure's return; false
 // means it goes on to the next consumer and the game. Called on every message from the window
 // procedure's thread, ahead of the shutdown handling and the game; needs no present.
