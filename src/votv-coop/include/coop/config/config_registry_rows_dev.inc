@@ -600,12 +600,6 @@ CFG_STRING(calib_drill, "calib_drill", "dev", "", "VOTVCOOP_CALIB_DRILL", false,
     "the tool's NaN on the fourth, which the host must refuse and answer. "
     "run -- the host holds them once a client is in its world; join -- before any client connects. Lines tagged "
     "[CALIB-DRILL]; the client's DONE line ends it.")
-CFG_STRING(server_drill, "server_drill", "dev", "", "VOTVCOOP_SERVER_DRILL", false,
-    "Drill (BOTH peers): a server box's break is the host's and a client's repair of it runs there. The host breaks "
-    "a box with no upgrades and stamps its repair type 123. run -- once a client is in its world: the client finds "
-    "it broken with that type, its own breakServer on a healthy box is refused, it walks to the box and runs the "
-    "repair widget's end(true), and the host's box ends fixed; join -- the break in the joiner's window, found after "
-    "its world is ready. Lines tagged [SERVER-DRILL]; the client's DONE line ends it.")
 CFG_STRING(camera_drill, "camera_drill", "dev", "", "VOTVCOOP_CAMERA_DRILL", false,
     "Drill (BOTH peers): does a picked-up camera stick to its wall again, and by whose hand. grab -- the host hangs "
     "a camera on a wall a walker reaches (before any client joins); the client finds it stuck, walks to it, grabs "
@@ -647,10 +641,6 @@ CFG_STRING(laptop_tab_drill, "laptop_tab_drill", "dev", "", "VOTVCOOP_LAPTOP_TAB
     "counts as a bad slot; tab-join -- the host switches to tab 4 before any client connects, and every joiner reads "
     "it; tab-relay (needs --observer) -- the first client holds, the second reads, and the first is sent no state. "
     "Lines tagged [LAPTOP-TAB-DRILL]; the judging peer's PASS or FAIL line ends the arm.")
-CFG_STRING(server_upgrade_drill, "server_upgrade_drill", "dev", "", "VOTVCOOP_SERVER_UPGRADE_DRILL", false,
-    "Drill (BOTH peers): a client installs an upgrade into a server box and takes one out. apply: the host "
-    "applies both; refuse: the host refuses both, as if each had lost its race, and the client sees its install "
-    "refunded and its take-out's upgrade go. Lines tagged [SRV-UPG-DRILL].")
 CFG_STRING(power_decay_drill, "power_decay_drill", "dev", "", "VOTVCOOP_POWER_DECAY_DRILL", false,
     "Drill (BOTH peers): the generators' 30 s decay tick. watch: each peer says every tick's verdict, a client "
     "refusing its own and the host running its own, and the client's second tick prints the DONE line; red: a "
@@ -793,6 +783,9 @@ CFG_FLAG(key_index_forget_one, "key_index_forget_one", "dev", false, "VOTVCOOP_K
 #include "coop/config/config_registry_rows_dev_pile.inc"
 // The ATV lane's rows (its probe, corrector arm, spawn drill, health drill): their own file, as _dev_port.inc is above.
 #include "coop/config/config_registry_rows_dev_atv.inc"
+// The server boxes' drills (the repair and its pay, the upgrade install): their own file, one concept, included
+// as _dev_port.inc is above.
+#include "coop/config/config_registry_rows_dev_server.inc"
 // The puppet-identity arc's selftests and drill (PI-1, PI-2, PI-3): their own file, one concept, included as
 // _dev_port.inc is above.
 #include "coop/config/config_registry_rows_dev_pi.inc"
