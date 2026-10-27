@@ -1,63 +1,68 @@
 // ui/overlay_backend_internal.h -- TU-private seam between the overlay-backend
-// dispatcher (overlay_backend.cpp) and the per-RHI implementations
-// (overlay_backend_dx11.cpp / overlay_backend_dx12.cpp). Nothing outside
-// src/ui/overlay_backend*.cpp may include this (the public surface is
-// include/ui/overlay_backend.h). Same pattern as coop/config's
+// dispatcher (overlay_backend.cpp), the per-RHI implementations
+// (overlay_backend_dx11.cpp / overlay_backend_dx12.cpp) and the two callers that build a
+// FrameTarget (overlay_seams.cpp, imgui_overlay.cpp). Nothing else may include this (the
+// public surface is include/ui/overlay_backend.h). Same pattern as coop/config's
 // config_internal.h.
 
 #pragma once
+
+#include <windows.h>
 
 #include <cstdint>
 #include <vector>
 
 struct IDXGISwapChain;
 
-namespace ui::overlay_backend::detail {
+namespace ui::overlay_backend {
+
+// Which RHI is presenting; set by the engine seam that fired.
+enum class Rhi : uint8_t { None, Dx11, Dx12, Vulkan };
+
+struct VulkanFrame;  // defined with the Vulkan backend
+
+// What one overlay frame draws into. The DX seams fill hwnd and dxgi; Vulkan fills vk.
+struct FrameTarget {
+    Rhi            rhi;
+    HWND           hwnd;
+    IDXGISwapChain* dxgi;
+    VulkanFrame*   vk;
+};
+
+// One table per RHI, every member set except where a half has no meaning for it (the
+// resize pair belongs to the DX resize bracket; the dispatcher null-checks it).
+struct BackendOps {
+    bool  (*capture)(const FrameTarget&);
+    void  (*abandon)();
+    bool  (*init)(const FrameTarget&);
+    void  (*newFrame)();
+    void  (*ensureTarget)(const FrameTarget&);
+    void  (*render)(const FrameTarget&);
+    void  (*invalidate)();
+    void  (*resizeRelease)();
+    void  (*resizeRecreate)(const FrameTarget&);
+    void* (*textureFromFile)(const wchar_t*, int*, int*);
+    void  (*destroyTexture)(void*);
+    const char* name;
+};
+
+namespace detail {
 
 // WIC decode of a PNG/BMP/JPG file to 32bpp BGRA. RHI-agnostic (both backends
 // upload the same pixels their own way). false on any failure.
 bool DecodeImageFileBgra(const wchar_t* path, std::vector<uint8_t>& outBgra,
                          unsigned& outW, unsigned& outH);
 
-}  // namespace ui::overlay_backend::detail
+}  // namespace detail
+
+}  // namespace ui::overlay_backend
 
 namespace ui::overlay_backend::dx11 {
-
-bool Live();
-bool CaptureDevice(IDXGISwapChain* sc);   // silent on not-DX11 (dispatcher owns the RHI verdict)
-void AbandonCapture();
-bool InitRenderer(IDXGISwapChain* sc);
-void NewFrame();
-void InvalidateDeviceObjects();
-void EnsureTarget(IDXGISwapChain* sc);
-void RenderDrawData(IDXGISwapChain* sc);
-void OnResizeRelease();
-void OnResizeRecreate(IDXGISwapChain* sc);
-void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH);
-void DestroyTexture(void* id);
-
+const BackendOps& Ops();
 }  // namespace ui::overlay_backend::dx11
 
 namespace ui::overlay_backend::dx12 {
-
-bool Live();
-
-// Bring-up step 1. Detects D3D12 off the swapchain (P1/P3 logged once), arms
-// the ExecuteCommandLists capture hook, and runs candidate+confirmation on the
-// presenting queue. Returns true ONLY when the queue is confirmed -- until
-// then the overlay stays down and Present passes through (a handful of frames).
-bool CaptureDevice(IDXGISwapChain* sc);
-void AbandonCapture();
-bool InitRenderer(IDXGISwapChain* sc);
-void NewFrame();
-void InvalidateDeviceObjects();
-void EnsureTarget(IDXGISwapChain* sc);
-void RenderDrawData(IDXGISwapChain* sc);
-void OnResizeRelease();
-void OnResizeRecreate(IDXGISwapChain* sc);
-void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH);
-void DestroyTexture(void* id);
-
+const BackendOps& Ops();
 }  // namespace ui::overlay_backend::dx12
 
 // Which command queue presents the swapchain (overlay_backend_dx12_capture.cpp).

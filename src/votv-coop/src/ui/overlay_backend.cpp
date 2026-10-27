@@ -22,20 +22,23 @@ namespace {
 enum class Active { None, Dx11, Dx12 };
 Active g_active = Active::None;  // render-thread-owned (all writers run in the Present detour)
 
+// The dx halves take a FrameTarget; until the seams fill one, the swapchain is wrapped here.
+FrameTarget Tgt(IDXGISwapChain* sc) { return {Rhi::None, nullptr, sc, nullptr}; }
+
 }  // namespace
 
 const char* Kind() {
-    if (g_active == Active::Dx11 && dx11::Live()) return "DX11";
-    if (g_active == Active::Dx12 && dx12::Live()) return "DX12";
+    if (g_active == Active::Dx11) return dx11::Ops().name;
+    if (g_active == Active::Dx12) return dx12::Ops().name;
     return nullptr;
 }
 
 bool CaptureDevice(IDXGISwapChain* sc) {
-    if (dx11::CaptureDevice(sc)) {
+    if (dx11::Ops().capture(Tgt(sc))) {
         g_active = Active::Dx11;
         return true;
     }
-    if (dx12::CaptureDevice(sc)) {  // true only once the presenting queue is CONFIRMED
+    if (dx12::Ops().capture(Tgt(sc))) {  // true only once the presenting queue is CONFIRMED
         g_active = Active::Dx12;
         return true;
     }
@@ -43,56 +46,56 @@ bool CaptureDevice(IDXGISwapChain* sc) {
 }
 
 void AbandonCapture() {
-    if (g_active == Active::Dx11) dx11::AbandonCapture();
-    else if (g_active == Active::Dx12) dx12::AbandonCapture();
+    if (g_active == Active::Dx11) dx11::Ops().abandon();
+    else if (g_active == Active::Dx12) dx12::Ops().abandon();
     g_active = Active::None;
 }
 
 bool InitRenderer(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) return dx11::InitRenderer(sc);
-    if (g_active == Active::Dx12) return dx12::InitRenderer(sc);
+    if (g_active == Active::Dx11) return dx11::Ops().init(Tgt(sc));
+    if (g_active == Active::Dx12) return dx12::Ops().init(Tgt(sc));
     return false;
 }
 
 void NewFrame() {
-    if (g_active == Active::Dx11) dx11::NewFrame();
-    else if (g_active == Active::Dx12) dx12::NewFrame();
+    if (g_active == Active::Dx11) dx11::Ops().newFrame();
+    else if (g_active == Active::Dx12) dx12::Ops().newFrame();
 }
 
 void InvalidateDeviceObjects() {
-    if (g_active == Active::Dx11) dx11::InvalidateDeviceObjects();
-    else if (g_active == Active::Dx12) dx12::InvalidateDeviceObjects();
+    if (g_active == Active::Dx11) dx11::Ops().invalidate();
+    else if (g_active == Active::Dx12) dx12::Ops().invalidate();
 }
 
 void EnsureTarget(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) dx11::EnsureTarget(sc);
-    else if (g_active == Active::Dx12) dx12::EnsureTarget(sc);
+    if (g_active == Active::Dx11) dx11::Ops().ensureTarget(Tgt(sc));
+    else if (g_active == Active::Dx12) dx12::Ops().ensureTarget(Tgt(sc));
 }
 
 void RenderDrawData(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) dx11::RenderDrawData(sc);
-    else if (g_active == Active::Dx12) dx12::RenderDrawData(sc);
+    if (g_active == Active::Dx11) dx11::Ops().render(Tgt(sc));
+    else if (g_active == Active::Dx12) dx12::Ops().render(Tgt(sc));
 }
 
 void OnResizeRelease() {
-    if (g_active == Active::Dx11) dx11::OnResizeRelease();
-    else if (g_active == Active::Dx12) dx12::OnResizeRelease();
+    if (g_active == Active::Dx11) dx11::Ops().resizeRelease();
+    else if (g_active == Active::Dx12) dx12::Ops().resizeRelease();
 }
 
 void OnResizeRecreate(IDXGISwapChain* sc) {
-    if (g_active == Active::Dx11) dx11::OnResizeRecreate(sc);
-    else if (g_active == Active::Dx12) dx12::OnResizeRecreate(sc);
+    if (g_active == Active::Dx11) dx11::Ops().resizeRecreate(Tgt(sc));
+    else if (g_active == Active::Dx12) dx12::Ops().resizeRecreate(Tgt(sc));
 }
 
 void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH) {
-    if (g_active == Active::Dx11) return dx11::CreateTextureFromImageFile(path, outW, outH);
-    if (g_active == Active::Dx12) return dx12::CreateTextureFromImageFile(path, outW, outH);
+    if (g_active == Active::Dx11) return dx11::Ops().textureFromFile(path, outW, outH);
+    if (g_active == Active::Dx12) return dx12::Ops().textureFromFile(path, outW, outH);
     return nullptr;
 }
 
 void DestroyTexture(void* id) {
-    if (g_active == Active::Dx11) dx11::DestroyTexture(id);
-    else if (g_active == Active::Dx12) dx12::DestroyTexture(id);
+    if (g_active == Active::Dx11) dx11::Ops().destroyTexture(id);
+    else if (g_active == Active::Dx12) dx12::Ops().destroyTexture(id);
 }
 
 void InstallCreationProbe() { dx12_capture::InstallCreationProbe(); }
