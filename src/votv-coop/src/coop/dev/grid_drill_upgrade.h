@@ -3,16 +3,25 @@
 // refunding nothing for it; then the client installs the upgrades the host hands it: the first must be taken, the
 // second, while the host refuses installs as if another player's had filled the generator first, must roll back
 // and come back as a refund beside it. upgradered is the control, a host that judges an install as if its spend
-// were recorded, which takes the bare op. Src-local.
+// were recorded, which takes the bare op.
+// upgraderepair: the client installs the one upgrade the host hands it, the host breaks the generator, the client
+// solves its puzzle and presses Activate (grid_drill_solve.h), the host takes the repair; 20 s on, both peers read
+// the generator's upgrades and the meshes they built, which must still be the install's (a client's repair must not
+// take its upgrades). upgraderepairred is the control with the install skipped, which must end on level 0.
+// Src-local.
 
 #pragma once
+
+#include <cstdint>
 
 namespace coop::net { class Session; }
 
 namespace coop::dev::grid_drill {
 
+enum class UpgradeFlavour : uint8_t { Plain, Repair, RepairRed };
+
 // Either peer's legs, per frame once the grid resolved. Game thread.
-void UpgradeTick(coop::net::Session* session);
+void UpgradeTick(coop::net::Session* session, UpgradeFlavour flavour);
 
 // The legs start again. Session end.
 void UpgradeOnDisconnect();

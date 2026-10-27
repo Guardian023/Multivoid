@@ -93,6 +93,9 @@ CFG_STRING(grid_drill, "grid_drill", "dev", "", "VOTVCOOP_GRID_DRILL", false,
     "once, which the host must take within its rate for inputs, its rows coalesced. upgrade: from there an "
     "install op with no "
     "insert behind it is refused, nothing refunded, the client's install is taken, and a refused one is refunded. "
+    "upgraderepair: the client installs one upgrade, the host breaks the generator, the client solves its puzzle and "
+    "presses Activate, and 20 s after the repair both peers must still read the upgrade and its mesh; upgraderepairred "
+    "installs nothing and must fail on level 0. "
     "join, lockout, lockjoin: the blackout at a join, the desk virus's lockout. red, puzzlered, upgradered: the "
     "controls (the rows applied raw, no puzzle written, installs judged unpaired). Lines tagged [GRID-DRILL]; the "
     "client's DONE line ends it.")

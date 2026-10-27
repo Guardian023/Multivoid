@@ -3,6 +3,7 @@
 #include "grid_drill_upgrade.h"
 
 #include "grid_drill_checks.h"  // co-located private header (src tree, not include/)
+#include "grid_drill_solve.h"  // the solve legs the repair arms run
 #include "grid_drill_walk.h"  // the walk to the generator
 
 #include "coop/net/protocol.h"
@@ -32,6 +33,10 @@ constexpr float   kHandedUU   = 400.f;  // the host hands an upgrade where the c
 // Failure bounds only: each leg ends on the state it waits for, and these say it never came.
 constexpr uint64_t kAckBoundMs = 20000;  // the bare install waits out the host's 10 s bound for its spend
 constexpr uint64_t kRowBoundMs = 30000;
+// The repair arms read the generator this long after the repair: a window the upgrades must survive, not a wait for
+// a milestone.
+constexpr uint64_t kSettleMs = 20000;
+constexpr uint64_t kRepairBoundMs = 120000;  // the host waits this long for the client's repair
 
 uint64_t NowMs() {
     return static_cast<uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -42,7 +47,7 @@ uint64_t NowMs() {
 
 // The bare install goes first: its refusal is also the host's cue to hand the first upgrade, so nothing the host
 // hands can lie beside the client before it has counted what was there.
-enum class Step : uint8_t { Walk, Arm, Bare, BareAck, Find, Ack, Refund, Done };
+enum class Step : uint8_t { Walk, Arm, Bare, BareAck, Find, Ack, Refund, Solve, Settle, Done };
 Step     g_step = Step::Walk;
 uint64_t g_stepMs = 0;
 int32_t  g_index = -1;      // the drill's generator's place in the rows
@@ -50,6 +55,7 @@ int32_t  g_level0 = 0;      // its upgrades as the legs began
 int      g_installs = 0;    // the installs this client made
 int      g_nearFloor = 0;   // the upgrades beside this client that no hand-over brought
 int      g_nearBefore = 0;  // the upgrades beside this client as it made its last install
+UpgradeFlavour g_flavour = UpgradeFlavour::Plain;
 
 void Go(Step s) {
     g_step = s;
@@ -64,6 +70,11 @@ void Fail(const char* why) {
 void Abandon(const char* why) {
     UE_LOGW("[GRID-DRILL] ABANDONED on the client: %s", why);
     g_step = Step::Done;
+}
+
+void StartSolve() {
+    SolveBegin(false);
+    Go(Step::Solve);
 }
 
 // The drill's generator's upgrades on this copy, and the host's last word for them. False while either is unread.
@@ -154,6 +165,10 @@ void ClientTick(void* player) {
         }
         if (!AnsweredAt(0, "the host took an install nothing was spent for")) return;
         if (!Say("client", "an install nothing was spent for refused")) { g_step = Step::Done; return; }
+        if (g_flavour == UpgradeFlavour::RepairRed) {
+            StartSolve();  // the control installs nothing
+            return;
+        }
         Go(Step::Find);
         return;
     }
@@ -196,7 +211,44 @@ void ClientTick(void* player) {
             g_step = Step::Done;
             return;
         }
+        if (g_flavour == UpgradeFlavour::Repair) {
+            StartSolve();  // the one install is taken and the host's row carries it: the repair is next
+            return;
+        }
         Go(first ? Step::Find : Step::Refund);
+        return;
+    }
+    case Step::Solve: {
+        // The host broke the generator once its row carried the install; this client solves the puzzle and presses
+        // Activate (grid_drill_solve.cpp), and the repair the host takes starts the window the upgrades must survive.
+        switch (SolveTick(player)) {
+        case SolveState::Running:
+            return;
+        case SolveState::Repaired:
+            if (Say("client", "the host judged the press on its own copy and repaired")) Go(Step::Settle);
+            else g_step = Step::Done;
+            return;
+        default:
+            g_step = Step::Done;  // the legs said why
+            return;
+        }
+    }
+    case Step::Settle: {
+        if (now - g_stepMs < kSettleMs) return;
+        int32_t local = 0, host = 0;
+        if (!Levels(local, host)) { Abandon("the drill's generator's upgrades are unread"); return; }
+        const int32_t want = g_level0 + 1;
+        const int meshes = GEN::UpgradeMeshCount(gen);
+        if (local != want || host != want || meshes != want) {
+            char why[200];
+            std::snprintf(why, sizeof(why), "upgraderepair: this copy reads level %d and %d meshes, the host's row "
+                          "level %d, wanted %d of each", local, meshes, host, want);
+            Fail(why);
+            return;
+        }
+        UE_LOGI("[GRID-DRILL] upgraderepair PASS (level %d, meshes %d, host level %d)", local, meshes, host);
+        SayDone();
+        g_step = Step::Done;
         return;
     }
     case Step::Refund: {
@@ -218,9 +270,13 @@ void ClientTick(void* player) {
 // ---- the host's legs -------------------------------------------------------------------------------------------
 
 // 0 takes the counts, 1 waits for the bare install's refusal and hands the first upgrade, 2 hands the second once the
-// first install is taken, 3 judges the refund of the second's refusal; 4 is done.
+// first install is taken, 3 judges the refund of the second's refusal; 4 is done. The repair arms go on from the
+// install (the control, from the bare install's refusal): 5 breaks the generator once the host's copy reads the
+// install, 6 waits for the client's repair, 7 reads the generator 20 s after it.
 int      g_hostStage = 0;
 uint64_t g_taken0 = 0, g_refused0 = 0, g_refunds0 = 0;
+int32_t  g_hostLevel0 = 0;  // the host's copy of the generator's upgrades as the legs began
+uint64_t g_hostMs = 0;      // when the repair arms' current stage began
 
 void HostEnd(const char* verdict, const char* why) {
     UE_LOGW("[GRID-DRILL] %s on the host: %s", verdict, why);
@@ -241,24 +297,39 @@ void HostTick(coop::net::Session* s) {
     const uint64_t refused = coop::power_grid::HostOpsRefused();
     const uint64_t refunds = coop::power_upgrade::RefundsSpawned();
     switch (g_hostStage) {
-    case 0:
+    case 0: {
+        GEN::Row r{};
+        if (!GEN::ReadRow(DrillGen(), r)) return;
+        g_hostLevel0 = r.upgradeLevel;
         g_taken0 = taken;
         g_refused0 = refused;
         g_refunds0 = refunds;
         Say("host", "armed");
         g_hostStage = 1;
         return;
+    }
     case 1:
         // The client's bare install: refused, and nothing refunded for it, since nothing was spent.
         if (refused == g_refused0) return;
         if (refunds != g_refunds0) { HostEnd("FAIL", "an install nothing was spent for was refunded"); return; }
         Say("host", "refused an install nothing was spent for, refunded nothing");
+        if (g_flavour == UpgradeFlavour::RepairRed) {  // the control hands nothing and installs nothing
+            g_hostMs = NowMs();
+            g_hostStage = 5;
+            return;
+        }
         if (!HandUpgrade()) { HostEnd("ABANDONED", "the upgrade's spawn failed"); return; }
         Say("host", "handed the client an upgrade");
         g_hostStage = 2;
         return;
     case 2:
         if (taken == g_taken0) return;
+        if (g_flavour == UpgradeFlavour::Repair) {
+            Say("host", "took the install");
+            g_hostMs = NowMs();
+            g_hostStage = 5;
+            return;
+        }
         coop::power_grid::DevRefuseInstalls(true);
         if (!HandUpgrade()) { HostEnd("ABANDONED", "the second upgrade's spawn failed"); return; }
         Say("host", "took the install, refuses the next, handed a second upgrade");
@@ -271,6 +342,42 @@ void HostTick(coop::net::Session* s) {
         Say("host", "refused the second install and refunded its upgrade");
         g_hostStage = 4;
         return;
+    case 5: {
+        // The host's own generator carries the install before it breaks (the control has none to carry).
+        void* gen = DrillGen();
+        GEN::Row r{};
+        if (!GEN::ReadRow(gen, r)) { HostEnd("ABANDONED", "the drill's generator is unread"); return; }
+        if (g_flavour == UpgradeFlavour::Repair && r.upgradeLevel != g_hostLevel0 + 1) {
+            if (NowMs() - g_hostMs > kRowBoundMs) HostEnd("ABANDONED", "the host's generator never read the install");
+            return;
+        }
+        GEN::CallBreak(gen);
+        Say("host", "broke the generator for the client to repair");
+        g_hostMs = NowMs();
+        g_hostStage = 6;
+        return;
+    }
+    case 6: {
+        GEN::Row r{};
+        if (!GEN::ReadRow(DrillGen(), r)) { HostEnd("ABANDONED", "the drill's generator is unread"); return; }
+        if (r.broken) {
+            if (NowMs() - g_hostMs > kRepairBoundMs) HostEnd("ABANDONED", "the client never repaired the generator");
+            return;
+        }
+        Say("host", "the client's repair taken");
+        g_hostMs = NowMs();
+        g_hostStage = 7;
+        return;
+    }
+    case 7: {
+        if (NowMs() - g_hostMs < kSettleMs) return;
+        void* gen = DrillGen();
+        GEN::Row r{};
+        if (!GEN::ReadRow(gen, r)) { HostEnd("ABANDONED", "the drill's generator is unread"); return; }
+        UE_LOGI("[GRID-DRILL] host upgraderepair level=%d meshes=%d", r.upgradeLevel, GEN::UpgradeMeshCount(gen));
+        g_hostStage = 4;
+        return;
+    }
     default:
         return;
     }
@@ -278,7 +385,8 @@ void HostTick(coop::net::Session* s) {
 
 }  // namespace
 
-void UpgradeTick(coop::net::Session* session) {
+void UpgradeTick(coop::net::Session* session, UpgradeFlavour flavour) {
+    g_flavour = flavour;
     if (session->role() == coop::net::Role::Host) {
         HostTick(session);
         return;
@@ -297,6 +405,8 @@ void UpgradeOnDisconnect() {
     g_nearBefore = 0;
     g_hostStage = 0;
     g_taken0 = g_refused0 = g_refunds0 = 0;
+    g_hostLevel0 = 0;
+    g_hostMs = 0;
 }
 
 }  // namespace coop::dev::grid_drill

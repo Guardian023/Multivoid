@@ -55,7 +55,7 @@ constexpr uint64_t kRowBoundMs    = 30000;
 constexpr uint64_t kLockBoundMs   = 90000;   // the desk virus's lockout lasts 60 s on the host
 
 enum class Arm : uint8_t { Off, Run, Red, Join, Lockout, LockJoin, Puzzle, PuzzleRed, PuzzleSolve, PuzzleFlood,
-                          Upgrade };
+                          Upgrade, UpgradeRepair, UpgradeRepairRed };
 Arm Mode() {
     static const Arm a = [] {
         const std::string v = coop::config::ResolveString(::coop::config_registry::rows::grid_drill);
@@ -63,6 +63,7 @@ Arm Mode() {
              : v == "lockjoin" ? Arm::LockJoin : v == "puzzle" ? Arm::Puzzle : v == "puzzlered" ? Arm::PuzzleRed
              : v == "puzzlesolve" ? Arm::PuzzleSolve : v == "puzzleflood" ? Arm::PuzzleFlood
              : (v == "upgrade" || v == "upgradered") ? Arm::Upgrade
+             : v == "upgraderepair" ? Arm::UpgradeRepair : v == "upgraderepairred" ? Arm::UpgradeRepairRed
              : Arm::Off;
     }();
     return a;
@@ -605,8 +606,10 @@ void HostTick(coop::net::Session* s) {
 void Tick(coop::net::Session* session) {
     if (Mode() == Arm::Off || !session || !session->connected()) return;
     if (!PC::EnsureResolved() || !GEN::EnsureResolved()) return;
-    if (Mode() == Arm::Upgrade) {
-        UpgradeTick(session);
+    if (Mode() == Arm::Upgrade || Mode() == Arm::UpgradeRepair || Mode() == Arm::UpgradeRepairRed) {
+        UpgradeTick(session, Mode() == Arm::UpgradeRepair      ? UpgradeFlavour::Repair
+                             : Mode() == Arm::UpgradeRepairRed ? UpgradeFlavour::RepairRed
+                                                               : UpgradeFlavour::Plain);
         return;
     }
     if (session->role() == coop::net::Role::Host) {
