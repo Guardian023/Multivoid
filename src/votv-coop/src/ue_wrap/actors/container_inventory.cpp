@@ -142,8 +142,10 @@ void RederiveShownState(void* container, void* inventory) {
                     "-- applied contents will show a STALE currVol / names", updateVol, recalcNames);
         }
     }
-    if (updateVol)   ue_wrap::component_calls::CallParamless(container, updateVol);
+    // The volume sum reads the names array that recalculateNames rebuilds from the records,
+    // so the names come first.
     if (recalcNames) ue_wrap::component_calls::CallParamless(inventory, recalcNames);
+    if (updateVol)   ue_wrap::component_calls::CallParamless(container, updateVol);
 }
 
 bool CurrentVolume(void* inventory, float& out) {
