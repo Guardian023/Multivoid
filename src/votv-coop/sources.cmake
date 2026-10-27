@@ -53,6 +53,7 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/engine/data_table.cpp
     src/ue_wrap/actors/begin_equipment.cpp
     src/ue_wrap/actors/container_inventory.cpp
+    src/ue_wrap/actors/prop_processor.cpp
     src/ue_wrap/actors/container_openers.cpp
     src/ue_wrap/actors/container_view.cpp
     src/ue_wrap/actors/floppy_disc.cpp
