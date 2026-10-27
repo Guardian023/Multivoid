@@ -240,11 +240,12 @@ void ClientFixture(void* rt, const Reading& r, uint64_t now) {
         if (!coop::net_pump::HasAnnouncedWorldReady() || !Whole(r)) return;
         if (!g_clientReadyMs) g_clientReadyMs = now;
         if (!r.broken) {
-            // The host's break does not cross today; after the wait the client breaks its own copy.
+            // The b256 measurement: the host's break had not crossed within the wait, so the client breaks its own
+            // copy and repairs it, which is what that run read on both peers.
             if (g_clientBroke || now - g_clientReadyMs < kClientBreakAfterMs) return;
             g_clientBroke = true;
             CallVerb(rt, L"setBroken", true);
-            UE_LOGI("[RADIO-TOWER] client broke its own copy (the host's break never crossed)");
+            UE_LOGI("[RADIO-TOWER] client broke its own copy (the host's break had not crossed within the wait)");
             return;
         }
         g_clientFixed = true; g_clientFixMs = now;

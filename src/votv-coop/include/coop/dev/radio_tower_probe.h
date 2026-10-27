@@ -5,8 +5,9 @@
 // puzzle counts), prints its state once a second when it changed, and name-watches the tower's bodies at the
 // script gate, counting each call per peer. Read-only; it never refuses a call.
 // fixclient: observe, plus a fixture. The host breaks the tower once a client's world is ready; the client
-// completes the puzzle on its own copy, which today stays on the client (the baseline the fix is measured
-// against). Lines tagged [RADIO-TOWER]; the host's DONE line ends the run.
+// completes the puzzle on its own copy. It is the measurement taken on b256, where that repair stayed on the
+// client and the host kept reading the tower broken; the wait it makes is a clock, since a probe measures.
+// Lines tagged [RADIO-TOWER]; the host's DONE line ends the run.
 
 #pragma once
 
