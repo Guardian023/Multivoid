@@ -121,6 +121,9 @@ CFG_FLAG(container_selftest, "container_selftest", "dev", false, "VOTVCOOP_CONTA
 CFG_FLAG(container_retry_red, "container_retry_red", "dev", false, "VOTVCOOP_CONTAINER_RETRY_RED",
     "Red arm for the container join drill: a container send refused with no world-ready peer is re-armed "
     "every sweep, as before the fix, and counted.")
+CFG_FLAG(container_parity_red, "container_parity_red", "dev", false, "VOTVCOOP_CONTAINER_PARITY_RED",
+    "Red arm for the container parity report (the CLIENT): flips one bit of the first row's content hash "
+    "before sending, so the host's judge must report a mismatch.")
 CFG_FLAG(container_opener_probe, "container_opener_probe", "dev", false, "VOTVCOOP_CONTAINER_OPENER_PROBE",
     "Probe (host): once each client's world is up and it has a body, every drone, dronesack and ATV with "
     "the container it opens, the lookups both ways that must name the pair, and each client's reach to "

@@ -578,6 +578,22 @@ sg::Verdict OnVerbEntry(const sg::Call& br) {
     return sg::Verdict::Run;
 }
 
+// Every live world container, boundary 1 applied: fn(eid, actor, inv). The connect seed and the
+// dev walker share it.
+template <typename Fn>
+void WalkWorldContainers(Fn&& fn) {
+    std::vector<coop::element::Registry::ActorIdPair> pairs;
+    coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, pairs);
+    for (const auto& pr : pairs) {
+        // IsLiveByIndex: the snapshot does not protect the actor pointer.
+        if (!pr.actor || !R::IsLiveByIndex(pr.actor, pr.internalIdx)) continue;
+        if (!ci::IsContainer(pr.actor)) continue;
+        void* inv = ci::InventoryOf(pr.actor);
+        if (!inv || !ci::IsWorldInventory(inv)) continue;   // BOUNDARY 1 (fail-closed)
+        fn(static_cast<uint32_t>(pr.id), pr.actor, inv);
+    }
+}
+
 }  // namespace
 
 // From event_feed's client-side SnapshotBegin and SnapshotComplete dispatch, on the game thread.
@@ -677,19 +693,12 @@ void QueueConnectBroadcastForSlot(int peerSlot) {
     auto* s = g_session.load(std::memory_order_acquire);
     if (!s || !IsHost()) return;
 
-    std::vector<coop::element::Registry::ActorIdPair> pairs;
-    coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, pairs);
     size_t sent = 0;
-    for (const auto& pr : pairs) {
-        // IsLiveByIndex: the snapshot does not protect the actor pointer.
-        if (!pr.actor || !R::IsLiveByIndex(pr.actor, pr.internalIdx)) continue;
-        if (!ci::IsContainer(pr.actor)) continue;
-        void* inv = ci::InventoryOf(pr.actor);
-        if (!inv || !ci::IsWorldInventory(inv)) continue;   // BOUNDARY 1 (fail-closed)
+    WalkWorldContainers([&](uint32_t eid, void* actor, void* inv) {
         // A transfer in progress reaches the joiner with the fan-out that completes it.
-        if (cb::Awaited(pr.actor, 0)) continue;
-        if (BroadcastContainer(s, static_cast<uint32_t>(pr.id), inv, peerSlot, /*force=*/true)) ++sent;
-    }
+        if (cb::Awaited(actor, 0)) return;
+        if (BroadcastContainer(s, eid, inv, peerSlot, /*force=*/true)) ++sent;
+    });
     UE_LOGI("container_contents: connect seed -> slot %d: %zu world containers", peerSlot, sent);
 }
 
@@ -724,6 +733,23 @@ bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol) {
     if (uint8_t* slot = ci::ContentsSlot(inv)) outCount = SR::ReadArr(slot, 0).num;
     ci::CurrentVolume(inv, outVol);
     return true;
+}
+
+bool ContentHashOf(uint32_t eid, uint64_t& outHash, uint32_t& outRecords) {
+    void* actor = LivePropActor(eid);
+    if (!actor || !ci::IsContainer(actor)) return false;
+    void* inv = ci::InventoryOf(actor);
+    if (!inv || !ci::IsWorldInventory(inv)) return false;
+    if (cb::Awaited(actor, 0)) return false;   // a transfer in progress is not a settled reading
+    std::vector<SR::SaveRecord> recs;
+    if (!ReadContents(inv, recs)) return false;
+    outHash = cw::ContentHash(eid, recs);
+    outRecords = static_cast<uint32_t>(recs.size());
+    return true;
+}
+
+void ForEachWorldContainer(void (*fn)(uint32_t eid, void* ctx), void* ctx) {
+    WalkWorldContainers([&](uint32_t eid, void*, void*) { fn(eid, ctx); });
 }
 
 size_t AppliedEids() { return g_appliedHash.size(); }

@@ -30,7 +30,7 @@ inline constexpr uint32_t kMagic = 0x564D5450u;
 // This file is past the 1500-line hard cap and stays there: it is the single-feature exception the
 // rule names. One wire format, whose enum, payload structs and static_asserts are read together;
 // splitting it would put a kind's number in one file and its bytes in another.
-inline constexpr uint16_t kProtocolVersion = 256;
+inline constexpr uint16_t kProtocolVersion = 257;
 
 // Default LAN port (overridable via multivoid.ini "net.port=").
 inline constexpr uint16_t kDefaultPort = 47621;
@@ -1172,6 +1172,11 @@ enum class ReliableKind : uint8_t {
     // after its join so the host can compare each pose with its own. Dropped at the host unless the drill row is on.
     // Rides the Default lane; never relayed; not pre-world. Late join: none, a report is a reading.
     DevParityReport = 205,
+    // CLIENT->HOST: developer only, read by the container join drill (coop/dev/container_parity): a chunked blob, the
+    // joiner's own report of the content hash of every world container, [u32 count] then count DevContainerParityEntry
+    // rows, sent once after its join so the host can compare each with its own. Dropped at the host unless the drill
+    // enabled it. Rides the Default lane; never relayed; not pre-world. Late join: none, a report is a reading.
+    DevContainerParity = 206,
     // HOST->CLIENT: one decision of a Geom Octa, to be replayed into the client's own Blueprint (coop/creatures/
     // geom_octa_relay): op 0, an Aggro, the Octa took a target (the replay runs minSphere's begin-overlap handler with
     // the target's counterpart here), carrying the host's verdict count as the base; op 1, a FireVerdict, the host's
@@ -1803,6 +1808,14 @@ struct DevParityEntry {
     float    pitch, yaw, roll;   // 12 -- the actor's rotation, degrees
 };
 static_assert(sizeof(DevParityEntry) == 29, "DevParityEntry must be 29 bytes");
+
+// One row of the DevContainerParity blob: a world container, how many records it holds and the hash of them.
+struct DevContainerParityEntry {
+    uint32_t eid;           // 4
+    uint32_t records;       // 4
+    uint64_t contentHash;   // 8 -- container_slice_wire::ContentHash of the contents
+};
+static_assert(sizeof(DevContainerParityEntry) == 16, "DevContainerParityEntry must be 16 bytes");
 
 // A prop birth (PropSpawn): the class, the persistent key, the list_props row name that init()
 // resolves the mesh, mass and collision from, the transform and scale, the physics flags, an

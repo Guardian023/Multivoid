@@ -76,6 +76,14 @@ bool VerbWatchEntered();
 // live world container here.
 bool ContentsDigest(uint32_t eid, int32_t& outCount, float& outVol);
 
+// The hash the wire uses for one container's contents (coop/props/container_slice_wire::ContentHash) and its record
+// count, for the parity report. False when the eid is not a live world container here, its contents do not read, or a
+// transfer into it is in progress. Game thread.
+bool ContentHashOf(uint32_t eid, uint64_t& outHash, uint32_t& outRecords);
+
+// Call fn once per live world container, boundary 1 applied: the set the connect seed walks. Game thread.
+void ForEachWorldContainer(void (*fn)(uint32_t eid, void* ctx), void* ctx);
+
 // How many containers this peer holds an applied host slice for (the size of its applied-hash map); the late-join
 // drill reads it. Game thread.
 size_t AppliedEids();
