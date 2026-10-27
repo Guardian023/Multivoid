@@ -669,7 +669,7 @@ bool DevRecordHashes(uint32_t eid, std::vector<uint64_t>& out, uint64_t& whole) 
     void* actor = LivePropActor(eid);
     void* inv = actor && ci::IsContainer(actor) ? ci::InventoryOf(actor) : nullptr;
     std::vector<SR::SaveRecord> recs;
-    if (!inv || !ci::IsWorldInventory(inv) || !ReadContents(inv, recs)) return false;
+    if (!inv || !ci::IsWorldInventory(inv) || !cio::ReadRecords(inv, recs)) return false;
     for (const SR::SaveRecord& r : recs) out.push_back(cw::ContentHash(eid, std::vector<SR::SaveRecord>{r}));
     whole = cw::ContentHash(eid, recs);
     return true;
@@ -679,7 +679,7 @@ bool DevRawAppend(uint32_t eid, bool publish) {
     void* actor = LivePropActor(eid);
     void* inv = actor && ci::IsContainer(actor) ? ci::InventoryOf(actor) : nullptr;
     std::vector<SR::SaveRecord> recs;
-    if (!inv || !ci::IsWorldInventory(inv) || !ReadContents(inv, recs, /*neuterNested=*/false) || recs.empty())
+    if (!inv || !ci::IsWorldInventory(inv) || !cio::ReadRecords(inv, recs, /*neuterNested=*/false) || recs.empty())
         return false;
     recs.push_back(recs.front());
     if (ApplyContents(eid, recs, cw::ContentHash(eid, recs)) != Ingest::Applied) return false;

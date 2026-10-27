@@ -15,17 +15,23 @@ inline constexpr const wchar_t* kPackClass  = L"prop_backpack_C";
 inline constexpr const wchar_t* kDriveClass = L"prop_drive_C";
 inline constexpr int      kItems        = 2;      // the records the fixture holds
 inline constexpr float    kAheadCm      = 100.f;  // the fixture before the puppet
-inline constexpr float    kSideAheadCm  = 60.f;   // the loose drives, to either side of it
+inline constexpr float    kIntakeAheadCm = 60.f;  // the R5 prop, in the client's puppet's view (the vacuum's intake)
+inline constexpr float    kSideAheadCm  = 60.f;   // the R4 drive, to one side of it
 inline constexpr float    kSideCm       = 80.f;
 inline constexpr float    kDropCm       = 30.f;
 inline constexpr float    kNearCm       = 400.f;  // CLIENT: the fixtures' mirrors are this near its player
 inline constexpr uint64_t kCheckEveryMs = 250;
+inline constexpr uint64_t kSeamBoundMs  = 30000;  // the census's six watches to settle
+inline constexpr uint64_t kRegenWindowMs = 1000;  // a write's applying to the open screen's rebuild
 
 // The lines the peers say to each other (drill_chat).
 inline constexpr const char* kLineRoutesDone    = "ci-census client routes-done";
 inline constexpr const char* kLineR4Done        = "ci-census client r4-done";
 inline constexpr const char* kLineBeforeReady   = "ci-census client before-ready";
 inline constexpr const char* kLineBeforeWritten = "ci-census host before-written";
+inline constexpr const char* kLineRefilled      = "ci-census host refilled";
+inline constexpr const char* kPrefixR1Done      = "ci-census client r1-done ";   // + "sent=<slices sent so far>"
+inline constexpr const char* kPrefixR4Start     = "ci-census client r4-start ";  // + "eid=<the thrown prop>"
 inline constexpr const char* kPrefixClientDone  = "ci-census client done ";   // + "rb=<0|1> ic=<0|1>"
 inline constexpr const char* kPrefixHostDone    = "ci-census host done ";     // + "ih=<0|1>"
 
@@ -57,6 +63,16 @@ void* Screen();
 int SlotCount(void* screen);
 void* SlotAt(void* screen, int i);
 bool CallNoArg(void* obj, const wchar_t* fn);
+
+// The census's six watches, asked each tick until Go: Wait while they settle, Dead (the drill ended, ABANDONED: seam
+// <name> is dead) when one settled without a hook or the bound passed. `role` is "host" / "client".
+enum class SeamGate : uint8_t { Wait, Go, Dead };
+SeamGate SeamsGate(const char* role);
+void ResetSeamsGate();
+
+// True when the open screen rebuilt since the baseline: a gen_player body ran after `gen0`, or the first slot widget is
+// no longer `slot0`.
+bool ScreenRebuilt(uint64_t gen0, void* slot0);
 
 // The integer after "key=" in a chat line's text, or false when the key is absent.
 bool IntAfter(const std::string& text, const char* key, int& out);

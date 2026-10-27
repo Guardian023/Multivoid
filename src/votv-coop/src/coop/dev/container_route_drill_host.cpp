@@ -16,7 +16,6 @@
 #include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/call.h"
 #include "ue_wrap/core/log.h"
-#include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/engine/engine_pawn.h"
@@ -26,7 +25,6 @@
 #include <cstdint>
 #include <cstdio>
 #include <string>
-#include <vector>
 
 namespace coop::dev::container_route_drill::detail {
 namespace {
@@ -41,22 +39,23 @@ namespace cs  = coop::props::container_contents_sync;
 constexpr uint64_t kFillBoundMs    = 5000;   // the spawn to the backpack's inventory binding its slot
 constexpr uint64_t kPublishBoundMs = 10000;  // the fill to the first fan-out
 constexpr uint64_t kViewBoundMs    = 5000;   // the open verb to the screen showing the backpack
-constexpr uint64_t kRegenBoundMs   = 3000;   // the raw write to the screen's rebuild, if it comes
-constexpr int      kTraceLines     = 400;
+constexpr uint64_t kJudgeBoundMs   = 15000;  // the client's R1 slice sent to the host judging it
+constexpr int      kTraceLines     = 400;   // the thrown prop's position, one line per tick, at most
 
-enum class Step : uint8_t { Arm, Fill, Publish, WaitRoutes, ViewOpen, ViewRegen, WaitBefore, WaitDone, Done };
+enum class Step : uint8_t { Arm, Fill, Publish, WaitR1, WaitJudge, WaitRoutes, ViewOpen, ViewRegen, WaitBefore, WaitDone, Done };
 Step     g_step = Step::Arm;
 uint64_t g_stepMs = 0;
 uint64_t g_next = 0;
-ue_wrap::CachedObjRef g_pack, g_s;
+ue_wrap::CachedObjRef g_pack, g_s, g_r4Prop;
 uint32_t g_eid = static_cast<uint32_t>(coop::element::kInvalidId);
-std::vector<ue_wrap::CachedObjRef> g_drivesBefore;   // the drives standing when the fixture was ready
 int      g_slotsBefore = 0;
 uint64_t g_gen0 = 0;
+void*    g_slot0 = nullptr;   // the screen's first slot widget before the raw write
 int      g_drives0 = 0;
 int      g_traceLines = 0;
 bool     g_r4Over = false;
 bool     g_opened = false;   // the open verb was sent for the host's screen
+int      g_r1Sent = 0;       // the slices the client had sent when it finished R1
 
 void Next(Step s) { g_step = s; g_stepMs = ::GetTickCount64(); }
 bool Expired(uint64_t bound) { return ::GetTickCount64() - g_stepMs > bound; }
@@ -90,30 +89,50 @@ bool PutIn(void* pack, void* item) {
     return f.Get<bool>(L"return");
 }
 
-bool WasThere(void* obj) {
-    for (const ue_wrap::CachedObjRef& b : g_drivesBefore)
-        if (b.Is(obj)) return true;
-    return false;
+// The R4 step, from the host's side: the thrown prop's copy, named by the eid the client's start line carries, from
+// that line to the client's done line. One cached-ref read per tick, with the clock the client's line carries; the
+// analysis reads the lag between them.
+void TraceR4() {
+    if (g_r4Over) return;
+    if (coop::dev::drill_chat::PollDue()) {
+        std::string rest;
+        int eid = 0;
+        if (!g_r4Prop.Get() && coop::dev::drill_chat::LiveRestOf(kPrefixR4Start, &rest) && IntAfter(rest, "eid", eid))
+            g_r4Prop.Set(coop::element::LivePropActor(static_cast<uint32_t>(eid)));
+        if (coop::dev::drill_chat::ChatHasLive(kLineR4Done)) g_r4Over = true;
+    }
+    void* prop = g_r4Prop.Get();
+    ue_wrap::FVector at{};
+    if (g_r4Over || !prop || g_traceLines >= kTraceLines || !E::TryGetActorLocation(prop, at)) return;
+    ++g_traceLines;
+    UE_LOGI("[CI-CENSUS] r4 host prop=(%.1f,%.1f,%.1f) t=%llu eid=%u", at.X, at.Y, at.Z,
+            static_cast<unsigned long long>(cen::UnixMs()), EidOf(prop));
 }
 
-// The R4 step, from the host's side: the position of each drive born since the fixture was ready (the thrown
-// prop's copy), every tick, with the clock the client's line carries. The analysis reads the lag between them.
-void TraceR4() {
-    if (g_r4Over || g_traceLines >= kTraceLines) return;
-    void* cls = ue_wrap::object_index::ClassByName(kDriveClass);
-    if (!cls) return;
-    ue_wrap::object_index::ForEachInstance(cls, [](void*, void* obj, int32_t) {
-        ue_wrap::FVector at{};
-        if (!R::IsLive(obj) || R::NameStartsWith(R::NameOf(obj), L"Default__") || WasThere(obj) ||
-            !E::TryGetActorLocation(obj, at) || g_traceLines >= kTraceLines)
-            return;
-        ++g_traceLines;
-        UE_LOGI("[CI-CENSUS] r4 host prop=(%.1f,%.1f,%.1f) t=%llu eid=%u", at.X, at.Y, at.Z,
-                static_cast<unsigned long long>(cen::UnixMs()), EidOf(obj));
-    }, nullptr);
+// The fixture's own fill, or the refill: two drives put into the backpack the way the player's hand puts one in,
+// each destroyed after the put that took, none counted as a route. Returns how many the backpack took.
+int AddDrives(void* pack) {
+    void* itemCls = R::FindClass(kDriveClass);
+    ue_wrap::FVector put{};
+    if (!itemCls || !E::TryGetActorLocation(pack, put)) return -1;
+    cen::Quiet quiet;
+    int added = 0;
+    for (int i = 0; i < kItems; ++i) {
+        void* item = E::SpawnActor(itemCls, {put.X, put.Y, put.Z + 60.f + 30.f * i});
+        if (item && PutIn(pack, item)) {
+            ++added;
+            E::DestroyActor(item);   // as every BP caller does after a put that took
+        }
+    }
+    return added;
 }
 
 void StepArm(coop::net::Session* s) {
+    switch (SeamsGate("host")) {   // the first step waits for every watch to be live
+        case SeamGate::Wait: return;
+        case SeamGate::Dead: g_step = Step::Done; return;
+        case SeamGate::Go:   break;
+    }
     if (!s->IsSlotWorldReady(1)) return;
     void* puppet = coop::puppet_drive::Puppet(1).GetActor();   // spawned once the peer's pose arrives
     ue_wrap::FVector at{};
@@ -125,9 +144,10 @@ void StepArm(coop::net::Session* s) {
     if (!pack || !ci::IsContainer(pack)) { Fail("the backpack did not spawn as a container"); return; }
     g_pack.Set(pack);
     if (!cen::IsBeforeOnly()) {
-        // Two loose drives to either side: one the client's vacuum gathers, one it throws into the backpack.
+        // Two loose drives: one at the client's vacuum intake (in its puppet's view), which the vacuum gathers, and one
+        // to the side, which it throws into the backpack. The client's mirrors arrive where the host put them.
         void* driveCls = R::FindClass(kDriveClass);
-        void* a = driveCls ? E::SpawnActor(driveCls, Offset(at, fwd, kSideAheadCm, kSideCm)) : nullptr;
+        void* a = driveCls ? E::SpawnActor(driveCls, Offset(at, fwd, kIntakeAheadCm, 0.f)) : nullptr;
         void* b = driveCls ? E::SpawnActor(driveCls, Offset(at, fwd, kSideAheadCm, -kSideCm)) : nullptr;
         if (!a || !b) { Fail("the loose drives did not spawn"); return; }
         g_s.Set(a);
@@ -143,18 +163,8 @@ void StepFill() {
         if (Expired(kFillBoundMs)) Fail("the backpack's inventory never bound its contents slot");
         return;
     }
-    void* itemCls = R::FindClass(kDriveClass);
-    ue_wrap::FVector put{};
-    if (!itemCls || !E::TryGetActorLocation(pack, put)) { Fail("the drive's class or the backpack's place is unread"); return; }
-    cen::Quiet quiet;   // the fixture's own fill is no route
-    int added = 0;
-    for (int i = 0; i < kItems; ++i) {
-        void* item = E::SpawnActor(itemCls, {put.X, put.Y, put.Z + 60.f + 30.f * i});
-        if (item && PutIn(pack, item)) {
-            ++added;
-            E::DestroyActor(item);   // as every BP caller does after a put that took
-        }
-    }
+    const int added = AddDrives(pack);   // the fixture's own fill is no route
+    if (added < 0) { Fail("the drive's class or the backpack's place is unread"); return; }
     if (added != kItems) { Fail("the backpack did not take the two drives"); return; }
     Next(Step::Publish);
 }
@@ -168,18 +178,37 @@ void StepPublish() {
         if (Expired(kPublishBoundMs)) Fail(bound ? "the backpack's contents were never published" : "the backpack has no element id");
         return;
     }
-    g_drivesBefore.clear();
-    void* cls = ue_wrap::object_index::ClassByName(kDriveClass);
-    if (cls)
-        ue_wrap::object_index::ForEachInstance(cls, [](void*, void* obj, int32_t) {
-            g_drivesBefore.emplace_back();
-            g_drivesBefore.back().Set(obj);
-        }, nullptr);
     UE_LOGI("[CI-CENSUS] drill host: a backpack holding %d drives before the client's puppet, eid=%u", kItems, g_eid);
     LogHashes("host", g_eid, "published");
     LogSizes("host", "fixture", pack);
     cen::ReportNow("host fixture");
-    Next(cen::IsBeforeOnly() ? Step::WaitBefore : Step::WaitRoutes);
+    Next(cen::IsBeforeOnly() ? Step::WaitBefore : Step::WaitR1);
+}
+
+// The client's R1 take is done: once the host has judged the slices it sent, the backpack is handed two fresh records
+// (the fixture the R2 put-back and the later reads stand on), and the client is told.
+void StepWaitR1() {
+    std::string rest;
+    int sent = 0;
+    if (!coop::dev::drill_chat::PollDue() || !coop::dev::drill_chat::LiveRestOf(kPrefixR1Done, &rest)) return;
+    if (!IntAfter(rest, "sent", sent)) return;
+    g_r1Sent = sent;
+    Next(Step::WaitJudge);
+}
+
+void StepWaitJudge() {
+    const uint64_t judged = cen::HostSlices(1, true) + cen::HostSlices(1, false);
+    if (judged < static_cast<uint64_t>(g_r1Sent)) {
+        if (Expired(kJudgeBoundMs)) Fail("the client's R1 slice was never judged");
+        return;
+    }
+    void* pack = g_pack.Get();
+    if (!pack) { Fail("the backpack died"); return; }
+    if (AddDrives(pack) != kItems) { Fail("the backpack did not take the two fresh drives"); return; }
+    UE_LOGI("[CI-CENSUS] drill host: two fresh records handed to the backpack (%d record(s) now), after %llu judged slice(s)",
+            RecordCount(g_eid), static_cast<unsigned long long>(judged));
+    coop::dev::drill_chat::Say(kLineRefilled);
+    Next(Step::WaitRoutes);
 }
 
 // Read 7: the host's own screen onto the backpack, one raw write the way an accepted client slice is applied, and
@@ -195,6 +224,7 @@ void StepViewOpen() {
     if (CV::Viewed() == pack) {
         g_slotsBefore = SlotCount(Screen());
         g_gen0 = cen::GenCalls();
+        g_slot0 = SlotAt(Screen(), 0);
         if (!cs::DevRawAppend(g_eid, /*publish=*/true)) { Fail("the raw write to the backpack did not apply"); return; }
         UE_LOGI("[CI-CENSUS] drill host: one raw write applied to eid=%u (%d record(s) now), published", g_eid,
                 RecordCount(g_eid));
@@ -205,8 +235,8 @@ void StepViewOpen() {
 }
 
 void StepViewRegen() {
-    const bool regen = cen::GenCalls() > g_gen0;
-    if (!regen && !Expired(kRegenBoundMs)) return;
+    const bool regen = ScreenRebuilt(g_gen0, g_slot0);
+    if (!regen && !Expired(kRegenWindowMs)) return;
     UE_LOGI("[CI-CENSUS] host view regen=%d slots %d -> %d", regen ? 1 : 0, g_slotsBefore, SlotCount(Screen()));
     CV::Close();
     LogHashes("host", g_eid, "after the raw write");
@@ -250,11 +280,9 @@ void StepWaitDone() {
 
 void HostTick(coop::net::Session* s) {
     if (g_step == Step::Done) return;
-    // The thrown prop's host copy is traced every tick, whatever the step; the rest is paced.
-    if (g_step >= Step::WaitRoutes && g_step <= Step::WaitBefore) {
-        if (!g_r4Over && coop::dev::drill_chat::PollDue() && coop::dev::drill_chat::ChatHasLive(kLineR4Done)) g_r4Over = true;
-        TraceR4();
-    }
+    // The thrown prop's host copy is traced every tick of the R4 step's window (the client is in R4 while the host
+    // waits for its routes); the rest is paced.
+    if (g_step == Step::WaitRoutes) TraceR4();
     if (g_step == Step::ViewOpen || g_step == Step::ViewRegen) {
         // The screen steps run each tick: the open verb and the write are separate frames.
     } else if (!Due()) {
@@ -264,6 +292,8 @@ void HostTick(coop::net::Session* s) {
     case Step::Arm:        StepArm(s); return;
     case Step::Fill:       StepFill(); return;
     case Step::Publish:    StepPublish(); return;
+    case Step::WaitR1:     StepWaitR1(); return;
+    case Step::WaitJudge:  StepWaitJudge(); return;
     case Step::WaitRoutes:
         if (Said(kLineRoutesDone)) Next(Step::ViewOpen);
         return;
@@ -281,9 +311,11 @@ void HostReset() {
     g_pack.Reset();
     g_s.Reset();
     g_eid = static_cast<uint32_t>(coop::element::kInvalidId);
-    g_drivesBefore.clear();
     g_slotsBefore = 0;
     g_gen0 = 0;
+    g_slot0 = nullptr;
+    g_r1Sent = 0;
+    g_r4Prop.Reset();
     g_drives0 = 0;
     g_traceLines = 0;
     g_r4Over = false;

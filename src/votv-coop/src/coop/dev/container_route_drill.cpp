@@ -18,6 +18,8 @@
 #include "ue_wrap/core/reflection_props.h"
 #include "ue_wrap/world/world_singleton.h"
 
+#include <windows.h>
+
 #include <cstdint>
 #include <cstring>
 #include <cstdio>
@@ -36,6 +38,7 @@ namespace cw = coop::props::container_slice_wire;
 
 size_t g_largest = 0;
 std::string g_largestClass;
+uint64_t g_seamsSince = 0;   // the first SeamsGate ask of this session
 
 }  // namespace
 
@@ -133,6 +136,34 @@ bool IntAfter(const std::string& text, const char* key, int& out) {
     return true;
 }
 
+void ResetSeamsGate() { g_seamsSince = 0; }
+
+SeamGate SeamsGate(const char* role) {
+    if (!g_seamsSince) g_seamsSince = ::GetTickCount64();
+    const char* dead = nullptr;
+    switch (coop::dev::container_route_census::SeamsState(&dead)) {
+        case coop::dev::container_route_census::Seams::Live:
+            g_seamsSince = 0;
+            return SeamGate::Go;
+        case coop::dev::container_route_census::Seams::Dead: {
+            char why[96];
+            std::snprintf(why, sizeof(why), "seam %s is dead", dead ? dead : "?");
+            Abandon(role, why);
+            return SeamGate::Dead;
+        }
+        case coop::dev::container_route_census::Seams::Pending: break;
+    }
+    if (::GetTickCount64() - g_seamsSince > kSeamBoundMs) {
+        Abandon(role, "the census's seams never settled");
+        return SeamGate::Dead;
+    }
+    return SeamGate::Wait;
+}
+
+bool ScreenRebuilt(uint64_t gen0, void* slot0) {
+    return coop::dev::container_route_census::GenCalls() > gen0 || SlotAt(Screen(), 0) != slot0;
+}
+
 int LiveDrives() {
     int n = 0;
     void* cls = ue_wrap::object_index::ClassByName(kDriveClass);
@@ -156,6 +187,7 @@ void OnDisconnect() {
     if (!coop::dev::container_route_census::IsDrill()) return;
     detail::HostReset();
     detail::ClientReset();
+    detail::ResetSeamsGate();
 }
 
 }  // namespace coop::dev::container_route_drill

@@ -13,6 +13,7 @@
 #include "coop/props/prop_act_request.h"
 #include "coop/props/prop_drive_stream.h"
 #include "coop/session/join_progress.h"
+#include "coop/props/container_contents_sync.h"  // DevRecordHashes
 #include "coop/session/net_pump.h"  // HasAnnouncedWorldReady
 #include "ue_wrap/actors/container_inventory.h"
 #include "ue_wrap/actors/container_view.h"
@@ -30,10 +31,13 @@
 #include <windows.h>
 
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <string>
+#include <utility>
+#include <vector>
 
 namespace coop::dev::container_route_drill::detail {
 namespace {
@@ -43,6 +47,7 @@ namespace R   = ue_wrap::reflection;
 namespace CV  = ue_wrap::container_view;
 namespace DV  = coop::dev::drive_drill_verbs;
 namespace cen = coop::dev::container_route_census;
+namespace cs  = coop::props::container_contents_sync;
 
 constexpr uint64_t kFindBoundMs   = 60000;   // world-ready to the fixtures' mirrors
 constexpr uint64_t kSettleBoundMs = 30000;   // the mirrors' first sight to rest and the host's drive ended
@@ -50,13 +55,13 @@ constexpr uint64_t kViewBoundMs   = 5000;    // the open verb to the screen show
 constexpr uint64_t kSliceBoundMs  = 6000;    // a route's write to the slice it sends (the sweep is 250 ms)
 constexpr uint64_t kOverlapBoundMs = 8000;   // the throw to the prop entering the overlap
 constexpr uint64_t kHostBoundMs   = 60000;   // the host's raw write, its round trip and the host's chat
-constexpr uint64_t kRegenBoundMs  = 3000;    // the publication's arrival to the screen's rebuild, if it comes
 constexpr uint64_t kBackBoundMs   = 8000;    // the refused slice to the host's truth coming back
 constexpr int      kRestChecks    = 4;
 constexpr int      kEmTakeCalls   = 4;       // the first em_take ever only initialises the screen
 
 enum class Step : uint8_t {
-    Arm, Find, Settle, Open, OpenWait, R1, R1Wait, R2, R2Call, R2Wait, R3, R3Use, R3Wait, R5, R5Use, R5Wait, R4, R4HoldWait, R4Wait,
+    Arm, Find, Settle, Open, OpenWait, R1, R1Wait, R1Done, R2Refill, R2, R2Call, R2Wait, R3, R3Use, R3Wait, R5, R5Use, R5Wait,
+    R4, R4HoldWait, R4Wait,
     ViewOpen, ViewOpenWait, ViewWait, BeforeReady, BeforeWait, BeforeTake, BeforeSettle, DoneWait, Done
 };
 Step     g_step = Step::Arm;
@@ -73,9 +78,15 @@ bool     g_noSpace0 = false;
 uint64_t g_ov0 = 0;
 int32_t  g_count0 = 0, g_countTaken = 0;
 int      g_slots0 = 0;
+void*    g_slot0 = nullptr;      // the screen's first slot widget at the view-regen baseline
 uint64_t g_gen0 = 0;
 uint64_t g_changedMs = 0;
 int      g_rb = 0, g_ic = 0;
+bool     g_refilled = false;     // the host said it handed the backpack its fresh records
+float    g_intakeCm = 0.f;       // the gathered drive's distance from the vacuum's intake
+uint64_t g_r2Add0 = 0, g_r1Add0 = 0;   // the add verbs counted under R2 / R1 before the R2 calls
+std::vector<uint64_t> g_hashes;  // the backpack's record hashes at the last baseline (R1, then R2)
+uint64_t g_r1Took = 0;           // the record R1's press took, by hash
 
 void Next(Step s) { g_step = s; g_stepMs = ::GetTickCount64(); }
 bool Expired(uint64_t bound) { return ::GetTickCount64() - g_stepMs > bound; }
@@ -118,6 +129,27 @@ bool PressSlot(void* ui, int index) {
     ue_wrap::ParamFrame f(hover);
     if (hover && f.valid() && f.Set<void*>(L"containerSlot", slot)) ue_wrap::Call(ui, f);
     return CallNoArg(slot, L"pressButton");
+}
+
+// The screen's hovered container slot cleared the way the game's own unhover does (setHoverContainerSlot with no
+// object), and read back: em_take presses the hovered slot first, so a stale hover makes the take key an R1.
+bool ClearHover(void* ui) {
+    void* fn = ui ? R::FindDispatchFunctionCached(R::ClassOf(ui), L"setHoverContainerSlot") : nullptr;
+    ue_wrap::ParamFrame f(fn);
+    const int32_t off = ui ? R::FindPropertyOffset(R::ClassOf(ui), L"hoverContainerSlot") : -1;
+    if (!fn || !f.valid() || off < 0 || !f.Set<void*>(L"containerSlot", nullptr) || !ue_wrap::Call(ui, f)) return false;
+    return *reinterpret_cast<void* const*>(static_cast<const uint8_t*>(ui) + off) == nullptr;
+}
+
+// The first hash of `a` that `b` does not hold (a record `b` lacks), or 0 when `b` holds them all.
+uint64_t FirstMissing(const std::vector<uint64_t>& a, std::vector<uint64_t> b) {
+    for (uint64_t h : a) {
+        bool found = false;
+        for (size_t i = 0; i < b.size() && !found; ++i)
+            if (b[i] == h) { b.erase(b.begin() + static_cast<std::ptrdiff_t>(i)); found = true; }
+        if (!found) return h;
+    }
+    return 0;
 }
 
 bool ReadBoolField(void* obj, const wchar_t* name, bool& out) {
@@ -239,13 +271,49 @@ void StepOpenWait() {
 void StepR1() {
     g_slice0 = cen::SlicesSent();
     g_inv0 = ue_wrap::inventory::LivePersonalStoreCount();
-    if (!PressSlot(Screen(), 0)) { Skip("R1", "the slot press did not dispatch", Step::R2); return; }
+    uint64_t whole = 0;
+    cs::DevRecordHashes(g_eid, g_hashes, whole);
+    if (!PressSlot(Screen(), 0)) { Skip("R1", "the slot press did not dispatch", Step::R1Done); return; }
     UE_LOGI("[CI-CENSUS] drill client: R1 slot pressed (route entries %llu)", static_cast<unsigned long long>(cen::RouteEntries(0)));
     Next(Step::R1Wait);
 }
 
 void StepR1Wait() {
-    if (SliceSent("R1")) Finish("R1", Step::R2);
+    if (SliceSent("R1")) Finish("R1", Step::R1Done);
+}
+
+// R1 is over: the record its press took is named by what the backpack lost, and the host is told how many slices this
+// peer has sent so it hands the backpack two fresh records only after it has judged them.
+void StepR1Done() {
+    std::vector<uint64_t> after;
+    uint64_t whole = 0;
+    cs::DevRecordHashes(g_eid, after, whole);
+    g_r1Took = FirstMissing(g_hashes, after);
+    g_count0 = RecordCount(g_eid);
+    UE_LOGI("[CI-CENSUS] drill client: R1 took record hash=%016llx, the backpack holds %d record(s)",
+            static_cast<unsigned long long>(g_r1Took), g_count0);
+    char say[64];
+    std::snprintf(say, sizeof(say), "%ssent=%llu", kPrefixR1Done, static_cast<unsigned long long>(cen::SlicesSent()));
+    coop::dev::drill_chat::Say(say);
+    Next(Step::R2Refill);
+}
+
+// The host hands the backpack two fresh records once it has judged R1's slice; the put-back goes on the base that
+// carries them, never on a stale one.
+void StepR2Refill() {
+    if (!g_refilled) {
+        if (!Said(kLineRefilled)) {
+            if (Expired(kHostBoundMs)) Fail("the host never handed the backpack its fresh records");
+            return;
+        }
+        g_refilled = true;
+    }
+    if (RecordCount(g_eid) < g_count0 + kItems) {
+        if (Expired(kHostBoundMs)) Fail("the fresh records never reached this peer's backpack");
+        return;
+    }
+    UE_LOGI("[CI-CENSUS] drill client: the backpack holds %d record(s) with the host's fresh ones", RecordCount(g_eid));
+    Next(Step::R2);
 }
 
 void StepR2() {
@@ -253,12 +321,19 @@ void StepR2() {
     const int inv = ue_wrap::inventory::LivePersonalStoreCount();
     const int32_t off = ui ? R::FindPropertyOffset(R::ClassOf(ui), L"selected") : -1;
     if (inv <= 0 || off < 0) { Skip("R2", "the player's inventory is empty or the screen has no selection", Step::R3); return; }
+    if (!ClearHover(ui)) { Skip("R2", "the screen's hovered container slot would not clear", Step::R3); return; }
     const int32_t sel = inv - 1;   // the item R1 took is the last one
     std::memcpy(static_cast<uint8_t*>(ui) + off, &sel, sizeof(sel));
     CallNoArg(ui, L"updSelect");
     g_inv0 = inv;
     g_calls = 0;
     g_slice0 = cen::SlicesSent();
+    g_r2Add0 = cen::RouteVerbs(1, false);
+    g_r1Add0 = cen::RouteVerbs(0, false);
+    uint64_t whole = 0;
+    cs::DevRecordHashes(g_eid, g_hashes, whole);
+    UE_LOGI("[CI-CENSUS] drill client: R2 the hovered slot cleared, item %d selected of %d, the backpack holds %zu record(s)",
+            sel, inv, g_hashes.size());
     Next(Step::R2Call);
 }
 
@@ -271,7 +346,17 @@ void StepR2Call() {
 
 void StepR2Wait() {
     if (!SliceSent("R2")) return;
-    UE_LOGI("[CI-CENSUS] drill client: R2 put the selected item back after %d em_take call(s)", g_calls);
+    std::vector<uint64_t> after;
+    uint64_t whole = 0;
+    cs::DevRecordHashes(g_eid, after, whole);
+    const uint64_t put = FirstMissing(after, g_hashes);
+    const uint64_t r2Adds = cen::RouteVerbs(1, false) - g_r2Add0;
+    UE_LOGI("[CI-CENSUS] drill client: R2 put the selected item back after %d em_take call(s): record hash=%016llx "
+            "(R1 took %016llx), the backpack %zu -> %zu record(s), add verbs counted R2 +%llu, R1 +%llu",
+            g_calls, static_cast<unsigned long long>(put), static_cast<unsigned long long>(g_r1Took), g_hashes.size(),
+            after.size(), static_cast<unsigned long long>(r2Adds),
+            static_cast<unsigned long long>(cen::RouteVerbs(0, false) - g_r1Add0));
+    if (!r2Adds) UE_LOGW("[CI-CENSUS] drill client: R2 put a record and the census counted no add under R2");
     LogSizes("client", "after R2", g_pack.Get());
     Finish("R2", Step::R3);
 }
@@ -312,18 +397,33 @@ void StepR5Use(void* player) {
         UE_LOGI("[CI-CENSUS] client vacuum in hand: no element id");
     else if (auto* el = coop::element::Registry::Get().Get(eid))
         UE_LOGI("[CI-CENSUS] client vacuum in hand: element id %u, type %d", eid, static_cast<int>(el->GetType()));
-    // The loose drive is brought to the vacuum's intake, so the gather has a prop to take.
-    void* drive = g_drive[0].Get();
+    // The host put one loose drive at this player's vacuum intake: the mirror nearest the intake is the one the gather
+    // takes, and the other is left for R4.
     const int32_t off = R::FindPropertyOffset(R::ClassOf(vac), L"suckin_inv");
     void* suck = off >= 0 ? *reinterpret_cast<void* const*>(static_cast<const uint8_t*>(vac) + off) : nullptr;
     ue_wrap::FVector at{};
-    if (!drive || !suck || !E::TryGetComponentLocation(suck, at) || !E::SetActorLocation(drive, at)) {
-        Skip("R5", "the vacuum's intake or the loose drive is unread", Step::R4);
-        return;
+    if (!suck || !E::TryGetComponentLocation(suck, at)) { Skip("R5", "the vacuum's intake is unread", Step::R4); return; }
+    float best = -1.f;
+    int pick = -1;
+    for (int i = 0; i < 2; ++i) {
+        ue_wrap::FVector d{};
+        if (void* m = g_drive[i].Get(); m && E::TryGetActorLocation(m, d)) {
+            const float cm = std::sqrt((d.X - at.X) * (d.X - at.X) + (d.Y - at.Y) * (d.Y - at.Y) + (d.Z - at.Z) * (d.Z - at.Z));
+            if (pick < 0 || cm < best) { best = cm; pick = i; }
+        }
     }
+    if (pick < 0) { Skip("R5", "no loose drive's mirror is readable", Step::R4); return; }
+    if (pick == 1) std::swap(g_drive[0], g_drive[1]);
+    g_intakeCm = best;
     ReadBoolField(vac, L"noSpace", g_noSpace0);
-    UE_LOGI("[CI-CENSUS] drill client: R5 the loose drive moved to the intake (%.0f,%.0f,%.0f), gather called", at.X, at.Y, at.Z);
-    if (!CallNoArg(vac, L"gather")) { Skip("R5", "gather did not dispatch", Step::R4); return; }
+    UE_LOGI("[CI-CENSUS] drill client: R5 the nearest loose drive is %.0f cm from the intake (%.0f,%.0f,%.0f), gather called",
+            best, at.X, at.Y, at.Z);
+    bool called = false;
+    {
+        cen::GatherScope own;   // the one place drill-vacuumcancel cancels the client's addObject
+        called = CallNoArg(vac, L"gather");
+    }
+    if (!called) { Skip("R5", "gather did not dispatch", Step::R4); return; }
     Next(Step::R5Wait);
 }
 
@@ -335,9 +435,11 @@ void StepR5Wait() {
     ue_wrap::FVector at{};
     const bool live = drive && R::IsLive(drive);
     if (live) E::TryGetActorLocation(drive, at);
-    UE_LOGI("[CI-CENSUS] R5 result: noSpace %d -> %d, the gathered drive %s at (%.0f,%.0f,%.0f), route entries %llu, "
-            "addObject cancelled %llu", g_noSpace0 ? 1 : 0, noSpace ? 1 : 0, live ? "still live" : "gone", at.X, at.Y, at.Z,
-            static_cast<unsigned long long>(cen::RouteEntries(4)), static_cast<unsigned long long>(cen::VacuumCancelled()));
+    UE_LOGI("[CI-CENSUS] R5 result: noSpace %d -> %d, the gathered drive (%.0f cm from the intake) %s at (%.0f,%.0f,%.0f), "
+            "route entries %llu, add verbs counted R5 %llu, R4 overlaps %llu, addObject cancelled %llu", g_noSpace0 ? 1 : 0,
+            noSpace ? 1 : 0, g_intakeCm, live ? "still live" : "gone", at.X, at.Y, at.Z,
+            static_cast<unsigned long long>(cen::RouteEntries(4)), static_cast<unsigned long long>(cen::RouteVerbs(4, false)),
+            static_cast<unsigned long long>(cen::R4Overlaps()), static_cast<unsigned long long>(cen::VacuumCancelled()));
     LogSizes("client", "the vacuum after R5", vac);
     coop::dev::drill_hand::TakeIntoHandNow(L"None", nullptr);
     Finish("R5", Step::R4);
@@ -353,6 +455,10 @@ void ThrowTheHeld(void* player) {
 void StepR4(void* player) {
     void* drive = g_drive[1].Get();
     if (!drive) { Skip("R4", "the loose drive's mirror is gone", Step::ViewOpen); return; }
+    // The host traces the thrown prop's copy from this line to the done line.
+    char say[48];
+    std::snprintf(say, sizeof(say), "%seid=%u", kPrefixR4Start, EidOf(drive));
+    coop::dev::drill_chat::Say(say);
     if (DV::Hold(player, drive)) { ThrowTheHeld(player); return; }
     // A mirror's hold is asked of the host and ends a round trip after the call.
     if (coop::prop_act_request::dev::PendingId() == 0) { Skip("R4", "the drive could not be taken into the hand", Step::ViewOpen); return; }
@@ -390,6 +496,7 @@ void StepViewOpenWait() {
     }
     g_slots0 = SlotCount(Screen());
     g_gen0 = cen::GenCalls();
+    g_slot0 = SlotAt(Screen(), 0);
     g_count0 = RecordCount(g_eid);
     g_changedMs = 0;
     LogSizes("client", "after the routes", g_pack.Get());
@@ -398,16 +505,19 @@ void StepViewOpenWait() {
     Next(Step::ViewWait);
 }
 
-// The host writes the backpack's contents once and publishes it: this peer's open screen is judged on whether the
-// applied publication rebuilt it.
+// The host writes the backpack's contents once (one record added) and publishes it: this peer's open screen is judged
+// on whether the applied publication rebuilt it. Nothing else runs in this step; its baseline follows each poll until
+// the publication lands, so the last one is taken just before the apply.
 void StepViewWait() {
-    if (RecordCount(g_eid) == g_count0) {
+    if (RecordCount(g_eid) != g_count0 + 1) {
+        g_gen0 = cen::GenCalls();
+        g_slot0 = SlotAt(Screen(), 0);
         if (Expired(kHostBoundMs)) Skip("the open screen", "the host's publication never arrived", Step::BeforeReady);
         return;
     }
     if (!g_changedMs) g_changedMs = ::GetTickCount64();
-    const bool regen = cen::GenCalls() > g_gen0;
-    if (!regen && ::GetTickCount64() - g_changedMs < kRegenBoundMs) return;
+    const bool regen = ScreenRebuilt(g_gen0, g_slot0);
+    if (!regen && ::GetTickCount64() - g_changedMs < kRegenWindowMs) return;
     UE_LOGI("[CI-CENSUS] client view regen=%d slots %d -> %d", regen ? 1 : 0, g_slots0, SlotCount(Screen()));
     LogHashes("client", g_eid, "after the host's raw write");
     LogSizes("client", "after the host's raw write", g_pack.Get());
@@ -482,6 +592,11 @@ void ClientTick(coop::net::Session*) {
         if (!coop::net_pump::HasAnnouncedWorldReady() ||
             coop::join_progress::CurrentPhase() != coop::join_progress::Phase::Idle)
             return;
+        switch (SeamsGate("client")) {   // the first step waits for every watch to be live
+            case SeamGate::Wait: return;
+            case SeamGate::Dead: g_step = Step::Done; return;
+            case SeamGate::Go:   break;
+        }
         Next(Step::Find);
         return;
     case Step::Find:         StepFind(player); return;
@@ -490,6 +605,8 @@ void ClientTick(coop::net::Session*) {
     case Step::OpenWait:     StepOpenWait(); return;
     case Step::R1:           StepR1(); return;
     case Step::R1Wait:       StepR1Wait(); return;
+    case Step::R1Done:       StepR1Done(); return;
+    case Step::R2Refill:     StepR2Refill(); return;
     case Step::R2:           StepR2(); return;
     case Step::R2Call:       StepR2Call(); return;
     case Step::R2Wait:       StepR2Wait(); return;
@@ -525,8 +642,12 @@ void ClientReset() {
     for (ue_wrap::FVector& v : g_last) v = {};
     g_rest = g_calls = g_inv0 = g_slots0 = g_rb = g_ic = 0;
     g_slice0 = g_ov0 = g_gen0 = g_changedMs = 0;
-    g_noSpace0 = false;
+    g_noSpace0 = g_refilled = false;
     g_count0 = g_countTaken = 0;
+    g_slot0 = nullptr;
+    g_intakeCm = 0.f;
+    g_r2Add0 = g_r1Add0 = g_r1Took = 0;
+    g_hashes.clear();
 }
 
 }  // namespace coop::dev::container_route_drill::detail

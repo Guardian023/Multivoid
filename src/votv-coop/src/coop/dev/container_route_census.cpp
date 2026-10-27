@@ -61,6 +61,7 @@ bool g_registered = false;
 bool g_said[6] = {};              // each seam's state said once
 uint64_t g_nextReport = 0;
 int g_quiet = 0;
+int g_gather = 0;                // the drill's own gather call is running
 
 uint8_t g_stack[kStack] = {};     // route ids of the open scopes, innermost last
 int g_depth = 0;
@@ -100,12 +101,6 @@ void Narrow(const std::wstring& w, char* out, size_t cap) {
     size_t i = 0;
     for (; i + 1 < cap && i < w.size(); ++i) out[i] = w[i] < 128 ? static_cast<char>(w[i]) : '?';
     out[i] = 0;
-}
-
-bool InStack(int route) {
-    for (int i = 0; i < g_depth; ++i)
-        if (g_stack[i] == route) return true;
-    return false;
 }
 
 int Innermost() { return g_depth > 0 ? g_stack[g_depth - 1] : -1; }
@@ -157,6 +152,9 @@ void NoteOverlap(const sg::Call& c) {
     ++g_r4Overlaps;
     void* actor = ParamPtr(c, sActor);
     void* comp = ParamPtr(c, sComp);
+    // The overlap arrives from a delayed continuation: either may be gone by the time it runs.
+    if (actor && !R::IsLive(actor)) actor = nullptr;
+    if (comp && !R::IsLive(comp)) comp = nullptr;
     const bool sim = comp && E::IsComponentSimulatingPhysics(comp);
     const bool shared = actor && coop::element::Registry::Get().EidForActor(actor) != coop::element::kInvalidId;
     char cls[kName] = "?";
@@ -182,8 +180,8 @@ void NoteOverlap(const sg::Call& c) {
 sg::Verdict ScopePre(const sg::Call& c) {
     const int route = c.tag - 1;
     if (route < 0 || route > 4) return sg::Verdict::Run;
+    if (route == kR3 && !PlayerRuns(c)) return sg::Verdict::Run;   // only the put is an R3 entry
     ++g_entries[route];
-    if (route == kR3 && !PlayerRuns(c)) return sg::Verdict::Run;
     if (route == kR4) NoteOverlap(c);
     Push(route);
     return sg::Verdict::Run;
@@ -289,11 +287,14 @@ bool IsBeforeOnly() { return Mode() == "drill-before"; }
 Quiet::Quiet() { ++g_quiet; }
 Quiet::~Quiet() { --g_quiet; }
 
+GatherScope::GatherScope() { ++g_gather; }
+GatherScope::~GatherScope() { --g_gather; }
+
 sg::Verdict OnVerb(const sg::Call& c, bool take) {
     if (!IsEnabled() || g_quiet > 0) return sg::Verdict::Run;
     const int open = Innermost();
-    // The only cancel: a client's addObject while the vacuum gathers, on the vacuum value alone.
-    const bool cancel = IsVacuumCancel() && !g_host && !take && InStack(kR5);
+    // The only cancel: a client's addObject inside the drill's own gather call, on the vacuum value alone.
+    const bool cancel = IsVacuumCancel() && !g_host && !take && g_gather > 0;
     void* inv = c.object;
     void* owner = inv ? ci::OwnerOf(inv) : nullptr;
     const uint32_t eid = (owner && ci::IsWorldInventory(inv))
@@ -407,6 +408,22 @@ uint64_t GenCalls() { return g_gen; }
 uint64_t VacuumCancelled() { return g_cancelled; }
 uint64_t HostSlices(int slot, bool accepted) {
     return slot >= 0 && slot < coop::net::kMaxPeers ? g_hostSlice[slot][accepted ? 0 : 1] : 0;
+}
+uint64_t RouteVerbs(int route, bool take) {
+    return route >= 0 && route < kRoutes ? g_cell[route][take ? 1 : 0] : 0;
+}
+
+Seams SeamsState(const char** dead) {
+    if (!g_registered) return Seams::Pending;
+    bool pending = false;
+    for (int i = 0; i < 6; ++i) {
+        const int tag = i == 5 ? kGenTag : i + 1;
+        if (sg::NameWatchLive(*kRows[i], tag)) continue;
+        if (!sg::NameWatchSettled(*kRows[i], tag)) { pending = true; continue; }
+        if (dead) *dead = kSeam[i];
+        return Seams::Dead;
+    }
+    return pending ? Seams::Pending : Seams::Live;
 }
 
 }  // namespace coop::dev::container_route_census
