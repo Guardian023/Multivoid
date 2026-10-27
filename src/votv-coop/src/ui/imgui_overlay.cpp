@@ -328,6 +328,11 @@ void OverlayFrame(const overlay_backend::FrameTarget& t) {
 }
 
 bool ImguiReady() { return g_imguiReady.load(std::memory_order_acquire); }
+
+// A backend that went down after the bring-up (Vulkan's, on a failed call of its own) stops the overlay for
+// the run: no hotkey opens a surface and CaptureActive() is false, so no input is swallowed for a UI that no
+// longer draws.
+void OverlayDown() { g_imguiReady.store(false, std::memory_order_release); }
 bool HandleWindowMessage(void* hwndRaw, unsigned msg, uintptr_t wParam, intptr_t lParam,
                          intptr_t& result) {
     HWND hwnd = static_cast<HWND>(hwndRaw);

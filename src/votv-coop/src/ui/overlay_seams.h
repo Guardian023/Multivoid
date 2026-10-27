@@ -14,6 +14,9 @@ void OverlayFrame(const overlay_backend::FrameTarget& t);
 // ImGui and the RHI backend are live (the resize bracket acts only then).
 bool ImguiReady();
 
+// The backend went down after the bring-up: the overlay is not ready any more (imgui_overlay.cpp).
+void OverlayDown();
+
 }  // namespace ui::imgui_overlay
 
 namespace ui::overlay_seams {
