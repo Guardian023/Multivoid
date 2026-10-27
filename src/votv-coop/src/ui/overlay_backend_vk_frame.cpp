@@ -456,10 +456,10 @@ void SwappedDestroy(VkDevice device, VkSwapchainKHR chain, const VkAllocationCal
 
 // ---- the slots ------------------------------------------------------------------------------------------
 
-bool HoldsLoaderPointer(const Slot& s, rhi::Handle instance) {
-    void* v = rhi::ReadSlot(s.addr);
-    return v && (v == reinterpret_cast<void*>(rhi::LoaderExport(s.name)) ||
-                 v == reinterpret_cast<void*>(rhi::GetInstanceProcAddr(instance, s.name)));
+// Is `v` the loader's own function for the Vulkan entry point `name`: its export or the instance's answer?
+bool IsLoaderPointer(void* v, const char* name, rhi::Handle instance) {
+    return v && (v == reinterpret_cast<void*>(rhi::LoaderExport(name)) ||
+                 v == reinterpret_cast<void*>(rhi::GetInstanceProcAddr(instance, name)));
 }
 
 }  // namespace
@@ -476,25 +476,30 @@ bool ResolveSlots() {
 
 bool SwapSlots() {
     const rhi::Handle instance = Ctx().st.vkInstance;
-    for (const Slot* s : {&g_present, &g_destroy}) {
-        if (!s->addr || !HoldsLoaderPointer(*s, instance)) {
+    for (Slot* s : {&g_present, &g_destroy}) {
+        void* const held = s->addr ? rhi::ReadSlot(s->addr) : nullptr;
+        if (!IsLoaderPointer(held, s->name, instance)) {
             UE_LOGE("[VK-OVERLAY] slot %s holds %p, which is not the loader's own function (another swapper?): "
                     "overlay down",
-                    s->name, s->addr ? rhi::ReadSlot(s->addr) : nullptr);
+                    s->name, held);
             return false;
         }
+        s->saved = held;
     }
-    g_present.saved = rhi::ReadSlot(g_present.addr);
-    g_destroy.saved = rhi::ReadSlot(g_destroy.addr);
     g_savedPresent = reinterpret_cast<PresentFn>(g_present.saved);  // published before the swap
     g_savedDestroy = reinterpret_cast<DestroyFn>(g_destroy.saved);
     g_present.ours = reinterpret_cast<void*>(&SwappedPresent);
     g_destroy.ours = reinterpret_cast<void*>(&SwappedDestroy);
     for (Slot* s : {&g_present, &g_destroy}) {
-        void* old = rhi::SwapSlot(s->addr, s->ours);
+        // Only while the slot still holds the value checked above: a swapper that wrote in between keeps its pointer.
+        if (!rhi::SwapSlot(s->addr, s->saved, s->ours)) {
+            UE_LOGE("[VK-OVERLAY] slot %s changed between the check and the swap (now %p, checked %p): not "
+                    "swapped, overlay down",
+                    s->name, rhi::ReadSlot(s->addr), s->saved);
+            RestoreSlots();  // a slot already swapped goes back, and the replacements pass through
+            return false;
+        }
         s->swapped = true;
-        if (old != s->saved)
-            UE_LOGW("[VK-OVERLAY] slot %s changed under the swap (saved %p, was %p)", s->name, s->saved, old);
     }
     UE_LOGI("[VK-OVERLAY] slots swapped: %s %p -> %p, %s %p -> %p", g_present.name, g_present.saved, g_present.ours,
             g_destroy.name, g_destroy.saved, g_destroy.ours);
@@ -506,9 +511,13 @@ void RestoreSlots() {
     int restored = 0;
     for (Slot* s : {&g_present, &g_destroy}) {
         if (!s->swapped) continue;
-        rhi::RestoreSlot(s->addr, s->saved);
         s->swapped = false;
-        ++restored;
+        if (rhi::RestoreSlot(s->addr, s->ours, s->saved))
+            ++restored;
+        else
+            UE_LOGW("[VK-OVERLAY] slot %s now holds %p, not our replacement: another swapper owns it, so it is left "
+                    "in place and ours passes through",
+                    s->name, rhi::ReadSlot(s->addr));
     }
     if (restored) UE_LOGI("[VK-OVERLAY] slots restored: %d", restored);
 }

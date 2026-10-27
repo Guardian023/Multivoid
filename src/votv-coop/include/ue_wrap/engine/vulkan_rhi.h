@@ -121,12 +121,14 @@ struct DeviceFns {
 // then not to be used. Resolved once per device, never on a per-frame path.
 bool FillDeviceFns(Handle instance, Handle device, DeviceFns& out, const char** missing);
 
-// Stores `ours` into the slot and returns the pointer it held (InterlockedExchangePointer). A caller
-// that replaces a slot keeps the returned pointer and calls it from its replacement.
-void* SwapSlot(std::uintptr_t slot, void* ours);
+// Stores `ours` into the slot only while it still holds `expected`, the value the caller checked
+// (InterlockedCompareExchangePointer). False: the slot held something else, and nothing was written. A
+// caller that replaces a slot calls `expected` from its replacement.
+bool SwapSlot(std::uintptr_t slot, void* expected, void* ours);
 
-// Stores `saved` back into the slot (the same exchange); the replacement may still be running on another
-// thread, so it must stay callable.
-void RestoreSlot(std::uintptr_t slot, void* saved);
+// Stores `saved` back into the slot only while it still holds `ours`. False: another swapper replaced ours
+// since, and the slot is left as it is. Either way the replacement may still be running on another thread,
+// so it must stay callable.
+bool RestoreSlot(std::uintptr_t slot, void* ours, void* saved);
 
 }  // namespace ue_wrap::vulkan_rhi

@@ -211,7 +211,7 @@ std::uintptr_t ResolveLoaderSlot(const char* name) {
     std::int32_t rel;
     std::memcpy(&rel, reinterpret_cast<const void*>(store + 3), sizeof rel);
     const std::uintptr_t slot = store + 7 + rel;
-    // SwapSlot's exchange is atomic only on an aligned pointer; the loader's table is one, so anything else is a
+    // SwapSlot's compare-exchange is atomic only on an aligned pointer; the loader's table is one, so anything else is a
     // wrong match.
     return (slot & 7) == 0 ? slot : 0;
 }
@@ -286,12 +286,12 @@ void* ReadSlot(std::uintptr_t slot) {
     return *reinterpret_cast<void* const volatile*>(slot);
 }
 
-void* SwapSlot(std::uintptr_t slot, void* ours) {
-    return ::InterlockedExchangePointer(reinterpret_cast<void* volatile*>(slot), ours);
+bool SwapSlot(std::uintptr_t slot, void* expected, void* ours) {
+    return ::InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), ours, expected) == expected;
 }
 
-void RestoreSlot(std::uintptr_t slot, void* saved) {
-    ::InterlockedExchangePointer(reinterpret_cast<void* volatile*>(slot), saved);
+bool RestoreSlot(std::uintptr_t slot, void* ours, void* saved) {
+    return ::InterlockedCompareExchangePointer(reinterpret_cast<void* volatile*>(slot), saved, ours) == ours;
 }
 
 }  // namespace ue_wrap::vulkan_rhi
