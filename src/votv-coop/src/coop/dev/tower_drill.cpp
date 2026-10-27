@@ -303,7 +303,7 @@ void Go(Step s) {
 
 void Done(const char* verdict) {
     g_step = Step::Done;
-    const auto e = coop::fuse_tower_rows::AppliedEdges();
+    const auto e = coop::fuse_tower_rows::AppliedEdges(coop::net::kFuseTowerKindCoordinate);
     UE_LOGI("[TOWER-DRILL] client DONE %s (ops sent %llu, claims unanswered %zu, reaped %llu, rolls refused %llu; "
             "applied: breaks %u repairs %u presses %u pulls %u inserts %u levers %u fails %u panels %u)", verdict,
             static_cast<unsigned long long>(coop::fuse_tower_ops::OpsSent()), coop::fuse_tower_ops::PendingClaims(),
@@ -426,7 +426,7 @@ void ClientTick(void* player) {
         // lever never moves.
         const bool leverUp = (w.flags & coop::net::kFuseTowerLeverUp) != 0;
         if (have && !RowBroken(w) && SameState(l, w) && l.leverUp == leverUp) {
-            const auto e = coop::fuse_tower_rows::AppliedEdges();
+            const auto e = coop::fuse_tower_rows::AppliedEdges(coop::net::kFuseTowerKindCoordinate);
             Pass("the host's repair crossed", l);
             if (e.pulls < 1 || e.inserts < 1 || e.repairs < 1 || e.panels < 1 ||
                 (leverUp && (e.levers < 3 || e.fails < 1 || e.presses < 1))) {

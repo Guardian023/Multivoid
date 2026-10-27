@@ -106,7 +106,7 @@ const char* CanUse(Kind kind, void* tower, uint8_t op);
 
 // HOST: nullptr when the move is allowed on the host's copy, else why not.
 const char* CanPull(Kind kind, void* tower, const View& view, int32_t slot);
-const char* CanInsert(Kind kind, const View& view, int32_t slot);
+const char* CanInsert(Kind kind, void* tower, const View& view, int32_t slot);
 
 // Whether an insert in this world keeps the fuse in the player's hand: on the two easiest difficulties the game
 // solves the puzzle with it and spends nothing, so the insert is no claim on a fuse but a verb the host runs (a
@@ -130,13 +130,17 @@ bool IsPulledFuse(void* actor);
 
 // ---- the gate ----------------------------------------------------------------------------------------------
 
-// The four script bodies a kind's gate watches: its roll, the lever's judgement (both refused on a client), a use
-// (actionOptionIndex) and an insert (playerUsedOn).
+// The script bodies a kind's gate watches: its roll, the lever's judgement (both refused on a client), a use
+// (actionOptionIndex) and an insert (playerUsedOn); and, where the kind has them, the puzzle's and the fuses' own
+// generators, watched after the fact so a client's own generation is followed by the host's kept row (null for a
+// kind that is not watched there).
 struct WatchRows {
     const ue_wrap::facts::Function* roll;
     const ue_wrap::facts::Function* judge;
     const ue_wrap::facts::Function* use;
     const ue_wrap::facts::Function* insert;
+    const ue_wrap::facts::Function* genPuzzle;
+    const ue_wrap::facts::Function* genFuses;
 };
 const WatchRows& WatchesOf(Kind kind);
 

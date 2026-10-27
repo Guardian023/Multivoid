@@ -2699,6 +2699,7 @@ inline constexpr uint8_t kFuseTowerAnim = 0x04;         // the panel moves; its 
 inline constexpr uint8_t kFuseTowerLeverMoving = 0x08;  // the confirm lever's timeline runs
 inline constexpr uint8_t kFuseTowerLeverUp = 0x10;      // the lever stands up or heads up (the radio's: plays forward)
 inline constexpr uint8_t kFuseTowerResetMoving = 0x20;  // the radio tower's reset lever runs; it plays one way
+inline constexpr uint8_t kFuseTowerAnimating = 0x80;    // the radio tower's own `animation`: every use is ignored
 struct FuseTowerRow {
     int32_t  id;          // 4
     uint8_t  flags;       // 1

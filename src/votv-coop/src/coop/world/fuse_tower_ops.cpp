@@ -243,7 +243,7 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
         refuse(FK::CanPull(kind, tower, st, p.index), Fault::Rule);
     } else if (!refusal && p.op == coop::net::kFuseTowerOpInsert) {
         if (needSpend && !spent) refuse("no fuse of the inserter's was spent at it", Fault::Rule);
-        else refuse(FK::CanInsert(kind, st, p.index), Fault::Rule);
+        else refuse(FK::CanInsert(kind, tower, st, p.index), Fault::Rule);
     } else if (!refusal && IsUse(p.op)) {
         refuse(FK::CanUse(kind, tower, p.op), Fault::Rule);
     }
@@ -412,18 +412,30 @@ sg::Verdict OnRollPre(const sg::Call&) {
     return sg::Verdict::Cancel;
 }
 
+// A parameter's offset in a watched body, one slot per kind (each kind's body is its own function): a player who
+// alternates between the towers never walks the parameter chain again.
+struct ParamSlot { void* fn = nullptr; int32_t off = -1; };
+ParamSlot g_actionCache[FK::kKinds];
+ParamSlot g_holdCache[FK::kKinds];
+
+int32_t ParamOffsetOf(ParamSlot (&cache)[FK::kKinds], void* fn, const wchar_t* name) {
+    for (ParamSlot& c : cache)
+        if (c.fn == fn) return c.off;
+    for (ParamSlot& c : cache)
+        if (!c.fn) {
+            c = {fn, R::FindParamOffset(fn, name)};
+            return c.off;
+        }
+    return R::FindParamOffset(fn, name);
+}
+
 // A client's use: a press of a button, a lever or the retract goes to the host, which runs it; a pull runs here
 // and its move is claimed as the use ends.
-int32_t g_actionOff = -1;
-void* g_actionFn = nullptr;
 sg::Verdict OnUsePre(const sg::Call& call) {
     g_pullTower = nullptr;
     if (ClientGatesOpen(call)) return sg::Verdict::Run;
-    if (g_actionFn != call.function) {
-        g_actionFn = call.function;
-        g_actionOff = R::FindParamOffset(call.function, L"action");
-    }
-    if (g_actionOff < 0 || call.locals[g_actionOff] != 4) return sg::Verdict::Run;
+    const int32_t actionOff = ParamOffsetOf(g_actionCache, call.function, L"action");
+    if (actionOff < 0 || call.locals[actionOff] != 4) return sg::Verdict::Run;
     FK::Kind kind;
     int32_t id;
     uint8_t op = 0;
@@ -457,17 +469,12 @@ void OnUsePost(const sg::Call& call) {
 
 // A client's insert above the two easiest difficulties runs here, and its move is claimed as it ends; on those two
 // it keeps the fuse and solves, so it is refused here and sent to the host like a press.
-int32_t g_holdOff = -1;
-void* g_insertFn = nullptr;
 sg::Verdict OnInsertPre(const sg::Call& call) {
     g_insertTower = nullptr;
     if (ClientGatesOpen(call)) return sg::Verdict::Run;
-    if (g_insertFn != call.function) {
-        g_insertFn = call.function;
-        g_holdOff = R::FindParamOffset(call.function, L"holdObject");
-    }
-    if (g_holdOff < 0) return sg::Verdict::Run;
-    void* held = *reinterpret_cast<void* const*>(call.locals + g_holdOff);
+    const int32_t holdOff = ParamOffsetOf(g_holdCache, call.function, L"holdObject");
+    if (holdOff < 0) return sg::Verdict::Run;
+    void* held = *reinterpret_cast<void* const*>(call.locals + holdOff);
     FK::Kind kind;
     int32_t id;
     FK::View st;
@@ -497,29 +504,49 @@ void OnInsertPost(const sg::Call& call) {
     ClientSend(s, coop::net::kFuseTowerOpInsert, kind, id, g_insertSlot);
 }
 
-// Each kind's four bodies (coop/world/fuse_tower_kind), under one tag a kind and a role.
+// A tower generated its puzzle or its fuses (the radio tower's BeginPlay, a late construction): on a client the
+// host's kept row for it applies again, since the generator wrote a fresh one over what the rows had brought.
+void OnGenPost(const sg::Call& call) {
+    if (!IsClient(Connected()) || RedOpen() || !call.object) return;
+    FK::Kind kind;
+    int32_t id;
+    if (FK::Identify(call.object, kind, id))
+        coop::fuse_tower_rows::ReapplyKept(static_cast<uint8_t>(kind), id);
+}
+
+// Each kind's bodies (coop/world/fuse_tower_kind), under one tag a kind and a role.
 struct WatchDef {
     const ue_wrap::facts::Function* row;
     int tag;
     sg::PreFn pre;
     sg::PostFn post;
 };
-constexpr int kWatchCount = FK::kKinds * 4;
-constexpr int kTags[FK::kKinds][4] = {
-    { 0x43545352 /*'CTSR'*/, 0x4354464E /*'CTFN'*/, 0x4354414F /*'CTAO'*/, 0x43545555 /*'CTUU'*/ },
-    { 0x52545352 /*'RTSR'*/, 0x5254464E /*'RTFN'*/, 0x5254414F /*'RTAO'*/, 0x52545555 /*'RTUU'*/ },
+constexpr int kRoles = 6;
+constexpr int kTags[FK::kKinds][kRoles] = {
+    { 0x43545352 /*'CTSR'*/, 0x4354464E /*'CTFN'*/, 0x4354414F /*'CTAO'*/, 0x43545555 /*'CTUU'*/,
+      0x43544750 /*'CTGP'*/, 0x43544746 /*'CTGF'*/ },
+    { 0x52545352 /*'RTSR'*/, 0x5254464E /*'RTFN'*/, 0x5254414F /*'RTAO'*/, 0x52545555 /*'RTUU'*/,
+      0x52544750 /*'RTGP'*/, 0x52544746 /*'RTGF'*/ },
 };
-WatchDef g_watches[kWatchCount];
+WatchDef g_watches[FK::kKinds * kRoles];
+int  g_watchCount = 0;  // the rows a kind has; the rest of its roles are null
 bool g_registered = false;
 bool g_settled = false;
 
 void BuildWatches() {
+    g_watchCount = 0;
     for (int k = 0; k < FK::kKinds; ++k) {
         const FK::WatchRows& r = FK::WatchesOf(static_cast<FK::Kind>(k));
-        g_watches[k * 4 + 0] = { r.roll,   kTags[k][0], &OnRollPre,   nullptr };
-        g_watches[k * 4 + 1] = { r.judge,  kTags[k][1], &OnRollPre,   nullptr };
-        g_watches[k * 4 + 2] = { r.use,    kTags[k][2], &OnUsePre,    &OnUsePost };
-        g_watches[k * 4 + 3] = { r.insert, kTags[k][3], &OnInsertPre, &OnInsertPost };
+        const WatchDef defs[kRoles] = {
+            { r.roll,      kTags[k][0], &OnRollPre,   nullptr },
+            { r.judge,     kTags[k][1], &OnRollPre,   nullptr },
+            { r.use,       kTags[k][2], &OnUsePre,    &OnUsePost },
+            { r.insert,    kTags[k][3], &OnInsertPre, &OnInsertPost },
+            { r.genPuzzle, kTags[k][4], nullptr,      &OnGenPost },
+            { r.genFuses,  kTags[k][5], nullptr,      &OnGenPost },
+        };
+        for (const WatchDef& d : defs)
+            if (d.row) g_watches[g_watchCount++] = d;
     }
 }
 
@@ -531,10 +558,12 @@ void Install(coop::net::Session* session) {
     g_registered = true;
     coop::remote_prop::AddDestroyListener(&OnDestroyHeard);
     BuildWatches();
-    for (const WatchDef& w : g_watches)
+    for (int i = 0; i < g_watchCount; ++i) {
+        const WatchDef& w = g_watches[i];
         if (!sg::WatchName(*w.row, w.tag, w.pre, w.post))
             UE_LOGE("fuse_tower: the script-body gate refused the watch on %ls::%ls -- that act stays each peer's own",
                     w.row->Class(), w.row->Name());
+    }
 }
 
 void Tick() {
@@ -542,17 +571,19 @@ void Tick() {
     if (g_settled || !g_registered) return;
     sg::ResolvePendingNames();
     int live = 0, settled = 0;
-    for (const WatchDef& w : g_watches) {
+    for (int i = 0; i < g_watchCount; ++i) {
+        const WatchDef& w = g_watches[i];
         if (sg::NameWatchLive(*w.row, w.tag)) ++live;
         if (sg::NameWatchSettled(*w.row, w.tag)) ++settled;
     }
-    if (live == kWatchCount) {
+    if (live == g_watchCount) {
         g_settled = true;
-        UE_LOGI("fuse_tower: the towers' gates are live (the roll, the lever's judgement, a use, an insert)");
-    } else if (settled == kWatchCount) {
+        UE_LOGI("fuse_tower: the towers' gates are live (the roll, the lever's judgement, a use, an insert, the "
+                "radio tower's generators)");
+    } else if (settled == g_watchCount) {
         g_settled = true;
-        UE_LOGE("fuse_tower: %d of %d tower gates are dead -- those acts stay each peer's own", kWatchCount - live,
-                kWatchCount);
+        UE_LOGE("fuse_tower: %d of %d tower gates are dead -- those acts stay each peer's own", g_watchCount - live,
+                g_watchCount);
     }
 }
 

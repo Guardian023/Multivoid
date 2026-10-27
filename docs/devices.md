@@ -305,9 +305,11 @@ tower's own use with the look-at answered and then gives its own player's look-a
 insert moves a fuse into or out of the player's own hand, so the client's own game makes it and
 claims the slot. The host takes a pull when its copy has the panel open, the lever at rest and that
 fuse blown, and an insert when the slot is empty and, above the two easiest difficulties, the host saw
-that player spend a good fuse at the tower; it refuses one otherwise, answering in the rows, and a refused pull's fuse is taken back
-out of the puller's hand, a refused insert's fuse given back where the player stands. Every act is
-judged within reach of the part it acts on, in the player's order, at a few a second.
+that player spend a good fuse at the tower; it refuses one otherwise, answering in the rows to the
+sender alone, and a refused pull's fuse is taken back out of the puller's hand, a refused insert's
+fuse given back where the player stands. A press or a lever the tower's own gates would ignore on the
+host's copy is refused the same way, and a dead player's acts are. Every act is judged within reach of
+the part it acts on, in the player's order, at a few a second.
 
 The radio tower is the second kind (`coop/world/fuse_tower_kind` holds what differs between the two). It
 is one actor, the gamemode's `radiotower`, and the drone's shop run reads its broken flag on the host, so
@@ -330,7 +332,10 @@ tower also writes the slot, the coordinate tower does not): a client's insert th
 gate and sent to the host like a press, which judges reach and the slot on its copy and runs the solve,
 its rows answering. No spend is asked, since the game spends none, so a client holding no fuse can
 solve an easy tower. A client keeps the host's last row of each tower and applies it when that tower
-resolves, looking it up again once a second meanwhile.
+resolves, looking it up again once a second meanwhile; a tower's first applied row is silent in every
+sound, and a tower that is another object than the row last went to starts over as a first row. The
+radio tower regenerates its puzzle and fuses at construction and at BeginPlay, so a client watches both
+generators and puts the kept row back onto the tower after each.
 
 ### The drone
 

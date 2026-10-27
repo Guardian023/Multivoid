@@ -42,10 +42,14 @@ UE_FACT_FN(kRowRadioRoll, "fuse_tower_kind", L"radiotower_C", L"scramble", Decla
 UE_FACT_FN(kRowRadioJudge, "fuse_tower_kind", L"radiotower_C", L"TL_lever__FinishedFunc", Declared);
 UE_FACT_FN(kRowRadioUse, "fuse_tower_kind", L"radiotower_C", L"actionOptionIndex", Declared);
 UE_FACT_FN(kRowRadioInsert, "fuse_tower_kind", L"radiotower_C", L"playerUsedOn", Declared);
+// The radio tower generates its puzzle and its fuses at construction and at BeginPlay (radiotower.cpp:1061,
+// :488-493); a client follows each with the host's kept row.
+UE_FACT_FN(kRowRadioGenPuzzle, "fuse_tower_kind", L"radiotower_C", L"genPuzzle", Declared);
+UE_FACT_FN(kRowRadioGenFuses, "fuse_tower_kind", L"radiotower_C", L"genFuses", Declared);
 
 const WatchRows kWatches[kKinds] = {
-    { &kRowCoordRoll, &kRowCoordJudge, &kRowCoordUse, &kRowCoordInsert },
-    { &kRowRadioRoll, &kRowRadioJudge, &kRowRadioUse, &kRowRadioInsert },
+    { &kRowCoordRoll, &kRowCoordJudge, &kRowCoordUse, &kRowCoordInsert, nullptr, nullptr },
+    { &kRowRadioRoll, &kRowRadioJudge, &kRowRadioUse, &kRowRadioInsert, &kRowRadioGenPuzzle, &kRowRadioGenFuses },
 };
 
 bool LightBit(uint32_t lights, int i) { return ((lights >> i) & 1u) != 0; }
@@ -103,7 +107,15 @@ void CoordApply(void* tower, const FuseTowerRow& c, const ApplyCtx& x) {
     }
     if (lightsDiffer) CT::WriteLights(tower, lights, c.lightCount);
     if (l.isBroken && !broken) {
-        CT::SolvePuzzle(tower);  // the repair: every light lit, painted, its success sound, isBroken off, painted
+        if (live) {
+            CT::SolvePuzzle(tower);  // the repair: every light lit, painted, its success sound, isBroken off, painted
+        } else {
+            // The tower's first row is state, not an act: solvePuzzle's body without its sound (@2098..@2105); the
+            // lights are the row's, written above.
+            CT::WriteBroken(tower, false);
+            CT::UpdPuzzle(tower);
+            CT::UpdBroken(tower);
+        }
         ++edges.repairs;
         UE_LOGI("fuse_tower: tower %d repaired as the host's", c.id);
     } else if (!l.isBroken && broken) {
@@ -197,11 +209,14 @@ bool RadioReadRow(void* tower, FuseTowerRow& w) {
     w = FuseTowerRow{};
     w.id = 0;
     w.kind = coop::net::kFuseTowerKindRadio;
-    // The confirm lever's bits are its timeline's: running, and running forward. The reset lever plays one way.
+    // The confirm lever's bits are its timeline's: running, and running forward. The reset lever plays one way. The
+    // tower's `animation` is its own flag: the confirm lever's forward end clears it before the judgement, so it is
+    // false while a failed lever runs back.
     w.flags = static_cast<uint8_t>((st.isBroken ? coop::net::kFuseTowerBroken : 0) |
                                    (st.leverPlaying ? coop::net::kFuseTowerLeverMoving : 0) |
                                    (st.leverPlaying && st.leverForward ? coop::net::kFuseTowerLeverUp : 0) |
-                                   (st.resetPlaying ? coop::net::kFuseTowerResetMoving : 0));
+                                   (st.resetPlaying ? coop::net::kFuseTowerResetMoving : 0) |
+                                   (st.animation ? coop::net::kFuseTowerAnimating : 0));
     w.fuseCount = st.fuseCount;
     for (int i = 0; i < st.fuseCount; ++i) w.fuses[i] = st.fuses[i];
     w.lightCount = st.cellCount;
@@ -233,7 +248,12 @@ void RadioApply(void* tower, const FuseTowerRow& c, const ApplyCtx& x) {
     }
     if (cellsDiffer) RT::WriteCells(tower, cells, c.lightCount);
     if (l.isBroken && !broken) {
-        RT::CompleteMinigame(tower);  // every cell lit, painted, tryToFix: isBroken off, its success sound
+        if (live) {
+            RT::CompleteMinigame(tower);  // every cell lit, painted, tryToFix: isBroken off, its success sound
+        } else {
+            RT::SetBroken(tower, false, false);  // the tower's first row is state, not an act: no sound
+            RT::UpdPuzzle(tower);
+        }
         ++edges.repairs;
         UE_LOGI("fuse_tower: the radio tower repaired as the host's");
     } else if (!l.isBroken && broken) {
@@ -285,12 +305,15 @@ void RadioApply(void* tower, const FuseTowerRow& c, const ApplyCtx& x) {
         RT::PlayLever(tower, RT::Lever::Confirm, leverUp);
         ++edges.levers;
     }
-    if (resetMoving && !resetWas) {
-        if (live) RT::Play(tower, RT::Sound::Lever);
+    // The reset lever's timeline event plays the scramble and click sounds, which a tower's first row must not
+    // make: a lever already running when the tower first reads is left at rest, and `animation` below clears with
+    // the host's next row.
+    if (resetMoving && !resetWas && live) {
+        RT::Play(tower, RT::Sound::Lever);
         RT::PlayLever(tower, RT::Lever::Reset, true);
         ++edges.levers;
     }
-    RT::WriteAnimation(tower, leverMoving || resetMoving);
+    RT::WriteAnimation(tower, (c.flags & coop::net::kFuseTowerAnimating) != 0);
 }
 
 Look RadioReadUse(void* tower, uint8_t& op, int32_t& index) {
@@ -453,7 +476,18 @@ const char* CanPull(Kind kind, void* tower, const View& view, int32_t slot) {
     return nullptr;
 }
 
-const char* CanInsert(Kind, const View& view, int32_t slot) {
+const char* CanInsert(Kind kind, void* tower, const View& view, int32_t slot) {
+    // The radio tower's insert is ignored while a lever runs (radiotower playerUsedOn :655); the fuse slots of a
+    // coordinate tower are only there to reach while its panel stands still.
+    if (kind == Kind::Radio) {
+        RT::State st;
+        if (!RT::Read(tower, st)) return "the tower does not read";
+        if (st.animation) return "its lever is moving";
+    } else {
+        CT::State st;
+        if (!CT::Read(tower, st)) return "the tower does not read";
+        if (st.isAnim) return "its panel is moving";
+    }
     if (slot < 0 || slot >= view.fuseCount || view.fuses[slot] != 0) return "that fuse slot is not empty on the host";
     return nullptr;
 }

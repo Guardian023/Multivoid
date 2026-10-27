@@ -26,7 +26,7 @@ void Tick();
 
 // The receive edge of the host's rows (router: event_dispatch_world.cpp): a row no tower sends is dropped, with
 // one warning per kind of fault: a kind that is neither tower, more lights than a puzzle has, more fuses than a
-// row holds, panel flags on the radio tower's row.
+// row holds, panel flags or an id on the radio tower's row, a fuse byte past blown.
 void AdmitRows(coop::net::FuseTowerPayload& p);
 
 // CLIENT: the host's rows, admitted.
@@ -48,13 +48,17 @@ void HostAnswerFlush(uint8_t slot);
 // CLIENT: the rows are being run on this client's towers; a use then is theirs, not a player's.
 bool Applying();
 
-// [dev] the tower drill's reads, on a client: the host's last rows (false before any), and the changes it applied as
-// the tower's own graph makes them.
+// [dev] the tower drill's reads, on a client: the host's last rows (false before any), and the changes it applied
+// to each kind of tower as the tower's own graph makes them.
 bool LastRows(coop::net::FuseTowerPayload& out);
 struct Edges {
     uint32_t breaks = 0, repairs = 0, presses = 0, pulls = 0, inserts = 0, levers = 0, fails = 0, panels = 0;
 };
-Edges AppliedEdges();
+Edges AppliedEdges(uint8_t kind);
+
+// CLIENT: the kept row of the tower (kind, id) goes onto it again, as the tower's first and so silently, at the next
+// tick: the tower generated its puzzle or its fuses afresh (the generators are watched in fuse_tower_ops).
+void ReapplyKept(uint8_t kind, int32_t id);
 
 void OnDisconnect();
 
