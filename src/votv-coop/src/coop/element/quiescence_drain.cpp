@@ -20,7 +20,7 @@
 #include "coop/props/pile_spawn_bind.h"  // AdoptOwnNative (the shared bind primitive)
 #include "coop/props/save_time_retire_util.h"  // FindExactMatch, UnmarkAndDestroy
 #include "coop/config/config.h"           // ResolveFlag
-#include "coop/dev/pile_defer_drill.h"     // [dev] the pile deferral drill's give-up count and forced give-up
+#include "coop/dev/pile_defer_drill.h"     // [dev] the pile deferral drill's give-up count
 #include "coop/dev/pile_key_probe.h"      // [MEASURE sync-order-wp5, temporary] the key against the native, per pass
 #include "ue_wrap/engine/engine.h"
 #include "ue_wrap/core/log.h"
@@ -273,12 +273,6 @@ int SweepReconcileSaveTimeTwins() {
             }
             resolvedEids.push_back(eid);
             continue;
-        }
-        // [dev] The pile deferral drill's give-up arm destroys the native of one deferred eid it finds here, to stand in
-        // for a native that never loaded; the eid then takes the miss path below with the candidate consumed.
-        if (idx >= 0 && !bound && coop::dev::pile_defer_drill::ForceGiveUp(eid, natives[idx].actor)) {
-            consumedFlags[idx] = true;
-            idx = -1;
         }
         if (idx >= 0) {
             if (confirmed) {

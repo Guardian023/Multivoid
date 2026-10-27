@@ -12,6 +12,7 @@
 #include "coop/element/quiescence_drain.h"  // ArmPendingSaveTimeTwin (the spawn mechanism CAPTURES into the order owner)
 #include "coop/config/config.h"  // ResolveFlag -- the [PILE-DELTA] probe flag (multivoid.ini [dev], not bats/env)
 #include "coop/dev/pile_defer_drill.h"  // [dev] the pile deferral drill's counts
+#include "coop/dev/pile_late_load.h"    // [dev] the late-load seam's chosen clump
 #include "coop/dev/pile_key_probe.h"  // [MEASURE sync-order-wp5, temporary] the key against the native, at the bind miss
 #include "coop/element/registry.h"  // Element::SetSaveNative on the bound native
 #include "coop/props/join_membership_sweep.h"  // RecordClaimIfTracking (a bound native is expressed this bracket)
@@ -218,6 +219,7 @@ void* BindOwnSavePile(const coop::net::PropSpawnPayload& payload,
             if (!row || !row->GetActor() || !R::IsLiveByIndex(row->GetActor(), row->GetInternalIdx())) {
                 coop::element::bind_wait::MarkDeferred(payload.elementId, why);
                 coop::dev::pile_defer_drill::NoteDeferred(payload.elementId);   // [dev] the pile deferral drill's count
+                coop::dev::pile_late_load::NoteDeferred(payload.elementId, matchPos, wantClump);   // [dev] the late-load seam
             }
         } else {
             UE_LOGW("[PILE] BIND eid=%u at (%.1f,%.1f,%.1f) -- %s, and the expression carries no "

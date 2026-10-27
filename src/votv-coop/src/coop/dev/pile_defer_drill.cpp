@@ -1,5 +1,5 @@
 // coop/dev/pile_defer_drill.cpp -- see coop/dev/pile_defer_drill.h. The client's counts of its deferred piles, its
-// window and its verdict, the forced give-up, and the tick that hands the host's reports to the judge
+// window and its verdict, and the tick that hands the host's reports to the judge
 // (pile_defer_drill_host.cpp).
 
 #include "coop/dev/pile_defer_drill.h"
@@ -7,6 +7,7 @@
 #include "pile_defer_drill_detail.h"  // co-located private header (src tree, not include/)
 
 #include "coop/dev/pile_defer_report.h"
+#include "coop/dev/pile_late_load.h"
 #include "coop/element/bind_wait.h"
 #include "coop/element/registry.h"
 #include "coop/net/net_clock.h"
@@ -14,7 +15,6 @@
 #include "coop/net/session.h"
 #include "coop/props/join_membership_sweep.h"
 #include "coop/props/prop_element_tracker.h"
-#include "coop/props/save_time_retire_util.h"
 #include "coop/session/join_progress.h"
 
 #include "ue_wrap/actors/prop.h"
@@ -33,6 +33,7 @@ namespace {
 namespace BW = coop::element::bind_wait;
 namespace R = ue_wrap::reflection;
 namespace Rep = coop::dev::pile_defer_report;
+namespace LateLoad = coop::dev::pile_late_load;
 
 // The sweep makes 40 passes at 250 ms from the join's end; this is longer, and the quiescence signal is also asked.
 constexpr uint64_t kWindowMs = 20000;
@@ -49,9 +50,6 @@ struct Deferred {
 std::unordered_map<uint32_t, Deferred> g_deferred;
 
 uint32_t g_convertsAtDeferred = 0, g_convertsHeld = 0;
-
-uint32_t g_forcedEid = 0;
-bool g_heldAtForce = false;
 
 bool g_leftIdle = false, g_done = false;
 uint64_t g_idleAtMs = 0;
@@ -98,6 +96,7 @@ void Window(coop::net::Session& session) {
     const uint32_t coalesced = BW::CoalescedOf(kConvertKind);   // converts a newer convert replaced: not in held
     const uint32_t heldGivenUp = BW::GivenUpOf(kConvertKind), neverBound = BW::DropsNeverBound();
     const unsigned orphans = CountOrphans();
+    const uint32_t chosen = LateLoad::ChosenEid();
 
     std::vector<coop::net::DevParityEntry> rows;
     detail::CollectTrash(rows, /*mirrorsOnly=*/true);
@@ -112,20 +111,17 @@ void Window(coop::net::Session& session) {
     if (orphans > 0) fails.Add("orphans=%u, expected 0", orphans);
     if (Rep::ArmOf() == Rep::Arm::Check) {
         if (gaveUp > 0) fails.Add("gaveup=%u in arm check, expected 0", gaveUp);
-    } else {
-        if (!g_forcedEid) {
-            fails.Add("no deferred pile's native was found by the sweep to destroy");
-        } else {
-            const auto it = g_deferred.find(g_forcedEid);
-            const bool gaveUpIt = it != g_deferred.end() && it->second.gaveUpAt != 0;
-            const bool materialised =
-                coop::element::LivePropActor(static_cast<coop::element::ElementId>(g_forcedEid)) != nullptr;
-            const bool stillHeld = BW::Holds(g_forcedEid, kConvertKind);
-            if (!gaveUpIt) fails.Add("eid=%u was forced but the sweep did not give up on it", g_forcedEid);
-            if (!g_heldAtForce) fails.Add("eid=%u had no convert held to replay", g_forcedEid);
-            else if (stillHeld) fails.Add("eid=%u converts did not replay", g_forcedEid);
-            if (!materialised) fails.Add("eid=%u ends with no mirror bound to it", g_forcedEid);
-        }
+    } else if (!LateLoad::On()) {
+        fails.Add("arm giveup needs pile_late_load=1, which destroys the native that never loads");
+    }
+    if (LateLoad::On() && !chosen) fails.Add("the late-load seam's clump never deferred");
+    if (LateLoad::On() && chosen && Rep::ArmOf() == Rep::Arm::Giveup) {
+        const auto it = g_deferred.find(chosen);
+        const bool gaveUpIt = it != g_deferred.end() && it->second.gaveUpAt != 0;
+        const bool materialised = coop::element::LivePropActor(static_cast<coop::element::ElementId>(chosen)) != nullptr;
+        if (!gaveUpIt) fails.Add("eid=%u was destroyed but the sweep did not give up on it", chosen);
+        if (BW::Holds(chosen, kConvertKind)) fails.Add("eid=%u converts did not replay", chosen);
+        if (!materialised) fails.Add("eid=%u ends with no mirror bound to it", chosen);
     }
     UE_LOGI("[PILE-DEFER] client DONE deferred=%u bound=%u gaveup=%u held=%u replayed=%u heldGivenUp=%u coalesced=%u "
             "neverBound=%u orphans=%u", deferred, bound, gaveUp, held, replayed, heldGivenUp, coalesced, neverBound, orphans);
@@ -177,8 +173,6 @@ void OnDisconnect() {
     Rep::OnDisconnect();
     g_deferred.clear();
     g_convertsAtDeferred = g_convertsHeld = 0;
-    g_forcedEid = 0;
-    g_heldAtForce = false;
     g_leftIdle = g_done = false;
     g_idleAtMs = 0;
 }
@@ -215,17 +209,6 @@ void NoteConvertAtDeferred(bool held) {
     if (!Armed()) return;
     ++g_convertsAtDeferred;
     if (held) ++g_convertsHeld;
-}
-
-bool ForceGiveUp(uint32_t eid, void* native) {
-    if (Rep::ArmOf() != Rep::Arm::Giveup || !native) return false;
-    if (g_forcedEid) return eid == g_forcedEid;   // the same eid at a later pass: the destroyed native stays refused
-    if (g_deferred.find(eid) == g_deferred.end()) return false;
-    g_forcedEid = eid;
-    g_heldAtForce = BW::Holds(eid, kConvertKind);
-    UE_LOGI("[PILE-DEFER] client forced give-up eid=%u", eid);
-    coop::save_time_retire_util::UnmarkAndDestroy(native);
-    return true;
 }
 
 }  // namespace coop::dev::pile_defer_drill

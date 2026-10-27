@@ -4,6 +4,7 @@
 
 #include "coop/config/config.h"
 #include "coop/config/config_registry.h"
+#include "coop/dev/pile_late_load.h"          // [dev] the late-load seam keeps one held clump aside
 #include "coop/element/element.h"
 #include "coop/net/session.h"
 #include "coop/props/prop_element_tracker.h"  // GetPropElementIdForActor (a bound or minted actor is not a bare load spawn)
@@ -77,6 +78,7 @@ void OnFinishSpawn(void* /*context*/, void* /*srcObj*/, void* result) {
     if (PT::GetPropElementIdForActor(result) != coop::element::kInvalidId) return;
     Hold(result);
     g_held[result].Set(result);
+    coop::dev::pile_late_load::NoteLoadCaught(result);   // [dev] the late-load seam (a cached bool read when off)
     if (++g_heldCount == 1 || g_heldCount % 100 == 0)
         UE_LOGI("trash_native_hold: held save-loaded clump %p at its load spawn (#%u) -- tick, physics off, "
                 "until the bind or the divergence sweep", result, g_heldCount);

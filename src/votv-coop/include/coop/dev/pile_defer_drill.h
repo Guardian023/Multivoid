@@ -9,8 +9,9 @@
 // DONE line with the counts. The HOST compares each reported pose with its own pile of that eid (a pile at rest
 // within 2 cm and 2 deg; a moving one is listed, not judged), names any pile the joiner lacks, and prints PASS or
 // FAIL lines, then its DONE line, once per report (once per join).
-// Arm giveup destroys the native of the first deferred pile the sweep finds, to stand in for one that never loaded;
-// the sweep must give up on it, its held converts must replay unbound, and the pile must stand at the host's pose.
+// Arm giveup (with pile_late_load=1, the late-load seam) destroys the kept-aside clump once its row defers, to stand
+// in for a native that never loaded; the sweep must give up on it, its held converts must replay unbound, and the pile
+// must stand at the host's pose.
 // Game thread.
 
 #pragma once
@@ -39,10 +40,5 @@ void NoteGivenUp(uint32_t eid);
 
 // CLIENT, remote_prop_convert: a convert met a deferred eid with no actor; `held` says bind_wait took it.
 void NoteConvertAtDeferred(bool held);
-
-// CLIENT, quiescence_drain: the sweep matched an unbound `native` to the deferred `eid`. In arm giveup the first
-// such native is destroyed and this answers true, now and at every later pass for that eid, so the sweep does not
-// bind it. False in every other case.
-bool ForceGiveUp(uint32_t eid, void* native);
 
 }  // namespace coop::dev::pile_defer_drill
