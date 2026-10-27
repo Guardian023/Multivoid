@@ -12,6 +12,8 @@
 
 #include <cstdint>
 
+struct ImTextureRef;  // imgui.h: what a draw call takes to name a texture
+
 namespace ui::overlay_backend {
 
 enum class Rhi : uint8_t;
@@ -62,15 +64,21 @@ void RenderDrawData(const FrameTarget& t);
 void OnResizeRelease(Rhi rhi);
 void OnResizeRecreate(const FrameTarget& t);
 
-// Decode an image file (PNG/BMP/JPG via WIC) into a device texture usable as
-// an ImTextureID. Render thread only. The caller caches the result and MUST
-// return it through DestroyTexture when done (a dropped id leaks the texture).
+// Decode an image file (PNG/BMP/JPG via WIC) into a device texture. Render thread only. The result is
+// the backend's handle for it, not a draw argument: draw it through TextureRef. The caller caches the
+// handle and MUST return it through DestroyTexture when done (a dropped handle leaks the texture).
 void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH);
+
+// The ImGui texture reference to draw a handle from CreateTextureFromImageFile with, asked again on
+// every frame it is drawn: a backend that rebuilds its device objects (the Vulkan re-init) gives the
+// texture a new device id behind the same handle, and the reference follows it. A handle this backend
+// does not hold yields an empty reference. Render thread only.
+ImTextureRef TextureRef(void* handle);
 
 // Release a texture returned by CreateTextureFromImageFile. Render thread
 // only. DX11: releases the SRV (the texture rides its refcount). null is a
 // no-op.
-void DestroyTexture(void* id);
+void DestroyTexture(void* handle);
 
 // Install the swapchain-creation timing probe (the DX12 stage-1 measurement:
 // does our boot precede the game's swapchain creation, and what queue arrives

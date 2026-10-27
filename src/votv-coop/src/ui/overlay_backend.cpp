@@ -11,6 +11,8 @@
 #include "overlay_backend_vk.h"
 #include "ue_wrap/core/log.h"
 
+#include "imgui.h"
+
 #include <windows.h>
 #include <wincodec.h>  // WIC: the skins-browser preview decode (PNG/BMP -> BGRA)
 
@@ -100,8 +102,13 @@ void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH) {
     return g_ops ? g_ops->textureFromFile(path, outW, outH) : nullptr;
 }
 
-void DestroyTexture(void* id) {
-    if (g_ops) g_ops->destroyTexture(id);
+ImTextureRef TextureRef(void* handle) {
+    if (g_ops && g_ops->textureRef) return g_ops->textureRef(handle);
+    return ImTextureRef(static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(handle)));
+}
+
+void DestroyTexture(void* handle) {
+    if (g_ops) g_ops->destroyTexture(handle);
 }
 
 void InstallCreationProbe() { dx12_capture::InstallCreationProbe(); }

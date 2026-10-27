@@ -584,14 +584,21 @@ void* CreateTextureFromImageFile(const wchar_t* path, int* outW, int* outH) {
     *slot = {tex, false};
     if (outW) *outW = static_cast<int>(w);
     if (outH) *outH = static_cast<int>(h);
-    return reinterpret_cast<void*>(static_cast<std::uintptr_t>(tex->TexID));
+    // The handle is the ImTextureData itself: its device id changes when a re-init rebuilds the backend, so
+    // callers draw through TextureRef and never keep the id.
+    return tex;
 }
 
-void DestroyTexture(void* id) {
-    if (!id) return;
-    const ImTextureID want = static_cast<ImTextureID>(reinterpret_cast<std::uintptr_t>(id));
+ImTextureRef TextureRef(void* handle) {
+    for (const UserTexture& u : g_textures)
+        if (u.tex && !u.retiring && u.tex == handle) return u.tex->GetTexRef();
+    return ImTextureRef();
+}
+
+void DestroyTexture(void* handle) {
+    if (!handle) return;
     for (UserTexture& u : g_textures) {
-        if (!u.tex || u.retiring || u.tex->TexID != want) continue;
+        if (!u.tex || u.retiring || u.tex != handle) continue;
         u.tex->WantDestroyNextFrame = true;  // ImGui destroys it once no frame in flight uses it
         u.retiring = true;
         return;
@@ -640,7 +647,7 @@ void RingReset() { g_ring = 0; }
 const BackendOps& Ops() {
     static const BackendOps ops = {
         &Capture, &Abandon, &InitRenderer, &NewFrame, &EnsureTarget, &Render, &InvalidateDeviceObjects,
-        nullptr, nullptr, &CreateTextureFromImageFile, &DestroyTexture, "Vulkan"};
+        nullptr, nullptr, &CreateTextureFromImageFile, &DestroyTexture, "Vulkan", &TextureRef};
     return ops;
 }
 

@@ -13,6 +13,7 @@
 #include <vector>
 
 struct IDXGISwapChain;
+struct ImTextureRef;
 
 namespace ui::overlay_backend {
 
@@ -57,6 +58,8 @@ struct BackendOps {
     void* (*textureFromFile)(const wchar_t*, int*, int*);
     void  (*destroyTexture)(void*);
     const char* name;
+    // Null: the handle textureFromFile returned is the ImTextureID itself (the DX backends).
+    ImTextureRef (*textureRef)(void*);
 };
 
 namespace detail {
