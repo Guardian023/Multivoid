@@ -45,12 +45,22 @@ void ReleaseRTV() {
 
 bool CaptureDevice(const FrameTarget& t) {
     IDXGISwapChain* sc = t.dxgi;
-    // Silent on a non-DX11 swapchain: the DISPATCHER owns the RHI verdict and
-    // the DX12 path's own logging (the old one-shot "NOT DX11" WARN moved
-    // there, replaced by the stage-1 detection lines -- RULE 2).
+    // The D3D11 present seam fired, so a swapchain without an ID3D11Device means the seam's AOB
+    // landed on the wrong function. Nothing else decides the RHI now, so say so once: the
+    // bring-up retries on every frame and would otherwise fail without a line.
     ID3D11Device* dev = nullptr;
-    if (FAILED(sc->GetDevice(IID_PPV_ARGS(&dev))) || !dev) {
+    const HRESULT hr = sc->GetDevice(IID_PPV_ARGS(&dev));
+    if (FAILED(hr) || !dev) {
         if (dev) dev->Release();
+        static bool s_logged = false;
+        if (!s_logged) {
+            s_logged = true;
+            UE_LOGE("imgui_overlay: the FD3D11Viewport::PresentChecked seam fired but its swapchain "
+                    "(%p) has no ID3D11Device (GetDevice hr=0x%08lX) -- the seam is on the wrong "
+                    "function or the game is not D3D11; the overlay stays down",
+                    static_cast<void*>(sc), static_cast<unsigned long>(hr));
+            ue_wrap::log::Flush();
+        }
         return false;
     }
     ID3D11DeviceContext* ctx = nullptr;
