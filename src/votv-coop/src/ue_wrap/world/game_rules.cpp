@@ -8,7 +8,9 @@
 #include "ue_wrap/world/world_singleton.h"
 #include "ue_wrap/world/game_mode.h"  // the mode byte: a GI member, not one of the rules
 
+#include <cerrno>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <cwctype>
 
@@ -216,6 +218,40 @@ int ApplySavedToProcess(void* gameInstance, void* save) {
     // The members are bools, bytes and one float: a plain value copy is the whole assignment.
     std::memcpy(dst, src, static_cast<size_t>(size));
     return changed;
+}
+
+WriteResult WriteSavedRule(void* save, const std::string& key, const std::string& value) {
+    if (!save || !R::IsLive(save)) return WriteResult::Unresolved;
+    void* saveClass = R::ClassOf(save);
+    const int32_t off = saveClass ? R::FindPropertyOffset(saveClass, L"localGameRules") : -1;
+    void* structObj = saveClass ? R::PropertyInnerStruct(saveClass, L"localGameRules") : nullptr;
+    if (off < 0 || !structObj) return WriteResult::Unresolved;
+    uint8_t* base = reinterpret_cast<uint8_t*>(save) + off;
+
+    for (const R::StructFieldInfo& fi : R::EnumerateStructFields(structObj)) {
+        if (TrimmedKey(fi.name) != key) continue;
+        const char* text = value.c_str();
+        char* end = nullptr;
+        int32_t bOff = -1;
+        uint8_t bMask = 0;
+        if (R::FindBoolProperty(structObj, fi.name.c_str(), bOff, bMask) && bOff >= 0) {
+            if (value != "0" && value != "1") return WriteResult::BadValue;
+            if (value == "1") base[bOff] |= bMask;
+            else base[bOff] &= static_cast<uint8_t>(~bMask);
+        } else if (fi.size == 4) {
+            errno = 0;
+            const float f = std::strtof(text, &end);
+            if (end == text || *end != '\0' || errno != 0) return WriteResult::BadValue;
+            *reinterpret_cast<float*>(base + fi.offset) = f;
+        } else {
+            errno = 0;
+            const long n = std::strtol(text, &end, 10);
+            if (end == text || *end != '\0' || errno != 0 || n < 0 || n > 255) return WriteResult::BadValue;
+            base[fi.offset] = static_cast<uint8_t>(n);
+        }
+        return WriteResult::Written;
+    }
+    return WriteResult::UnknownKey;
 }
 
 }  // namespace ue_wrap::game_rules

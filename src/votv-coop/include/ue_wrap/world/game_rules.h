@@ -66,4 +66,13 @@ int ReadDifficulty();
 // either struct could not be resolved (nothing written). Game thread.
 int ApplySavedToProcess(void* gameInstance, void* save);
 
+// The outcome of WriteSavedRule.
+enum class WriteResult { Written, UnknownKey, BadValue, Unresolved };
+
+// Write one rule into `save.localGameRules`, the saved copy a new game starts from: `key` is a
+// RuleField.key, `value` the text of the member's kind (a bool "0" or "1", an enum's ordinal, a
+// float). Nothing is written unless the key and the value both parse. Unresolved: the save or its
+// rules struct could not be read. Game thread.
+WriteResult WriteSavedRule(void* save, const std::string& key, const std::string& value);
+
 }  // namespace ue_wrap::game_rules

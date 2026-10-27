@@ -103,7 +103,12 @@ CFG_FLAG(host_settle_ceiling_probe, "host_settle_ceiling_probe", "dev", false,
     "VOTVCOOP_HOST_SETTLE_CEILING_PROBE",
     "Probe (HOST): the settle walk never passes, as if the prop processor never finished, so the "
     "25 s ceiling admits the world with its WARN and the held join completes.")
-CFG_FLAG(atv_adopt_break, "atv_adopt_break", "dev", false, "VOTVCOOP_DEV_ATV_ADOPT_BREAK",
+CFG_STRING(new_game_rules, "new_game_rules", "dev", "", "VOTVCOOP_NEW_GAME_RULES", false,
+    "Drill (any peer that boots a fresh New Game): world rules the blank save starts with, as the new-game "
+    "menu's toggles write them. A list of key=value separated by ';' over the game's rule names (a bool is "
+    "0 or 1, an enum its ordinal, a float its number), e.g. enableLightsOut=1;difficulty=2. A rule the "
+    "game does not have is logged and skipped. A world loaded from a save is never touched.")
+CFG_FLAG(atv_adopt_break,"atv_adopt_break", "dev", false, "VOTVCOOP_DEV_ATV_ADOPT_BREAK",
     "Red arm: an announced ATV is never adopted from the world's own copy; a mirror is spawned beside it.")
 CFG_FLAG(atv_set_break, "atv_set_break", "dev", false, "VOTVCOOP_DEV_ATV_SET_BREAK",
     "Red arm: the host's complete ATV set removes nothing on this client.")
