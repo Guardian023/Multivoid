@@ -42,10 +42,7 @@ bool ReadUnguarded(std::uintptr_t vp, std::uintptr_t table, ViewportState& o) {
     o.device   = Rd<std::uintptr_t>(vp, prof::kVkViewport_Device);
     o.swapChain = Rd<std::uintptr_t>(vp, prof::kVkViewport_SwapChain);
     o.hwnd     = Rd<std::uintptr_t>(vp, prof::kVkViewport_WindowHandle);
-    o.sizeX    = Rd<std::uint32_t>(vp, prof::kVkViewport_SizeX);
-    o.sizeY    = Rd<std::uint32_t>(vp, prof::kVkViewport_SizeY);
     o.pixelFormat   = Rd<std::int32_t>(vp, prof::kVkViewport_PixelFormat);
-    o.acquiredImage = Rd<std::int32_t>(vp, prof::kVkViewport_AcquiredImage);
     if (!PtrOk(o.device) || !PtrOk(o.swapChain)) return false;
     if (o.pixelFormat < 1 || static_cast<std::uint32_t>(o.pixelFormat) >= kMaxPixelFormat) return false;
 
@@ -59,8 +56,6 @@ bool ReadUnguarded(std::uintptr_t vp, std::uintptr_t table, ViewportState& o) {
     o.queueFamily = Rd<std::uint32_t>(o.presentQueue, prof::kVkQueue_FamilyIndex);
     o.queueIndex  = Rd<std::uint32_t>(o.presentQueue, prof::kVkQueue_QueueIndex);
 
-    o.swapChainRaw0 = Rd<std::uint32_t>(o.swapChain, prof::kVkSwapChain_Raw0);
-    o.swapChainRaw1 = Rd<std::uint32_t>(o.swapChain, prof::kVkSwapChain_Raw1);
     o.vkSwapchain   = Rd<Handle>(o.swapChain, prof::kVkSwapChain_VkSwapchain);
     o.vkSurface     = Rd<Handle>(o.swapChain, prof::kVkSwapChain_Surface);
     o.internalW     = Rd<std::uint32_t>(o.swapChain, prof::kVkSwapChain_InternalW);

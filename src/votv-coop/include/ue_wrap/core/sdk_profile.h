@@ -147,10 +147,7 @@ inline constexpr size_t kGPixelFormats_PlatformFormat = 0x1C;  // int32, the VkF
 // Layouts of the Vulkan RHI's objects at the Present seam (UE 4.27 VulkanViewport.h:110-127,
 // VulkanDevice.h, VulkanSwapChain.h, VulkanQueue.h; read from the cook's code). FVulkanViewport:
 inline constexpr size_t kVkViewport_Device        = 0x18;   // FVulkanDevice* (FDeviceChild)
-inline constexpr size_t kVkViewport_SizeX         = 0x180;  // uint32
-inline constexpr size_t kVkViewport_SizeY         = 0x184;  // uint32
 inline constexpr size_t kVkViewport_PixelFormat   = 0x18C;  // int32 EPixelFormat, written back by the swapchain constructor
-inline constexpr size_t kVkViewport_AcquiredImage = 0x190;  // int32
 inline constexpr size_t kVkViewport_SwapChain     = 0x198;  // FVulkanSwapChain*
 inline constexpr size_t kVkViewport_WindowHandle  = 0x1A0;  // HWND
 // FVulkanDevice, FVulkanDynamicRHI, FVulkanQueue:
@@ -163,8 +160,6 @@ inline constexpr size_t kVkQueue_Queue            = 0x0;     // VkQueue
 inline constexpr size_t kVkQueue_FamilyIndex      = 0x8;     // uint32
 inline constexpr size_t kVkQueue_QueueIndex       = 0xC;     // uint32
 // FVulkanSwapChain:
-inline constexpr size_t kVkSwapChain_Raw0         = 0x0;     // written only on the HDR path (colour space / format)
-inline constexpr size_t kVkSwapChain_Raw1         = 0x4;     // same
 inline constexpr size_t kVkSwapChain_VkSwapchain  = 0x8;     // VkSwapchainKHR
 inline constexpr size_t kVkSwapChain_Surface      = 0x18;    // VkSurfaceKHR
 inline constexpr size_t kVkSwapChain_InternalW    = 0x30;    // uint32, min(requested, image extent)

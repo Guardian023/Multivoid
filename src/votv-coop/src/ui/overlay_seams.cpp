@@ -188,6 +188,10 @@ void VulkanBringUp(void* viewport, void* presentQueue) {
         ue_wrap::log::Flush();
         return;
     }
+    // The bring-up's own queue submits (the draw selftest, the first texture upload) run here, on the RHI
+    // thread and before the engine's present body. They are as safe as the per-frame submit: the engine's own
+    // submits to this queue run on this thread, and the rare ones from another thread were measured never to
+    // overlap a call on the present queue.
     overlay_backend::VulkanFrame vf{viewport, nullptr, presentQueue, 0, nullptr};
     const overlay_backend::FrameTarget target{overlay_backend::Rhi::Vulkan, reinterpret_cast<HWND>(st.hwnd),
                                               nullptr, &vf};

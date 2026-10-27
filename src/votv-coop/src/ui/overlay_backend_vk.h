@@ -1,7 +1,8 @@
 // ui/overlay_backend_vk.h -- TU-private seam between the overlay's two Vulkan translation units
 // (overlay_backend_vk.cpp: bring-up, the ImGui backend, textures, the draw selftest; and
-// overlay_backend_vk_frame.cpp: the swapped present and destroy, the per-swapchain sets, the ring) and the
-// engine seam in overlay_seams.cpp. Nothing else includes this.
+// overlay_backend_vk_frame.cpp: the swapped present and destroy, the per-swapchain sets, the ring), the
+// engine seam in overlay_seams.cpp and the RHI dispatcher in overlay_backend.cpp (the ops table and the
+// slot restore at shutdown). Nothing else includes this.
 
 #pragma once
 
@@ -52,6 +53,11 @@ void ShutdownBackend();
 uint32_t RingIndex();
 void RingAdvance();
 void RingReset();
+
+// Texture uploads the ImGui backend ran. Each waits on the present queue until the GPU has finished its
+// work there, so the count says how often a run stalls the present on one.
+void NoteUploads(uint32_t n);
+uint32_t Uploads();
 
 // ---- overlay_backend_vk_frame.cpp ----
 

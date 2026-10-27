@@ -48,16 +48,11 @@ struct ViewportState {
     Handle         vkSurface;
     std::uint32_t  queueFamily;
     std::uint32_t  queueIndex;
-    std::uint32_t  sizeX;          // the viewport's size
-    std::uint32_t  sizeY;
     std::uint32_t  internalW;      // the swapchain's size (the image extent)
     std::uint32_t  internalH;
     std::uint32_t  imageCount;     // the swapchain's real image count
     std::int32_t   pixelFormat;    // EPixelFormat
-    std::int32_t   acquiredImage;
     std::int32_t   vkFormat;       // VkFormat of the back buffer: GPixelFormats[pixelFormat].PlatformFormat
-    std::uint32_t  swapChainRaw0;  // dwords at swapchain +0 and +4: written only on the HDR path
-    std::uint32_t  swapChainRaw1;
 };
 
 // FVulkanViewport::Present's entry, from a stretch of its body (sdk_profile.h); 0 when absent.

@@ -98,6 +98,9 @@ struct Window {
     uint8_t     bit;
     bool        active;
     bool        printed;
+    // worstMs (the verdict's worstFenceMs) runs from a submit to the present at which its fence was first seen
+    // signalled, so it floors at one frame time and grows with any gap between presents: an upper bound on
+    // the GPU's latency, not a measurement of it.
     uint32_t    open, submitted, signalled, presentsOk, worstMs;
 };
 
@@ -285,7 +288,7 @@ void PollFences(uint64_t now) {
     }
 }
 
-// ---- the proof windows (2.8 C10) ----------------------------------------------------------------------
+// ---- the proof windows ------------------------------------------------------------------------------
 
 // A window's verdict: the first 60 presents in which a frame was due to be submitted, then every submit of
 // its frames observed finished.
@@ -304,6 +307,7 @@ void PrintVerdicts() {
         else
             UE_LOGE("[VK-OVERLAY] %s FAIL: submitted=%u signalled=%u presentsOk=%u worstFenceMs=%u", w.name, w.submitted,
                     w.signalled, w.presentsOk, w.worstMs);
+        if (w.bit == kWinFrames) UE_LOGI("[VK-OVERLAY] texture uploads=%u", Uploads());
         ue_wrap::log::Flush();
     }
 }
@@ -327,7 +331,7 @@ void CheckSlots(uint64_t now) {
     }
 }
 
-// ---- re-init (2.8 C3) -----------------------------------------------------------------------------------
+// ---- re-init ----------------------------------------------------------------------------------------
 
 // The image count or the format changed: the engine idled the device before it rebuilt the swapchain, so the
 // ring's fences are the only work of ours in flight. They are waited (bounded; this is not the steady state),
@@ -574,6 +578,9 @@ VkSemaphore RecordAndSubmit(RingSlot& slot, const SwapSet& set, ImDrawData* draw
     rbi.framebuffer = set.fbs[g_cur.imageIndex];
     rbi.renderArea = {{0, 0}, {set.w, set.h}};
     f.vkCmdBeginRenderPass(cmd, &rbi, VK_SUBPASS_CONTENTS_INLINE);
+    if (draw->Textures)  // the textures the backend is about to create or update, each with a queue wait
+        for (const ImTextureData* tex : *draw->Textures)
+            if (tex->Status == ImTextureStatus_WantCreate || tex->Status == ImTextureStatus_WantUpdates) NoteUploads(1);
     ImGui_ImplVulkan_RenderDrawData(draw, cmd);
     RingAdvance();  // ImGui's own buffer ring stepped on that call (it returns early only on a zero-size display)
     f.vkCmdEndRenderPass(cmd);

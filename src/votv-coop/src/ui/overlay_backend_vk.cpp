@@ -48,6 +48,7 @@ Context            g_ctx{};
 std::atomic<bool>  g_down{false};
 std::atomic<int>   g_lastResult{0};
 uint32_t           g_ring = 0;
+uint32_t           g_uploads = 0;  // render thread only
 
 // ---- checks -----------------------------------------------------------------------------------
 
@@ -58,7 +59,7 @@ void Refuse(const char* why) {
     ue_wrap::log::Flush();
 }
 
-// ---- verification (2.2): every read of the engine checked through the API ---------------------------
+// ---- verification: every read of the engine checked through the API ---------------------------------
 
 // All of it may fault. Plain values only, no object with a destructor.
 bool VerifyUnguarded(const FrameTarget& t, Context& c, char* why, size_t cap) {
@@ -154,7 +155,7 @@ bool VerifyGuarded(const FrameTarget& t, Context& c, char* why, size_t cap) {
     }
 }
 
-// ---- the draw selftest (2.8 C6) ---------------------------------------------------------------------
+// ---- the draw selftest ------------------------------------------------------------------------------
 
 // What the selftest created, so one teardown frees whatever exists after a failure part-way.
 struct SelfTestObjs {
@@ -391,7 +392,7 @@ bool SelfTest() {
     return pass;
 }
 
-// ---- the ImGui backend and our render pass (2.3, 2.4) -------------------------------------------------
+// ---- the ImGui backend and our render pass -------------------------------------------------------------
 
 struct LoaderState {
     rhi::Handle instance;
@@ -469,7 +470,7 @@ bool BuildBackend() {
     return true;
 }
 
-// ---- skin-preview textures (2.8 E24) ------------------------------------------------------------------
+// ---- skin-preview textures ---------------------------------------------------------------------------
 
 struct UserTexture {
     ImTextureData* tex;
@@ -479,6 +480,7 @@ UserTexture g_textures[kMaxTextures];
 
 bool UploadGuarded(ImTextureData* tex) {
     __try {
+        NoteUploads(1);
         ImGui_ImplVulkan_UpdateTexture(tex);  // creates the image, uploads, sets TexID; waits on the queue once
         return tex->TexID != ImTextureID_Invalid;
     } __except (EXCEPTION_EXECUTE_HANDLER) {
@@ -656,6 +658,9 @@ void ShutdownBackend() {
 uint32_t RingIndex() { return g_ctx.st.imageCount ? g_ring % g_ctx.st.imageCount : 0; }
 void RingAdvance() { ++g_ring; }
 void RingReset() { g_ring = 0; }
+
+void NoteUploads(uint32_t n) { g_uploads += n; }
+uint32_t Uploads() { return g_uploads; }
 
 const BackendOps& Ops() {
     static const BackendOps ops = {
