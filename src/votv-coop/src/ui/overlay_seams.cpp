@@ -1,21 +1,26 @@
 // ui/overlay_seams.cpp -- the engine seams the overlay draws and resizes through. Install() AOB-resolves
-// four engine-private functions and MinHooks them: the two per-RHI present choke points (the draw
-// seam, FD3D11Viewport::PresentChecked and FD3D12Viewport::PresentInternal) and the two per-RHI
-// viewport Resize functions (the render-target release bracket). The present detours hand each
-// frame to imgui_overlay::OverlayFrame; the resize detours bracket the engine's own resize with the
-// backend's release and recreate. No DXGI vtable entry is patched, so RivaTuner has nothing of ours
-// to unlink and OBS's game capture sees our pixels (docs/ui.md).
+// five engine-private functions and MinHooks them: the three per-RHI present choke points (the draw
+// seams, FD3D11Viewport::PresentChecked, FD3D12Viewport::PresentInternal and FVulkanViewport::Present)
+// and the two per-DX-RHI viewport Resize functions (the render-target release bracket). The DX present
+// detours hand each frame to imgui_overlay::OverlayFrame; the resize detours bracket the engine's own
+// resize with the backend's release and recreate. No DXGI vtable entry is patched, so RivaTuner has
+// nothing of ours to unlink and OBS's game capture sees our pixels (docs/ui.md). The Vulkan seam does not
+// run a frame itself: it brings the overlay up on its first call and swaps the loader's present and
+// destroy slots, and the frame runs inside the swapped vkQueuePresentKHR (overlay_backend_vk_frame.cpp),
+// the only place that has the image index and the semaphore the present waits on.
 
 #include "overlay_seams.h"
 
 #include "ui/overlay_backend.h"
 #include "overlay_backend_internal.h"
+#include "overlay_backend_vk.h"
 
 #include "ue_wrap/core/hook.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/scan_ledger.h"  // the draw seam and the resize bracket, each found or missed
 #include "ue_wrap/core/sig_scan.h"     // FindPattern -- the engine seam probes
-#include "ue_wrap/core/sdk_profile.h"  // the four seam signatures
+#include "ue_wrap/core/sdk_profile.h"  // the DX seam signatures
+#include "ue_wrap/engine/vulkan_rhi.h" // the Vulkan seam's resolvers and viewport read
 
 #include <windows.h>
 #include <dxgi.h>
@@ -134,6 +139,57 @@ uintptr_t __fastcall D3D12PresentInternalDetour(void* viewport, int32_t syncInte
     return g_d3d12PresentTrampoline(viewport, syncInterval);
 }
 
+// The Vulkan seam, FVulkanViewport::Present: the RHI oracle, the bring-up, and the hand-over of the viewport
+// to the swapped vkQueuePresentKHR. The engine's Present calls the queue present from inside, on this same
+// thread, so a thread-local set around the original is how the swapped present learns which viewport it
+// serves. The first call brings the overlay up once, in the order verify -> ImGui init -> draw selftest ->
+// ready -> swap the two loader slots LAST, so no present reaches a half-built overlay.
+using VulkanPresentFn = bool(__fastcall*)(void* viewport, void* ctx, void* cmd, void* queue,
+                                          void* presentQueue, bool lockToVsync);
+VulkanPresentFn g_vulkanPresentTrampoline = nullptr;
+bool            g_vulkanBringUpTried = false;  // the engine's Present thread is the only writer
+
+void VulkanBringUp(void* viewport, void* presentQueue) {
+    ue_wrap::vulkan_rhi::ViewportState st;
+    if (!ue_wrap::vulkan_rhi::ReadViewport(viewport, st)) {
+        UE_LOGE("[VK-OVERLAY] bring-up refused: the viewport %p could not be read (a fault or an implausible "
+                "value) -- overlay down for this run, presents untouched",
+                viewport);
+        ue_wrap::log::Flush();
+        return;
+    }
+    // The slots are found here and not at Init: the byte walk costs a scan of the image, which only a
+    // Vulkan run should pay.
+    if (!overlay_backend::vk::ResolveSlots()) {
+        UE_LOGE("[VK-OVERLAY] bring-up refused: a loader slot was not found -- overlay down for this run, "
+                "presents untouched");
+        ue_wrap::log::Flush();
+        return;
+    }
+    overlay_backend::VulkanFrame vf{viewport, nullptr, presentQueue, 0, nullptr};
+    const overlay_backend::FrameTarget target{overlay_backend::Rhi::Vulkan, reinterpret_cast<HWND>(st.hwnd),
+                                              nullptr, &vf};
+    if (!imgui_overlay::BringUpFromSeam(target)) return;
+    if (!overlay_backend::vk::SwapSlots()) {
+        imgui_overlay::OverlayDown();
+        ue_wrap::log::Flush();
+    }
+}
+
+bool __fastcall VulkanViewportPresentDetour(void* viewport, void* ctx, void* cmd, void* queue,
+                                            void* presentQueue, bool lockToVsync) {
+    if (!overlay_backend::SelectRhi(overlay_backend::Rhi::Vulkan))
+        return g_vulkanPresentTrampoline(viewport, ctx, cmd, queue, presentQueue, lockToVsync);
+    if (!g_vulkanBringUpTried) {
+        g_vulkanBringUpTried = true;
+        VulkanBringUp(viewport, presentQueue);
+    }
+    overlay_backend::vk::SetViewport(viewport);
+    const bool result = g_vulkanPresentTrampoline(viewport, ctx, cmd, queue, presentQueue, lockToVsync);
+    overlay_backend::vk::SetViewport(nullptr);
+    return result;
+}
+
 // The resize bracket, on the engine's own seam. IDXGISwapChain::ResizeBuffers fails unless every
 // back-buffer reference is released first, and UE turns that failure into a Fatal; our render
 // target view is such a reference, and a release bracket on the DXGI function itself is unlinked
@@ -190,11 +246,24 @@ void __fastcall D3D12ResizeDetour(void* viewport) {
 
 }  // namespace
 
+// The Vulkan seam's entry: the Present function and the pixel-format table the viewport read needs, both
+// recorded in the scan ledger by their resolvers. Either missing leaves the seam out (0).
+uintptr_t ResolveVulkanSeam() {
+    const uintptr_t present = ue_wrap::vulkan_rhi::ResolvePresent();
+    if (!present) return 0;
+    if (!ue_wrap::vulkan_rhi::ResolvePixelFormatTable()) {
+        UE_LOGW("imgui_overlay: FVulkanViewport::Present resolved but the GPixelFormats table did not, so the "
+                "back buffer's format cannot be read -- the Vulkan seam is ABSENT this run.");
+        return 0;
+    }
+    return present;
+}
+
 bool Install(int& armed, int& total) {
-    // Both RHIs' seams are installed unconditionally: which one the game presents with is unknown
-    // at Init, and the other signature simply does not resolve in a single-RHI build. A stale
+    // Every RHI's seams are installed unconditionally: which one the game presents with is unknown
+    // at Init, and the other signatures simply do not resolve in a single-RHI build. A stale
     // signature is not fatal: the overlay keeps drawing and says loudly that resizes are
-    // unprotected.
+    // unprotected. The Vulkan seam has no signature string of its own: its resolver is the ue_wrap one.
     struct Seam { const char* name; const char* sig; void* detour; void** tramp; bool draws; };
     const Seam seams[] = {
         {"FD3D11Viewport::PresentChecked", ue_wrap::profile::kSigD3D11ViewportPresentChecked,
@@ -203,6 +272,8 @@ bool Install(int& armed, int& total) {
         {"FD3D12Viewport::PresentInternal", ue_wrap::profile::kSigD3D12ViewportPresentInternal,
          reinterpret_cast<void*>(&D3D12PresentInternalDetour),
          reinterpret_cast<void**>(&g_d3d12PresentTrampoline), true},
+        {"FVulkanViewport::Present", nullptr, reinterpret_cast<void*>(&VulkanViewportPresentDetour),
+         reinterpret_cast<void**>(&g_vulkanPresentTrampoline), true},
         {"FD3D11Viewport::Resize", ue_wrap::profile::kSigD3D11ViewportResize,
          reinterpret_cast<void*>(&D3D11ResizeDetour),
          reinterpret_cast<void**>(&g_d3d11ResizeTrampoline), false},
@@ -213,10 +284,10 @@ bool Install(int& armed, int& total) {
     total = static_cast<int>(sizeof(seams) / sizeof(seams[0]));
     int drawArmed = 0;
     // Each requirement is met by either RHI's signature, so the scan ledger's two rows are decided once
-    // the loop has tried all four.
+    // the loop has tried all five.
     bool drawFound = false, resizeFound = false;
     for (const Seam& sm : seams) {
-        const uintptr_t at = ue_wrap::FindPattern(sm.sig);
+        const uintptr_t at = sm.sig ? ue_wrap::FindPattern(sm.sig) : ResolveVulkanSeam();
         if (at) (sm.draws ? drawFound : resizeFound) = true;
         if (!at) {
             // Expected for the RHI this cook does not contain; zero draw seams is checked after
@@ -244,9 +315,9 @@ bool Install(int& armed, int& total) {
     // HandleWindowMessage sits behind g_imguiReady, so no key is taken for a UI that cannot
     // appear. A missing resize bracket is a degradation, reported above.
     if (drawArmed == 0) {
-        UE_LOGE("imgui_overlay: NO DRAW SEAM. Neither FD3D11Viewport::PresentChecked nor "
-                "FD3D12Viewport::PresentInternal resolved, so the overlay cannot draw and "
-                "is DISABLED for this run. This is what a game recook looks like from "
+        UE_LOGE("imgui_overlay: NO DRAW SEAM. None of FD3D11Viewport::PresentChecked, "
+                "FD3D12Viewport::PresentInternal and FVulkanViewport::Present resolved, so the overlay "
+                "cannot draw and is DISABLED for this run. This is what a game recook looks like from "
                 "here -- re-derive the signatures per docs/versioning.md.");
         ue_wrap::log::Flush();
         return false;

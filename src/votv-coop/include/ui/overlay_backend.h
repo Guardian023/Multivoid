@@ -3,10 +3,10 @@
 // imgui_overlay.cpp owns the window-message handler and surface compositing (the platform layer);
 // this interface owns everything that touches a concrete graphics device: device capture off the
 // game's swapchain, the ImGui renderer backend, the render target, and texture creation for UI
-// surfaces. One implementation per RHI -- overlay_backend_dx11.cpp and overlay_backend_dx12.cpp,
-// both shipped -- selected by the engine seam that fired (SelectRhi, before each frame), not
-// guessed from the swapchain. No RHI types cross this boundary: a FrameTarget carries what one
-// frame draws into.
+// surfaces. One implementation per RHI -- overlay_backend_dx11.cpp, overlay_backend_dx12.cpp and
+// overlay_backend_vk.cpp (with overlay_backend_vk_frame.cpp), all shipped -- selected by the engine
+// seam that fired (SelectRhi, before each frame), not guessed from the swapchain. No RHI types cross
+// this boundary: a FrameTarget carries what one frame draws into.
 
 #pragma once
 
@@ -24,7 +24,7 @@ struct FrameTarget;  // what one frame draws into; defined for the backends (ove
 // a frame; a once-only warning names both).
 bool SelectRhi(Rhi rhi);
 
-// The selected RHI's name -- "DX11" / "DX12" -- non-null from the first present on (a seam selects
+// The selected RHI's name -- "DX11" / "DX12" / "Vulkan" -- non-null from the first present on (a seam selects
 // before the overlay is up, so this does not say bring-up committed), nullptr before. Feeds the RHI
 // indicator (F1 menu line + the bring-up log).
 const char* Kind();
@@ -77,6 +77,10 @@ void DestroyTexture(void* id);
 // as CreateSwapChain*'s pDevice). Called once from imgui_overlay::Init;
 // log-only, no behavior change on any RHI.
 void InstallCreationProbe();
+
+// Shutdown: put back the engine's own loader slots the Vulkan backend swapped (a no-op when it swapped
+// none). Any thread; in-flight replacements pass through from here on.
+void RestoreEngineSlots();
 
 
 }  // namespace ui::overlay_backend

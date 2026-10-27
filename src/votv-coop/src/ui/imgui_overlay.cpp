@@ -306,7 +306,8 @@ void OverlayFrame(const overlay_backend::FrameTarget& t) {
     // Count frames presented per WorldKind: the one place "does the game present frames when no
     // world exists" can be asked.
     coop::dev::worldless_frames::NoteFrame();
-    // The bring-up below is the DX targets'; a Vulkan target is brought up by its own engine seam.
+    // The bring-up below is the DX targets'; a Vulkan target is brought up by its own engine seam
+    // (BringUpFromSeam).
     const bool dxTarget = t.rhi == overlay_backend::Rhi::Dx11 || t.rhi == overlay_backend::Rhi::Dx12;
     if (dxTarget && !g_imguiReady.load(std::memory_order_acquire)) {
         if (BringUpGuarded(t)) g_imguiReady.store(true, std::memory_order_release);
@@ -328,6 +329,13 @@ void OverlayFrame(const overlay_backend::FrameTarget& t) {
 }
 
 bool ImguiReady() { return g_imguiReady.load(std::memory_order_acquire); }
+
+bool BringUpFromSeam(const overlay_backend::FrameTarget& t) {
+    if (g_imguiReady.load(std::memory_order_acquire)) return true;
+    if (!BringUpGuarded(t)) return false;
+    g_imguiReady.store(true, std::memory_order_release);
+    return true;
+}
 
 // A backend that went down after the bring-up (Vulkan's, on a failed call of its own) stops the overlay for
 // the run: no hotkey opens a surface and CaptureActive() is false, so no input is swallowed for a UI that no

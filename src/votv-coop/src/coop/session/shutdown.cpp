@@ -6,6 +6,7 @@
 #include "coop/dev/vulkan_rhi_probe.h"
 #include "coop/input/game_window_proc.h"
 #include "coop/net/session.h"
+#include "ui/overlay_backend.h"
 #include "ue_wrap/core/game_thread.h"
 #include "ue_wrap/core/hook.h"
 #include "ue_wrap/core/log.h"
@@ -111,6 +112,7 @@ void DoShutdown() {
     ue_wrap::game_thread::Uninstall();
     ue_wrap::uobject_listeners::Uninstall();
     coop::dev::vulkan_rhi_probe::Shutdown();  // [dev] puts the loader slots it swapped back; idle when off
+    ui::overlay_backend::RestoreEngineSlots();  // the Vulkan overlay's two loader slots, with the hooks lifted
     ue_wrap::hook::Shutdown();
     // From here on a GC pin releases WITHOUT touching the engine. Pins can live inside
     // statics (the proxy map, the permanent audio pins), so their destructors run at DLL

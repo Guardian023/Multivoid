@@ -1,13 +1,14 @@
 // ui/overlay_backend.cpp -- the RHI dispatcher behind ui/overlay_backend.h.
 //
 // Owns exactly one concept: WHICH per-RHI implementation is live. The engine seam that fired
-// (the D3D11 or the D3D12 present detour) names it through SelectRhi before the frame runs;
+// (the D3D11, the D3D12 or the Vulkan present detour) names it through SelectRhi before the frame runs;
 // every entry below forwards to that RHI's ops table. DX12 additionally has to capture its
 // presenting command queue first (a few frames -- see overlay_backend_dx12_capture.cpp).
 
 #include "ui/overlay_backend.h"
 
 #include "overlay_backend_internal.h"
+#include "overlay_backend_vk.h"
 #include "ue_wrap/core/log.h"
 
 #include <windows.h>
@@ -23,6 +24,7 @@ const BackendOps* OpsFor(Rhi rhi) {
     switch (rhi) {
         case Rhi::Dx11: return &dx11::Ops();
         case Rhi::Dx12: return &dx12::Ops();
+        case Rhi::Vulkan: return &vk::Ops();
         default:        return nullptr;
     }
 }
@@ -103,6 +105,8 @@ void DestroyTexture(void* id) {
 }
 
 void InstallCreationProbe() { dx12_capture::InstallCreationProbe(); }
+
+void RestoreEngineSlots() { vk::RestoreSlots(); }
 
 // RULE 2: there is deliberately no Shutdown() here, and nothing needs one. InitRenderer's
 // failure paths call ReleaseRendererState(); at process exit the OS reclaims what that released;

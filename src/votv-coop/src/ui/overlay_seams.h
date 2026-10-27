@@ -14,6 +14,11 @@ void OverlayFrame(const overlay_backend::FrameTarget& t);
 // ImGui and the RHI backend are live (the resize bracket acts only then).
 bool ImguiReady();
 
+// The bring-up for a target whose own engine seam owns it (Vulkan): ImGui, the Win32 backend and the RHI
+// backend come up behind the SEH guard, and the overlay is ready on true. Once only; the DX targets are
+// brought up from OverlayFrame itself.
+bool BringUpFromSeam(const overlay_backend::FrameTarget& t);
+
 // The backend went down after the bring-up: the overlay is not ready any more (imgui_overlay.cpp).
 void OverlayDown();
 
