@@ -21,6 +21,8 @@
 #include "ui/overlay_backend.h"
 #include "overlay_seams.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/engine/vulkan_rhi.h"
 
@@ -30,6 +32,7 @@
 #include <cstring>
 #include <initializer_list>
 #include <mutex>
+#include <string>
 
 #include "imgui.h"
 #include "backends/imgui_impl_vulkan.h"
@@ -119,6 +122,13 @@ Window     g_win[2] = {{"frames", kWinFrames, true, false, 0, 0, 0, 0, 0},
 Current    g_cur{};
 uint32_t   g_skipped = 0;
 bool       g_warnedWaits = false;
+bool       g_drillDone = false;
+
+// The dev drill (vk_overlay_drill=reinit): read once, on first use.
+bool DrillReinitOn() {
+    static const bool on = coop::config::ResolveEnum(::coop::config_registry::rows::vk_overlay_drill) == "reinit";
+    return on;
+}
 
 struct FrameResult {
     VkSemaphore wait;     // the semaphore to present on, or null: present untouched
@@ -368,6 +378,14 @@ FrameResult RunFrameBody(void* viewport, VkQueue queue, const VkPresentInfoKHR* 
     if (st.vkFormat != c.st.vkFormat || st.imageCount != c.st.imageCount) {
         Reinit(st);
         if (IsDown()) return {};
+    } else if (g_win[0].printed && !g_drillDone && DrillReinitOn()) {
+        // The drill runs the same function on a live session, where the device was not idled by the engine:
+        // the queue is, so no present of ours still waits on a semaphore the rebuild destroys.
+        g_drillDone = true;
+        Check(c.fns.vkQueueWaitIdle(As<VkQueue>(c.st.vkQueue)));
+        Reinit(st);
+        if (IsDown()) return {};
+        g_win[1].active = true;
     }
     g_cur.queue = queue;
     g_cur.info = info;

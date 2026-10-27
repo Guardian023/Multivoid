@@ -28,7 +28,6 @@
 #include "coop/save/save_transfer.h"
 #include "coop/dev/spawn_menu_unlock.h"
 #include "coop/dev/spawn_npc.h"
-#include "coop/dev/vulkan_path_probe.h"
 #include "coop/dev/world_first_check.h"
 #include "coop/session/teleport_client.h"
 #include "coop/player/players_registry.h"
@@ -493,9 +492,6 @@ DWORD WINAPI TimelineThread(LPVOID param) {
 }  // namespace
 
 void Start() {
-    // [dev] The Vulkan path probe's earliest hooks (vulkan_path_probe=1): first, so the loader's
-    // module map is caught before anything else here can delay it; one config read when off.
-    coop::dev::vulkan_path_probe::Start();
 
     // F12 takes a toast-free screenshot into coop-screenshots/; always on, for hands-on testing.
     screenshot::StartHotkeyWatcher();

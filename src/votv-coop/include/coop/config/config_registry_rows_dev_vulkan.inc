@@ -1,18 +1,14 @@
-// coop/config/config_registry_rows_dev_vulkan.inc -- the [dev] rows of the Vulkan overlay arc: the present-path
-// probe. Included by config_registry_rows_dev.inc after its last row, as _dev_nb.inc is, so each row keeps its
-// place in every expansion of the list. The entry forms are config_registry_rows.inc's.
+// coop/config/config_registry_rows_dev_vulkan.inc -- the [dev] rows of the Vulkan overlay arc: the red control of
+// its proof and the re-initialisation drill. Included by config_registry_rows_dev.inc after its last row, as
+// _dev_nb.inc is, so each row keeps its place in every expansion of the list. The entry forms are
+// config_registry_rows.inc's.
 
-CFG_FLAG(vulkan_path_probe, "vulkan_path_probe", "dev", false, "VOTVCOOP_VULKAN_PATH_PROBE",
-    "Probe (run the game with the Vulkan renderer): when vulkan-1.dll is mapped against our boot (hooks "
-    "go in at the earliest point, or as the library maps), which entry points the renderer queries and by "
-    "which route, the instance, physical device, device and queue it creates, whether a detour on the "
-    "address it calls sees one present per frame, and the swapchain behind it. Lines tagged [VK-PATH], "
-    "a per-second summary for the first 10 s of presents, then DONE. Observation only; installs "
-    "detours on the Vulkan loader, and on KernelBase LoadLibraryExW until the library maps, while on.")
-CFG_FLAG(vulkan_rhi_probe, "vulkan_rhi_probe", "dev", false, "VOTVCOOP_VULKAN_RHI_PROBE",
-    "Probe (run the game with the Vulkan renderer): resolves the renderer's Present, its pixel-format table "
-    "and the loader slots of vkQueuePresentKHR, vkDestroySwapchainKHR and vkQueueSubmit; hooks the "
-    "viewport's Present and reads the instance, devices, present queue, swapchain, extent, image count and "
-    "back-buffer format from it, checking the format and image count against the Vulkan API; swaps the "
-    "present and submit slots for counters (which threads call, on which queue) for 10 s, then prints "
-    "a DONE line. Observation only; the slots are put back at shutdown.")
+CFG_ENUM(vk_overlay_red, "vk_overlay_red", "dev", "off", "off|selftest|present", "VOTVCOOP_VK_OVERLAY_RED",
+    "Red control of the Vulkan overlay's proof (run the game with -vulkan): selftest skips the draw of the "
+    "bring-up's offscreen frame, so the selftest line reads FAIL on the pixel and the overlay stays down; present "
+    "makes the swapped present use the engine's own semaphore and submit nothing, so the frames line reads FAIL "
+    "with submitted=0 while a surface is open.")
+CFG_ENUM(vk_overlay_drill, "vk_overlay_drill", "dev", "off", "off|reinit", "VOTVCOOP_VK_OVERLAY_DRILL",
+    "Drill (run the game with -vulkan): reinit runs the overlay's re-initialisation once on the live session, "
+    "after the first frames verdict, then judges 60 more frames drawn on the rebuilt backend. A swapchain format "
+    "or image-count change, which triggers the same code, cannot be forced from outside.")

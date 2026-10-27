@@ -14,6 +14,8 @@
 #include "ui/overlay_backend.h"
 #include "overlay_seams.h"
 
+#include "coop/config/config.h"
+#include "coop/config/config_registry.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/engine/vulkan_rhi.h"
 
@@ -22,6 +24,7 @@
 #include <atomic>
 #include <cstdio>
 #include <cstring>
+#include <string>
 #include <vector>
 
 #include "imgui.h"
@@ -483,6 +486,14 @@ bool UploadGuarded(ImTextureData* tex) {
 
 // ---- the ops --------------------------------------------------------------------------------------
 
+// The dev red arm (vk_overlay_red), read once at the bring-up.
+Red ReadRedArm() {
+    const std::string arm = coop::config::ResolveEnum(::coop::config_registry::rows::vk_overlay_red);
+    if (arm == "selftest") return Red::SelfTest;
+    if (arm == "present") return Red::Present;
+    return Red::None;
+}
+
 bool Capture(const FrameTarget& t) {
     std::memset(&g_ctx, 0, sizeof g_ctx);
     char why[256];
@@ -490,6 +501,10 @@ bool Capture(const FrameTarget& t) {
         Refuse(why);
         return false;
     }
+    g_ctx.red = ReadRedArm();
+    if (g_ctx.red != Red::None)
+        UE_LOGW("[VK-OVERLAY] red arm vk_overlay_red=%s is on: the proof is made to FAIL",
+                g_ctx.red == Red::SelfTest ? "selftest" : "present");
     const rhi::ViewportState& st = g_ctx.st;
     UE_LOGI("[VK-OVERLAY] bring-up verified: device=0x%llx queue family=%u index=%u images=%u format=%d extent=%ux%u "
             "hwnd=0x%llx",

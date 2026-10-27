@@ -97,7 +97,7 @@ void* ReadSlot(std::uintptr_t slot);
 // VK_NOT_READY from vkGetFenceStatus is a success code, so a caller reads the result rather than treating
 // every non-zero value as an error.
 #define UE_WRAP_VK_DEVICE_FNS(X) \
-    X(vkGetDeviceQueue) X(vkGetSwapchainImagesKHR) X(vkQueueSubmit) \
+    X(vkGetDeviceQueue) X(vkGetSwapchainImagesKHR) X(vkQueueSubmit) X(vkQueueWaitIdle) \
     X(vkCreateRenderPass) X(vkDestroyRenderPass) \
     X(vkCreateImageView) X(vkDestroyImageView) X(vkCreateFramebuffer) X(vkDestroyFramebuffer) \
     X(vkCreateSemaphore) X(vkDestroySemaphore) \
