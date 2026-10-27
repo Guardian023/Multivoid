@@ -624,7 +624,7 @@ void RingReset() { g_ring = 0; }
 
 const BackendOps& Ops() {
     static const BackendOps ops = {
-        &Capture, &Abandon, &InitRenderer, &NewFrame, nullptr, nullptr, &InvalidateDeviceObjects,
+        &Capture, &Abandon, &InitRenderer, &NewFrame, &EnsureTarget, &Render, &InvalidateDeviceObjects,
         nullptr, nullptr, &CreateTextureFromImageFile, &DestroyTexture, "Vulkan"};
     return ops;
 }
