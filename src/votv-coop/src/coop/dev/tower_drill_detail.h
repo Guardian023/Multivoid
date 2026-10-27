@@ -18,9 +18,11 @@ namespace coop::dev::tower_drill::detail {
 // Every value of the config row `tower_drill`: the coordinate towers' run and join and their controls (red,
 // joinred: the client's gates open and no rows applied), then the radio tower's: the walk that measures the reach
 // (radioreach), the repair (radio) and its control (radiored), the reset lever (radioreset), and the repair of a
-// tower the host broke before the client joined (radiojoin) with its control (radiojoinred).
+// tower the host broke before the client joined (radiojoin) with its control (radiojoinred), the reset lever's control
+// (radioresetred), and a fuse pulled from the host's tower and put back (radiofuse) with its control (radiofusered).
 enum class Arm : uint8_t {
-    Off, Run, Red, Join, JoinRed, RadioReach, Radio, RadioRed, RadioReset, RadioJoin, RadioJoinRed
+    Off, Run, Red, Join, JoinRed, RadioReach, Radio, RadioRed, RadioReset, RadioJoin, RadioJoinRed, RadioResetRed,
+    RadioFuse, RadioFuseRed
 };
 
 // The arm the row names, read once.
@@ -32,6 +34,9 @@ inline bool IsRun(Arm a) { return a == Arm::Run || a == Arm::Red; }
 inline bool IsJoin(Arm a) { return a == Arm::Join || a == Arm::JoinRed; }
 // The radio arms whose host breaks the tower before any client stands in its world.
 inline bool IsRadioJoin(Arm a) { return a == Arm::RadioJoin || a == Arm::RadioJoinRed; }
+// The reset lever's arm and the fuse arm, each with its control.
+inline bool IsRadioReset(Arm a) { return a == Arm::RadioReset || a == Arm::RadioResetRed; }
+inline bool IsRadioFuse(Arm a) { return a == Arm::RadioFuse || a == Arm::RadioFuseRed; }
 
 uint64_t NowMs();
 float Dist(const ue_wrap::FVector& a, const ue_wrap::FVector& b);

@@ -1,7 +1,7 @@
 // coop/dev/tower_drill_radio_steps.h -- what the radio arms' two files share: what one client tick reads of the radio
-// tower, the bound on a verdict, how an arm ends, and the reset lever's step (tower_drill_radio_arms.cpp), which the
-// route in tower_drill_radio.cpp hands the client to once it stands at the top of the ladder. Impl-private: nothing
-// outside coop/dev includes it. Game thread.
+// tower, the bound on a verdict, how an arm ends, and the reset lever's and the fuse arm's steps
+// (tower_drill_radio_arms.cpp), which the route in tower_drill_radio.cpp hands the client to once it stands at the top
+// of the ladder. Impl-private: nothing outside coop/dev includes it. Game thread.
 
 #pragma once
 
@@ -24,6 +24,8 @@ struct RadioView {
     bool                           haveL = false;
     coop::net::FuseTowerRow        w{};
     bool                           haveW = false;
+    int                            fuseSlot = -1;   // the fuse arms: the host's blown slot this copy pulls
+    uint64_t                       climbMs = 0;     // how long the climb took
 };
 
 // Failure bound: a lever's effect reaching the host's row and this copy.
@@ -32,15 +34,25 @@ inline constexpr uint64_t kRadioVerdictMs = 20000;
 // This copy's cells (or fuses) as a string of digits, and whether they are the host's row's cells.
 std::string Digits(const ue_wrap::radio_tower::State& st, bool fuses);
 std::string RowCells(const coop::net::FuseTowerRow& w);
+std::string RowFuses(const coop::net::FuseTowerRow& w);
 bool CellsEqual(const ue_wrap::radio_tower::State& l, const coop::net::FuseTowerRow& w);
 
-// How an arm ends (tower_drill_radio.cpp): `RadioFail` says "<arm> FAIL: <why>" then the DONE line.
+// How an arm ends (tower_drill_radio.cpp): `RadioFail` says "<arm> FAIL: <why>", `RadioAbandon` "<arm> ABANDONED:
+// <why>" (a step the fixture could not give) and `RadioInconclusive` "<arm> INCONCLUSIVE: <why>" (a roll the fixture
+// let repeat), each then the DONE line.
 void RadioDone(const char* verdict);
 void RadioFail(const char* why);
+void RadioAbandon(const char* why);
+void RadioInconclusive(const char* why);
 
 // The reset arm's client step (tower_drill_radio_arms.cpp): the client at the top pulls the reset lever, and the
 // host's copy re-rolls while this copy's own roll is refused.
 void ResetArmTick(const RadioView& v);
 void ResetArmReset();
+
+// The fuse arm's client step (tower_drill_radio_arms.cpp): the client at the top pulls the host's blown fuse and
+// puts it into an empty slot, and the host's slots must read as the client moved them.
+void FuseArmTick(const RadioView& v);
+void FuseArmReset();
 
 }  // namespace coop::dev::tower_drill::detail

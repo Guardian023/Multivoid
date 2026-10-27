@@ -46,9 +46,16 @@ CFG_STRING(tower_drill, "tower_drill", "dev", "", "VOTVCOOP_TOWER_DRILL", false,
     "the verdict is whether the host's tower and the client's copy both read whole; radiored -- radio with the "
     "client's gates open, which fails as the lane's first build did; radioreset -- the client pulls the reset "
     "lever: the host's cells must re-roll, this copy show them, and this copy's own roll be refused; radiojoin -- "
-    "the host breaks its tower before the client joins, which finds it broken with the host's cells and repairs "
-    "it as radio does; radiojoinred -- radiojoin with the client's gates open, which fails as the break never "
-    "reaches its copy. Lines tagged [TOWER-DRILL]; the client's DONE line ends it.")
+    "the host breaks its tower at its own world-ready, before the client joins, and the client's first row for the "
+    "tower must already read broken; it then repairs as radio does; radiojoinred -- radiojoin with the client's "
+    "gates open, which fails as the break never reaches its copy; radioresetred -- radioreset with the gates open, "
+    "which fails as the host's cells do not change (a re-roll that repeats the host's cells is pulled again, three "
+    "times at most, then INCONCLUSIVE); radiofuse -- the host blows a fuse of its tower and keeps it whole, the "
+    "client pulls that fuse and puts it into an empty slot (needs difficulty 2 or more), and the host's slots must "
+    "read as the client moved them with its hand empty; radiofusered -- radiofuse with the gates open, which fails "
+    "naming the host's slot left unchanged. The repair arms want the game rule enableLightsOut on, or the tower "
+    "has no puzzle to press (radio then prints lightsout=0). Lines tagged [TOWER-DRILL]; the client's DONE line "
+    "ends it.")
 CFG_STRING(desk_ping_drill, "desk_ping_drill", "dev", "", "VOTVCOOP_DESK_PING_DRILL", false,
     "Drill (BOTH peers): a client's ping is rolled on the host. run: the client walks to the main desk, enters the "
     "coordinates screen, commits a triangle and presses its coord_ping key on the game window; legs: miss (a clear "

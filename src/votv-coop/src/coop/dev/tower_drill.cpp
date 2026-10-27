@@ -30,6 +30,9 @@ Arm ArmOf() {
         if (v == "radioreset") return Arm::RadioReset;
         if (v == "radiojoin") return Arm::RadioJoin;
         if (v == "radiojoinred") return Arm::RadioJoinRed;
+        if (v == "radioresetred") return Arm::RadioResetRed;
+        if (v == "radiofuse") return Arm::RadioFuse;
+        if (v == "radiofusered") return Arm::RadioFuseRed;
         return Arm::Off;
     }();
     return a;
@@ -60,8 +63,11 @@ bool FindRow(uint8_t kind, int32_t id, coop::net::FuseTowerRow& out) {
 
 void Tick(coop::net::Session* session) {
     const detail::Arm arm = detail::ArmOf();
-    if (arm == detail::Arm::Off || !session || !session->connected()) return;
+    if (arm == detail::Arm::Off || !session) return;
     const bool host = session->role() == coop::net::Role::Host;
+    // The join arms' host breaks its tower at its own world-ready, before any peer has joined: its leg runs with no
+    // peer connected. Every other leg waits for the link.
+    if (!session->connected() && !(host && detail::IsRadioJoin(arm))) return;
     if (detail::IsRadio(arm)) {
         if (host) detail::RadioHostTick(*session);
         else detail::RadioClientTick();

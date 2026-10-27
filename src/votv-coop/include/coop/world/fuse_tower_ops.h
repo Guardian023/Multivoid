@@ -74,8 +74,8 @@ uint16_t LastSentSeq();
 uint16_t LastAck();
 uint64_t Reaped();
 
-// [dev] tower_drill=red, joinred, radiored or radiojoinred: a client's gates stand open and it applies no rows, as before the lane, so its
-// towers roll on its own dice.
+// [dev] tower_drill=red, joinred, radiored, radiojoinred, radioresetred or radiofusered: a client's gates stand open
+// and it applies no rows, as before the lane, so its towers roll on its own dice.
 bool RedOpen();
 
 void OnDisconnect();

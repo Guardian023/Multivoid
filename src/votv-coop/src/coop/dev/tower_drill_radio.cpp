@@ -18,17 +18,20 @@
 #include "coop/net/protocol.h"
 #include "coop/net/session.h"
 #include "coop/player/players_registry.h"
+#include "coop/session/host_world_settle.h"
 #include "coop/session/join_progress.h"
 #include "coop/session/net_pump.h"  // HasAnnouncedWorldReady
 #include "coop/world/fuse_tower_ops.h"
 #include "coop/world/fuse_tower_rows.h"
 
+#include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/devices/radio_tower.h"
 #include "ue_wrap/engine/engine.h"  // TryGetActorLocation
 
 #include <cstdint>
 #include <cstdio>
+#include <cstring>
 #include <memory>
 #include <string>
 #include <utility>
@@ -41,10 +44,12 @@
 // broken; the client, at the top, reads the break and, when every part it uses is within the lane's reach, solves
 // the puzzle with presses through the tower's own use and pulls the confirm lever; PASS when its copy and the
 // host's last row read whole 20 s at most after the lever. radiored: radio with the client's gates open and no rows
-// applied, which ends `radio FAIL: the host's tower stays broken`. radiojoin: the host breaks its tower before the
-// client joins; the client finds it broken, with the host's cells, as it arrives, and repairs it as radio does;
-// radiojoinred has the gates open, which ends `radiojoin FAIL: the host's break never reached this copy`.
-// radioreset: at the top the client pulls the reset lever instead (tower_drill_radio_arms.cpp).
+// applied, which ends `radio FAIL: the host's tower stays broken`. A puzzle that is on (the game rule enableLightsOut)
+// needs a press: a break solved with none is `radio FAIL: the puzzle needed no press`, and PASS prints lightsout=<0|1>.
+// radiojoin: the host breaks its tower at its own world-ready, before any client joins; the first row the client's
+// tower took must already read broken, and it then repairs as radio does; radiojoinred has the gates open, which ends
+// `radiojoin FAIL: the host broke at <ms> but this copy never read it`. radioreset, radioresetred, radiofuse and
+// radiofusered: at the top the client pulls the reset lever, or a blown fuse and puts it back (tower_drill_radio_arms.cpp).
 
 namespace coop::dev::tower_drill {
 namespace {
@@ -66,7 +71,7 @@ constexpr int      kWalkDeadlineS = 300;     // the director's own bound on the 
 constexpr float    kRingCm = 150.f;          // the standpoints about the confirm lever
 constexpr int      kStandpoints = 8;
 constexpr float    kStandReachCm = 60.f;     // a walk ends this near its standpoint, flat
-constexpr float    kLadderRingCm = 100.f;    // the standpoints about the ladder's foot (the mount takes 125 uu)
+constexpr float    kLadderRingCm = 80.f;     // about the ladder's foot; 80 + 25 stays inside the mount's 125 uu
 constexpr float    kLadderReachCm = 25.f;    // a walk to the foot ends this near its standpoint, flat
 
 // ---- the puzzle: the torus the radio tower's presses act on ----
@@ -133,30 +138,51 @@ bool AllLit(const RT::State& st) {
 }
 
 // The client's gates stand open and it applies no rows (the controls), so the host's row is read as it is kept.
-bool GatesOpen() { return ArmOf() == Arm::RadioRed || ArmOf() == Arm::RadioJoinRed; }
+bool GatesOpen() {
+    const Arm a = ArmOf();
+    return a == Arm::RadioRed || a == Arm::RadioJoinRed || a == Arm::RadioResetRed || a == Arm::RadioFuseRed;
+}
 
 // The control whose copy is not asked to read the host's break: it reads the break from the kept row alone, and its
 // own repair then runs on its own copy, which the lever's verdict tells from the host's.
-bool BreakFromRowAlone() { return ArmOf() == Arm::RadioRed; }
+bool BreakFromRowAlone() {
+    const Arm a = ArmOf();
+    return a == Arm::RadioRed || a == Arm::RadioResetRed || a == Arm::RadioFuseRed;
+}
 
 const char* ArmName() {
     switch (ArmOf()) {
-    case Arm::RadioReach:   return "radioreach";
-    case Arm::RadioRed:     return "radiored";
-    case Arm::RadioReset:   return "radioreset";
-    case Arm::RadioJoin:    return "radiojoin";
-    case Arm::RadioJoinRed: return "radiojoinred";
-    default:                return "radio";
+    case Arm::RadioReach:    return "radioreach";
+    case Arm::RadioRed:      return "radiored";
+    case Arm::RadioReset:    return "radioreset";
+    case Arm::RadioResetRed: return "radioresetred";
+    case Arm::RadioFuse:     return "radiofuse";
+    case Arm::RadioFuseRed:  return "radiofusered";
+    case Arm::RadioJoin:     return "radiojoin";
+    case Arm::RadioJoinRed:  return "radiojoinred";
+    default:                 return "radio";
     }
 }
 
 // The name an arm's verdict lines carry: a control prints its green arm's name, so one fail marker serves both.
 const char* VerdictName() {
-    switch (ArmOf()) {
-    case Arm::RadioReset:                       return "radioreset";
-    case Arm::RadioJoin: case Arm::RadioJoinRed: return "radiojoin";
-    default:                                    return "radio";
-    }
+    if (IsRadioReset(ArmOf())) return "radioreset";
+    if (IsRadioFuse(ArmOf())) return "radiofuse";
+    if (IsRadioJoin(ArmOf())) return "radiojoin";
+    return "radio";
+}
+
+int BlownSlot(const FuseTowerRow& w) {
+    for (int i = 0; i < w.fuseCount; ++i)
+        if (w.fuses[i] == 2) return i;
+    return -1;
+}
+
+bool FusesEqual(const RT::State& l, const FuseTowerRow& w) {
+    if (l.fuseCount != w.fuseCount) return false;
+    for (int i = 0; i < l.fuseCount; ++i)
+        if (l.fuses[i] != w.fuses[i]) return false;
+    return true;
 }
 
 // ---- the host: the break, on its own roll ---------------------------------------------------------------------
@@ -167,6 +193,8 @@ bool     g_hostBroke = false;      // the tower has read broken once: the drill 
 bool     g_hostGaveUp = false;
 int      g_hostScrambles = 0;
 uint64_t g_hostCallMs = 0;
+uint8_t  g_hostFuses[RT::kMaxFuses] = {};  // the fuse arms: the slots as last said
+uint8_t  g_hostFuseCount = 0;
 
 void HostTick(coop::net::Session& s) {
     void* t = RT::Instance();
@@ -177,10 +205,28 @@ void HostTick(coop::net::Session& s) {
         g_hostBroken = st.isBroken;
         UE_LOGI("[TOWER-DRILL] host radio broken=%d", st.isBroken ? 1 : 0);
     }
-    if (st.isBroken) g_hostBroke = true;
-    // The join arms break the tower as the host hosts, before any client is in its world; the others wait for one.
-    if (ArmOf() == Arm::RadioReach || g_hostBroke || g_hostGaveUp || (!IsRadioJoin(ArmOf()) && !s.IsSlotWorldReady(1)))
-        return;
+    if (IsRadioFuse(ArmOf())) {
+        // The fuse arms want a fuse blown and the tower whole: one scramble blows the first good fuse
+        // (radiotower.cpp:1496-1520); a scramble past the last good fuse breaks the tower, which they cannot use.
+        if (g_hostFuseCount != st.fuseCount || std::memcmp(g_hostFuses, st.fuses, st.fuseCount) != 0) {
+            g_hostFuseCount = st.fuseCount;
+            std::memcpy(g_hostFuses, st.fuses, st.fuseCount);
+            UE_LOGI("[TOWER-DRILL] host radio fuses=%s", Digits(st, true).c_str());
+        }
+        bool blown = false;
+        for (int i = 0; i < st.fuseCount; ++i) blown = blown || st.fuses[i] == 2;
+        if (blown && !st.isBroken) g_hostBroke = true;
+        if (st.isBroken && !g_hostBroke && !g_hostGaveUp) {
+            g_hostGaveUp = true;
+            UE_LOGW("[TOWER-DRILL] host radio tower broke with no fuse left to blow first -- FAIL");
+        }
+    } else if (st.isBroken) {
+        g_hostBroke = true;
+    }
+    if (ArmOf() == Arm::RadioReach || g_hostBroke || g_hostGaveUp) return;
+    // The join arms break the tower at the host's own world-ready, before any client is in its world; the others
+    // wait for a client's world.
+    if (IsRadioJoin(ArmOf()) ? !coop::host_world_settle::Settled() : !s.IsSlotWorldReady(1)) return;
     if (g_hostScrambles >= kMaxScrambles) {
         g_hostGaveUp = true;
         UE_LOGW("[TOWER-DRILL] host radio could not break the tower in %d scrambles -- FAIL", kMaxScrambles);
@@ -195,19 +241,22 @@ void HostTick(coop::net::Session& s) {
 
 // ---- the client: walks to the tower, climbs to its parts, then repairs it ---------------------------------------
 
-enum class Step : uint8_t { Arm, JoinCheck, Walk, LadderWalk, LadderClimb, Break, Press, Lever, Reset, Done };
+enum class Step : uint8_t { Arm, JoinCheck, Walk, LadderWalk, LadderClimb, Break, Press, Lever, Reset, Fuse, Done };
 Step     g_step = Step::Arm;
 uint64_t g_stepMs = 0;
+uint64_t g_armMs = 0;              // the census: the first tick the tower and the host's row were both here
+uint64_t g_rowBrokenMs = 0;        // the first tick the host's kept row read broken
 bool     g_acted = false;
 uint16_t g_actSeq = 0;
 std::shared_ptr<DR::BackgroundWalk> g_walk;
 bool     g_walkAsked = false;
 float    g_routeUU = -1.f;
-void*    g_ladder = nullptr;       // the radioreach arm's: the tower's ladder, its ends, the walk to its foot, the climb
+ue_wrap::CachedObjRef g_ladder;  // the tower's ladder, held across the climb's ticks
 FVector  g_foot{}, g_top{};
 bool     g_ladderWalkAsked = false;
 bool     g_footReached = false;
 LD::Climb g_climb;
+int      g_fuseSlot = -1;          // the fuse arms: the host's blown slot this copy pulls
 std::vector<int> g_presses;
 size_t   g_pressNext = 0;
 uint64_t g_leverMs = 0;
@@ -225,6 +274,8 @@ bool Overdue(uint64_t bound) { return NowMs() - g_stepMs > bound; }
 // The DONE line, which every arm's end prints once: `what` is the arm and its verdict.
 void SayDone(const char* what) {
     g_step = Step::Done;
+    // An arm that ends while the climb still holds the forward key lets it go first.
+    g_climb.Release(coop::players::Registry::Get().Local(), g_ladder.Get());
     const auto e = coop::fuse_tower_rows::AppliedEdges(coop::net::kFuseTowerKindRadio);
     UE_LOGI("[TOWER-DRILL] client DONE %s (ops sent %llu, claims unanswered %zu, rolls refused %llu; applied: "
             "breaks %u repairs %u presses %u pulls %u inserts %u levers %u fails %u)", what,
@@ -243,6 +294,12 @@ void Done(const char* verdict) {
 void Fail(const char* why) {
     UE_LOGW("[TOWER-DRILL] %s FAIL: %s", VerdictName(), why);
     Done("FAIL");
+}
+
+// A step the fixture could not give: the arm's name, then the DONE line.
+void Abandon(const char* why) {
+    UE_LOGW("[TOWER-DRILL] %s ABANDONED: %s", VerdictName(), why);
+    Done("ABANDONED");
 }
 
 // The rows have answered my last op.
@@ -284,8 +341,12 @@ bool AtTheParts(void* tower, void* player, bool reached) {
     }
     // Every part this client uses must be within the lane's reach, or the fixture, not the lane, is what ended it.
     std::vector<PartDist> used;
-    if (ArmOf() == Arm::RadioReset) {
+    if (IsRadioReset(ArmOf())) {
         used.push_back(reset);
+    } else if (IsRadioFuse(ArmOf())) {
+        PartDist p{"fuse slot", {RT::Part::Fuse, g_fuseSlot}};
+        Measure(tower, me, p);
+        used.push_back(p);
     } else {
         used.push_back(confirm);
         for (int i : g_presses) {
@@ -386,6 +447,8 @@ void ClientTick(void* player) {
     v.player = player;
     v.haveL = v.tower && RT::Read(v.tower, v.l);
     v.haveW = FindRow(coop::net::kFuseTowerKindRadio, 0, v.w);
+    v.fuseSlot = g_fuseSlot;
+    v.climbMs = g_climb.Result().climbMs;
     void* const tower = v.tower;
     const RT::State& l = v.l;
     const bool haveL = v.haveL;
@@ -394,6 +457,10 @@ void ClientTick(void* player) {
     // The host's break as this copy reads it: the host's row says broken and this copy shows its cells; the control
     // that applies no rows reads the row alone.
     const bool crossed = haveW && RowBroken(w) && (BreakFromRowAlone() || (haveL && l.isBroken && CellsEqual(l, w)));
+    // The fuse arms' tower stays whole: the host's blown fuse as this copy reads it.
+    const bool fuseCrossed = haveW && !RowBroken(w) && BlownSlot(w) >= 0 &&
+                             (BreakFromRowAlone() || (haveL && !l.isBroken && FusesEqual(l, w)));
+    if (haveW && RowBroken(w) && g_rowBrokenMs == 0) g_rowBrokenMs = NowMs();
     switch (g_step) {
     case Step::Arm: {
         if (!coop::net_pump::HasAnnouncedWorldReady() ||
@@ -412,34 +479,67 @@ void ClientTick(void* player) {
         UE_LOGI("[TOWER-DRILL] client %s census: the radio tower at (%.0f, %.0f, %.0f), puzzle %dx%d, broken %d, "
                 "fuses %s cells %s", ArmName(), at.X, at.Y, at.Z, l.width, l.height, l.isBroken ? 1 : 0,
                 Digits(l, true).c_str(), Digits(l, false).c_str());
+        g_armMs = NowMs();
         Go(IsRadioJoin(ArmOf()) ? Step::JoinCheck : Step::Walk);
         return;
     }
-    case Step::JoinCheck:
-        // A joiner's tower reads the host's break as it arrives, before it walks anywhere.
-        if (crossed) {
-            UE_LOGI("[TOWER-DRILL] client PASS the joiner's copy reads the host's break: cells %s",
+    case Step::JoinCheck: {
+        // A joiner's tower reads the host's break as it arrives: the FIRST row it took says broken, before it walks
+        // anywhere. The control applies no row, so it waits out the bound and says what it saw.
+        uint8_t first = 0;
+        if (!GatesOpen() && coop::fuse_tower_rows::FirstAppliedFlags(coop::net::kFuseTowerKindRadio, 0, first)) {
+            const bool brokenOnArrival = (first & coop::net::kFuseTowerBroken) != 0;
+            UE_LOGI("[TOWER-DRILL] client radiojoin: first row broken=%d", brokenOnArrival ? 1 : 0);
+            if (!brokenOnArrival) {
+                Abandon("the host's break was not in place on arrival (fixture)");
+                return;
+            }
+            UE_LOGI("[TOWER-DRILL] client PASS the joiner's copy reads the host's break: first row broken=1, cells %s",
                     Digits(l, false).c_str());
             Go(Step::Walk);
             return;
         }
-        if (Overdue(kCrossMs)) Fail("the host's break never reached this copy");
+        if (!Overdue(kCrossMs)) return;
+        if (!haveW || !RowBroken(w)) {
+            Abandon("the host never broke its tower");
+        } else if (GatesOpen()) {
+            char why[96];
+            std::snprintf(why, sizeof why, "the host broke at %llu ms but this copy never read it",
+                          static_cast<unsigned long long>(g_rowBrokenMs > g_armMs ? g_rowBrokenMs - g_armMs : 0));
+            Fail(why);
+        } else {
+            Fail("the host's break never reached this copy");
+        }
         return;
+    }
     case Step::Break: {
         // At the top of the ladder: the break is read here, the puzzle solved, the reach of the parts checked.
-        if (crossed) {
-            const bool reset = ArmOf() == Arm::RadioReset;
-            if (!reset && (!haveL || !SolveTorus(l, g_presses))) {
-                UE_LOGW("[TOWER-DRILL] %s ABANDONED: no set of presses lights this puzzle (the fixture)", ArmName());
-                Done("ABANDONED");
+        const bool fuseArm = IsRadioFuse(ArmOf());
+        if (fuseArm ? fuseCrossed : crossed) {
+            const bool reset = IsRadioReset(ArmOf());
+            if (fuseArm) {
+                g_fuseSlot = BlownSlot(w);
+                UE_LOGI("[TOWER-DRILL] client PASS the host's blown fuse reached this copy: slot %d, fuses %s",
+                        g_fuseSlot, Digits(l, true).c_str());
+                if (AtTheParts(tower, player, g_footReached)) Go(Step::Fuse);
                 return;
             }
-            UE_LOGI("[TOWER-DRILL] client PASS the host's break reached this copy: cells %s, %zu presses solve it",
-                    Digits(l, false).c_str(), g_presses.size());
+            if (!reset && (!haveL || !SolveTorus(l, g_presses))) {
+                Abandon("no set of presses lights this puzzle (the fixture)");
+                return;
+            }
+            // A puzzle that is on needs a press; a tower the drill broke with every cell lit is a fixture's fault.
+            if (!reset && !l.skipPuzzle && g_presses.empty()) {
+                Fail("the puzzle needed no press");
+                return;
+            }
+            UE_LOGI("[TOWER-DRILL] client PASS the host's break reached this copy: cells %s, %zu presses solve it, "
+                    "lightsout=%d", Digits(l, false).c_str(), g_presses.size(), l.skipPuzzle ? 0 : 1);
             if (AtTheParts(tower, player, g_footReached)) Go(reset ? Step::Reset : Step::Press);
             return;
         }
-        if (Overdue(kCrossMs)) Fail("the host's break never reached this copy");
+        if (Overdue(kCrossMs))
+            Fail(fuseArm ? "the host's blown fuse never reached this copy" : "the host's break never reached this copy");
         return;
     }
     case Step::Walk: {
@@ -488,9 +588,9 @@ void ClientTick(void* player) {
             // The walk is the director's, to a standpoint about the ladder's foot at the foot's height; the mount
             // takes the closest point of the ladder within 125 uu of the walker.
             g_ladderWalkAsked = true;
-            g_ladder = LD::Find(tower);
+            g_ladder.Set(LD::Find(tower));
             FVector me{};
-            if (!g_ladder || !LD::Foot(g_ladder, g_foot) || !LD::Top(g_ladder, g_top) ||
+            if (!g_ladder.Get() || !LD::Foot(g_ladder.Get(), g_foot) || !LD::Top(g_ladder.Get(), g_top) ||
                 !ue_wrap::engine::TryGetActorLocation(player, me)) {
                 LadderAbandoned(tower, player, "the tower's ladder or the walker's place does not read");
                 return;
@@ -526,7 +626,7 @@ void ClientTick(void* player) {
         return;
     }
     case Step::LadderClimb:
-        if (g_climb.Tick(player, g_ladder)) LadderReport(tower, player);
+        if (g_climb.Tick(player, g_ladder.Get())) LadderReport(tower, player);
         return;
     case Step::Press: {
         if (!haveL || !haveW) return;
@@ -588,8 +688,8 @@ void ClientTick(void* player) {
         const bool copyWhole = !l.isBroken;
         const bool hostWhole = haveW && !RowBroken(w);
         if (copyWhole && hostWhole) {
-            UE_LOGI("[TOWER-DRILL] %s PASS (presses=%zu, climbMs=%llu)", VerdictName(), g_presses.size(),
-                    static_cast<unsigned long long>(g_climb.Result().climbMs));
+            UE_LOGI("[TOWER-DRILL] %s PASS (presses=%zu, climbMs=%llu, lightsout=%d)", VerdictName(), g_presses.size(),
+                    static_cast<unsigned long long>(g_climb.Result().climbMs), l.skipPuzzle ? 0 : 1);
             Done("PASS");
             return;
         }
@@ -599,6 +699,9 @@ void ClientTick(void* player) {
                                           : "this copy still reads broken");
         return;
     }
+    case Step::Fuse:
+        FuseArmTick(v);
+        return;
     case Step::Reset:
         ResetArmTick(v);
         return;
@@ -631,8 +734,20 @@ std::string RowCells(const FuseTowerRow& w) {
     return s;
 }
 
+std::string RowFuses(const FuseTowerRow& w) {
+    std::string s;
+    for (int i = 0; i < w.fuseCount; ++i) s += static_cast<char>('0' + w.fuses[i] % 10);
+    return s;
+}
+
 void RadioDone(const char* verdict) { Done(verdict); }
 void RadioFail(const char* why) { Fail(why); }
+void RadioAbandon(const char* why) { Abandon(why); }
+
+void RadioInconclusive(const char* why) {
+    UE_LOGW("[TOWER-DRILL] %s INCONCLUSIVE: %s", VerdictName(), why);
+    Done("INCONCLUSIVE");
+}
 
 void RadioHostTick(coop::net::Session& s) { HostTick(s); }
 
@@ -645,11 +760,14 @@ void RadioReset() {
     g_hostSaid = g_hostBroken = g_hostBroke = g_hostGaveUp = false;
     g_hostScrambles = 0;
     g_hostCallMs = 0;
+    g_hostFuseCount = 0;
     if (g_walk) DR::CancelBackgroundWalk(*g_walk);
     g_walk.reset();
     g_walkAsked = false;
     g_routeUU = -1.f;
-    g_ladder = nullptr;
+    // A climb the session ended lets go of the forward key before it is forgotten.
+    g_climb.Release(coop::players::Registry::Get().Local(), g_ladder.Get());
+    g_ladder.Reset();
     g_foot = g_top = FVector{};
     g_ladderWalkAsked = false;
     g_footReached = false;
@@ -658,12 +776,15 @@ void RadioReset() {
     g_pressNext = 0;
     g_step = Step::Arm;
     g_stepMs = 0;
+    g_armMs = g_rowBrokenMs = 0;
+    g_fuseSlot = -1;
     g_acted = false;
     g_actSeq = 0;
     g_leverMs = 0;
     g_pressMs = 0;
     g_pressExpect = 0;
     ResetArmReset();
+    FuseArmReset();
 }
 
 }  // namespace detail
