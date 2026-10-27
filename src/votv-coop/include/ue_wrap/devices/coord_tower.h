@@ -1,4 +1,4 @@
-// ue_wrap/desk/coord_tower.h -- the three coordinate towers (coordRadarDish_C): their state, its raw writes, and
+// ue_wrap/devices/coord_tower.h -- the three coordinate towers (coordRadarDish_C): their state, its raw writes, and
 // the tower's own painters and verbs.
 //
 // The towers triangulate the coordinates panel's cursor. Each can break: eight fuses and a lights-out puzzle,

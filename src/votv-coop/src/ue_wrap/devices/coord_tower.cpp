@@ -1,7 +1,7 @@
-// ue_wrap/desk/coord_tower.cpp -- see ue_wrap/desk/coord_tower.h. Offsets are the class's layout, the same in
+// ue_wrap/devices/coord_tower.cpp -- see ue_wrap/devices/coord_tower.h. Offsets are the class's layout, the same in
 // every world, and resolve once by name; verbs resolve on the tower in hand through the dispatch cache.
 
-#include "ue_wrap/desk/coord_tower.h"
+#include "ue_wrap/devices/coord_tower.h"
 
 #include "ue_wrap/actors/prop.h"  // GetPropNameString
 #include "ue_wrap/core/cached_obj_ref.h"

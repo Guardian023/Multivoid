@@ -107,6 +107,7 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/devices/drone_console.cpp
     src/ue_wrap/devices/windturbine.cpp
     src/ue_wrap/devices/door_box.cpp
+    src/ue_wrap/devices/coord_tower.cpp
     src/ue_wrap/desk/device_screen.cpp
     src/ue_wrap/desk/space_renderer.cpp
     src/ue_wrap/desk/console_desk.cpp
@@ -115,7 +116,6 @@ set(VOTVCOOP_SOURCES
     src/ue_wrap/desk/dish.cpp
     src/ue_wrap/desk/dish_writers.cpp
     src/ue_wrap/desk/sat_console.cpp
-    src/ue_wrap/desk/coord_tower.cpp
     src/ue_wrap/desk/tape_caddy.cpp
     src/ue_wrap/devices/floppy_slot.cpp
     src/ue_wrap/devices/laptop.cpp
