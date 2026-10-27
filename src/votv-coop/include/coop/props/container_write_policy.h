@@ -27,7 +27,7 @@ enum class Decision : uint8_t {
     Accept = 0,
     TooFast,             // this author has spent its window's worth of the host's arbitration
     Unreachable,         // the author is neither where this container is nor at an actor that opens
-                         // it (ue_wrap/actors/container_openers); the outcome name rides in the log
+                         // it (coop/props/container_reach); the outcome name rides in the log
     NoBodyYet,           // the author has no body on this machine to measure a reach from, which
                          // is a mid-join window rather than a verdict: the caller HOLDS the slice
                          // instead of refusing it (principle 8 -- a lane owes its late-join answer,
@@ -52,11 +52,6 @@ struct Inputs {
     uint64_t liveHash     = 0;      // the content hash of what the container holds now
     bool     liveReadable = false;  // false: the live contents did not read, and liveHash means nothing
 };
-
-// The lane's own reach, before intent_authority adds the target's bounds and its pose-staleness
-// budget. The game opens and mutates a container through the camera trace mainPlayer::arm, whose
-// default length is armLength = 200 uu, so that is the number this lane owns.
-inline constexpr float kReachUU = 200.0f;
 
 // How many slices one author may have arbitrated inside a window, and how long the refusal lasts.
 // An author's own sweep ships at most one slice per container per 250 ms, so sixteen in a second
