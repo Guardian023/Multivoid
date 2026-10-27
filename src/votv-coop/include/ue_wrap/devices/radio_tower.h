@@ -44,7 +44,6 @@ bool IsTower(void* obj);
 bool Read(void* tower, State& out);
 
 // Raw writes: nothing repaints. WriteCells takes the tower's own count of cells and no other.
-bool WriteBroken(void* tower, bool broken);
 bool WriteAnimation(void* tower, bool animation);
 bool WriteFuse(void* tower, int32_t slot, uint8_t value);
 bool WriteCells(void* tower, const bool* cells, int32_t count);
@@ -64,6 +63,12 @@ bool PlayLever(void* tower, Lever lever, bool forward);
 
 enum class Sound : uint8_t { Click, Success, Fail, FusePulled, FuseInserted, Lever, Scramble };
 bool Play(void* tower, Sound sound);
+
+// The SAT console's alert for this tower, as the tower's radioTowerBroken dispatcher delivers it: the handler
+// ui_console_C::radioTowerBroken(tower, damagedHealth) called on the live console (a hint "Radio tower has been
+// damaged!" or "is down!", and the console's own wake-up of the player). ue_wrap has no delegate broadcast, and the
+// handler is a plain Blueprint event. False while the console is not there.
+bool Alert(void* tower, bool damagedHealth);
 
 // What a use acts on. getActionOptions writes it from the user's trace and the use reads it: a puzzle button by
 // its index, the confirm lever, the reset lever, a fuse slot by its index.
@@ -85,15 +90,5 @@ bool Use(void* tower, void* player, const LookAt& at);
 
 // The world location of the part `at` names, where a use reaches. False while the part is not there.
 bool PartLocation(void* tower, const LookAt& at, FVector& out);
-
-// A good fuse, what the insert takes (a prop_fuse_C, as its cast reads it), and one spawned at `at`. A pulled
-// fuse is the plain prop the pull spawns and names fuse_0.
-bool IsFuse(void* actor);
-void* SpawnFuse(const FVector& at);
-bool IsPulledFuse(void* actor);
-
-// [dev] the drills' insert as a player makes it: the fuse slot as the look-at, then playerUsedOn(player, a hit on
-// the slot, the slot, `fuse`), which spends the fuse it is handed.
-bool InsertFuse(void* tower, void* player, int32_t slot, void* fuse);
 
 }  // namespace ue_wrap::radio_tower

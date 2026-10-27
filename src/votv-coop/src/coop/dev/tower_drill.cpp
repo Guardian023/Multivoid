@@ -96,7 +96,10 @@ bool HostRow(int32_t id, FuseTowerRow& out) {
     FuseTowerPayload rows{};
     if (!coop::fuse_tower_rows::LastRows(rows)) return false;
     for (int i = 0; i < rows.count && i < coop::net::kFuseTowers; ++i)
-        if (rows.rows[i].id == id) { out = rows.rows[i]; return true; }
+        if (rows.rows[i].kind == coop::net::kFuseTowerKindCoordinate && rows.rows[i].id == id) {
+            out = rows.rows[i];
+            return true;
+        }
     return false;
 }
 

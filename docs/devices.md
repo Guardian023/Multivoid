@@ -284,7 +284,7 @@ every peer's wipes. Never `setDraw`, `endDraw` or `dirty` from outside: the sess
 window, and an outside `endDraw` deletes the world canvas the game's own next dab draws into
 (`coop/interactables/window_stroke_sync`, `ue_wrap/devices/window_canvas`).
 
-### The coordinate towers
+### The fuse towers
 
 Each of the three coordinate towers can break, and a broken one blocks the ping. A tower's state is
 its broken flag, eight fuses (empty, good or blown) and a lights-out puzzle, and its panel, on a
@@ -308,6 +308,25 @@ fuse blown, and an insert when the slot is empty and the host saw that player sp
 the tower; it refuses one otherwise, answering in the rows, and a refused pull's fuse is taken back
 out of the puller's hand, a refused insert's fuse given back where the player stands. Every act is
 judged within reach of the part it acts on, in the player's order, at a few a second.
+
+The radio tower is the second kind (`coop/world/fuse_tower_kind` holds what differs between the two). It
+is one actor, the gamemode's `radiotower`, and the drone's shop run reads its broken flag on the host, so
+a client's own break or repair that stayed on its own copy left the order flow judged by the host alone.
+It has the same fuses, a lights-out puzzle on a torus of up to 5x5 cells, a confirm lever whose forward
+end judges the puzzle and one `animation` flag that gates every use, and no panel; its second lever, the
+reset lever, re-rolls the tower. Its one roll is `scramble` (the decay timer, an explosion nearby and the
+reset lever all reach it), refused on a client with the lever's judgement, so the host is its only
+author. Only its fuses are saved: it loads whole and rolls nothing at load. Its row rides the same
+message: the confirm lever's two bits are its timeline's (running, and running forward), the reset
+lever's one is new, and a client starts each lever's timeline once when the host's row first has it
+running, takes `animation` from the row, and repairs through `completeMinigame`. A client that is shown
+a fuse blowing or the tower breaking raises the console's "Radio tower has been damaged!" and "is
+down!" alert by hand (the handler the host's broadcast would call), never for a tower's first applied
+row, since the handler also wakes the player. A client's press of a puzzle button or of either lever is
+sent to the host when its own copy is broken and idle; a whole tower answers with its own hint on the
+client. The host takes a pull of a blown fuse when no lever runs, and an insert on an empty slot; at
+the two easiest difficulties the insert also lights the puzzle. A client keeps the host's last row of
+each tower and applies it when that tower resolves, looking it up again once a second meanwhile.
 
 ### The drone
 
@@ -385,7 +404,7 @@ removed from its author's hand -- and a joiner gets every box's count at its wor
 | a light switch, a lid, the garage, an appliance, an oven's repair, a locker | any peer | symmetric state edges, relayed |
 | the power panel, the generators | the host | a client's press, repair, service, upgrade install and hit are ops the host takes from a player within reach; the host sends the breakers after its panel's apply and every generator's row after its verbs |
 | a keypad | the host | its verbs replayed on every client and its settled state after each chain; a client's own entries are an intent the host runs |
-| the coordinate towers | the host | a row per tower whenever one changes; a client's presses are intents the host runs, its fuse pulls and inserts claims the host takes or refuses |
+| the fuse towers (the three coordinate towers and the radio tower) | the host | a row per tower whenever one changes; a client's presses are intents the host runs, its fuse pulls and inserts claims the host takes or refuses |
 | the turbine | the host | six floats a second |
 | a window, the grime | any peer, minimum wins | monotone decreases |
 | the drone | the host | a transform stream; the client's tick suppressed |
@@ -403,7 +422,7 @@ removed from its author's hand -- and a joiner gets every box's count at its wor
 | `KeypadIntent` | a client to the host | a keypad's key and the entry: a digit, a submit, a cancel, a keycard's verdict, a reset |
 | `PowerControlState` | a client to the host; the host to all | the breakers a press flipped; the breakers, the lockout, a lever's click and each slot's last press taken |
 | `PowerGridState` | the host to all; a client to the host | every generator's row and each slot's last op taken; a repair, a service, an upgrade install or a hit |
-| `FuseTowerState` | the host to all; a client to the host | every tower's row (broken, fuses, puzzle, panel, lever), each slot's last op taken and last claim refused; a press of a puzzle button, the lever or the retract, a fuse pulled or inserted |
+| `FuseTowerState` | the host to all; a client to the host | every tower's row (kind, broken, fuses, puzzle, panel, levers), each slot's last op taken and last claim refused; a press of a puzzle button, a lever or the retract, a fuse pulled or inserted |
 | `TurbineState`, `WindowCleanState`, `GrimeState` | each peer or the host | the driver floats; a decrease |
 | `DroneState` | the host to all | the drone's transform and flags, among them its leave timer |
 | `DroneFlyIntent` | a client to the host | the face pressed, the keyboard or the leave timer; the host finds the console by the sender's reach |
@@ -436,7 +455,7 @@ state it shows, and the first rows a world takes play no sound.
 | security cameras | `coop/interactables/camera_toggle_intent`, `coop/interactables/toggle_verbs`, `coop/interactables/interactable_sync`, `ue_wrap/devices/security_camera` |
 | keypads | `coop/interactables/keypad_sync`, `ue_wrap/devices/passwordlock` |
 | power, turbine, windows, grime | `coop/world/power_panel`, `coop/world/power_grid`, `ue_wrap/devices/generator`, `coop/interactables/turbine_sync`, `coop/interactables/window_sync`, `coop/interactables/grime_sync`, `ue_wrap/devices/power_control`, `ue_wrap/devices/windturbine`, `ue_wrap/devices/base_window`, `ue_wrap/devices/grime` |
-| the coordinate towers | `coop/world/fuse_tower_rows`, `coop/world/fuse_tower_ops`, `ue_wrap/devices/coord_tower` |
+| the fuse towers | `coop/world/fuse_tower_rows`, `coop/world/fuse_tower_ops`, `coop/world/fuse_tower_kind`, `ue_wrap/devices/coord_tower`, `ue_wrap/devices/radio_tower` |
 | the drone | `coop/interactables/drone_sync`, `coop/interactables/drone_call_intent`, `ue_wrap/devices/drone`, `ue_wrap/devices/drone_console` |
 | the signal servers | `coop/interactables/serverbox_sync`, `coop/interactables/server_upgrade_sync`, `ue_wrap/devices/serverbox` |
 | identity | `coop/element/portable_identity` |

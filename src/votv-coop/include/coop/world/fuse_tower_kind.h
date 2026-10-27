@@ -1,8 +1,10 @@
 // coop/world/fuse_tower_kind.h -- the kinds of fuse tower, one table over their wrappers. The lane's two modules
 // (coop/world/fuse_tower_ops: what a player does at a tower and the host's judgement; coop/world/fuse_tower_rows: a
 // tower's state as rows) are written once and ask this table what differs: which towers exist, how a tower reads
-// into a row and a row is applied to it, which part an op strikes and where, what a pull and an insert need, and
-// what each does on the host's copy. A kind reaches the engine only through its ue_wrap wrapper. Game thread.
+// into a row and a row is applied to it, which part an op strikes and where, what a pull and an insert need, what
+// each does on the host's copy, and which script bodies the gate watches. A kind reaches the engine only through
+// its ue_wrap wrapper. The coordinate towers (coordRadarDish_C, three, by id) and the radio tower (radiotower_C,
+// one, id 0) are the two kinds. Game thread.
 
 #pragma once
 
@@ -13,9 +15,12 @@
 
 #include <cstdint>
 
+namespace ue_wrap::facts { class Function; }
+
 namespace coop::fuse_tower_kind {
 
-enum class Kind : uint8_t { Coordinate = 0 };
+enum class Kind : uint8_t { Coordinate = coop::net::kFuseTowerKindCoordinate, Radio = coop::net::kFuseTowerKindRadio };
+inline constexpr int kKinds = coop::net::kFuseTowerKinds;
 
 // A tower in this world: its kind, its id within the kind, and the engine object.
 struct Tower {
@@ -29,15 +34,18 @@ struct View {
     bool    broken = false;
     uint8_t fuseCount = 0;
     uint8_t fuses[8] = {};  // 0 empty, 1 good, 2 blown
+    uint8_t lightCount = 0;
 };
 
 // ---- finding -----------------------------------------------------------------------------------------------
 
-// Whether the kind's wrapper has resolved (and tries again at its own pace).
+// Whether the kind's tower can be found now (its wrapper has resolved, and for the radio tower the gamemode holds
+// it); a wrapper not resolved tries again at its own pace.
 bool Resolved(Kind kind);
 
-// Every live tower of every kind into `out`, in the order the host writes its rows. How many, or -1 while no
-// wrapper has resolved, so a caller never reads an unresolved world as "no towers".
+// Every live tower of every kind into `out`, in the order the host writes its rows: the radio tower first, so a
+// cap never drops it, then the coordinate towers by id. How many, or -1 while nothing has resolved, so a caller
+// never reads an unresolved world as "no towers".
 int32_t ReadAll(Tower* out, int32_t cap);
 
 // The tower of (kind, id), or null.
@@ -54,14 +62,23 @@ bool ReadView(Kind kind, void* tower, View& out);
 // The tower into `row`; false when it does not read.
 bool ReadRow(const Tower& tower, coop::net::FuseTowerRow& row);
 
+// CLIENT: what a row's application knows besides the row. `live` is false on the tower's first row, which is
+// state and not a player's act: no sound or alert of its own. `prevFlags` are the flags of the row last applied to
+// this tower (0 before any), so a lever started by the host is started here once. `sizeWarned` is the lane's
+// once-flag for a puzzle sized differently here and on the host.
+struct ApplyCtx {
+    bool                             live = false;
+    uint8_t                          prevFlags = 0;
+    coop::fuse_tower_rows::Edges*    edges = nullptr;
+    bool*                            sizeWarned = nullptr;
+};
+
 // CLIENT: the tower brought to `row` (the host's row with my untaken claims), each change made as the tower's own
-// graph makes it. `live` is false on the tower's first row, which is state and not a player's act: no sound of its
-// own. `sizeWarned` is the lane's once-flag for a puzzle sized differently here and on the host.
-void ApplyRow(Kind kind, void* tower, const coop::net::FuseTowerRow& row, bool live,
-              coop::fuse_tower_rows::Edges& edges, bool& sizeWarned);
+// graph makes it.
+void ApplyRow(Kind kind, void* tower, const coop::net::FuseTowerRow& row, const ApplyCtx& ctx);
 
 // CLIENT: the panel brought toward the row's, through the tower's own retract. True when the retract was asked;
-// `opens` is the way it was asked, `ran` whether the retract ran.
+// `opens` is the way it was asked, `ran` whether the retract ran. A kind with no panel asks nothing.
 bool ConvergePanel(Kind kind, void* tower, void* player, const coop::net::FuseTowerRow& row, bool& opens, bool& ran);
 
 // ---- ops ---------------------------------------------------------------------------------------------------
@@ -74,7 +91,8 @@ bool Use(Kind kind, void* tower, void* player, uint8_t op, int32_t index);
 
 // CLIENT: what a use the player is making does, from the look-at the tower holds. Send: the op is `op` and `index`
 // (the use is refused here and goes to the host). Pull: a fuse pull, which runs here and is claimed as it ends.
-// None: the player's own game runs it.
+// None: the player's own game runs it (a use the tower's own gates would turn away: a radio tower that is whole or
+// busy answers with its own hint).
 enum class Look : uint8_t { None, Send, Pull };
 Look ReadUse(Kind kind, void* tower, uint8_t& op, int32_t& index);
 
@@ -95,5 +113,17 @@ void TakeInsert(Kind kind, void* tower, int32_t slot);
 bool IsFuse(void* actor);
 void* SpawnFuse(const ue_wrap::FVector& at);
 bool IsPulledFuse(void* actor);
+
+// ---- the gate ----------------------------------------------------------------------------------------------
+
+// The four script bodies a kind's gate watches: its roll, the lever's judgement (both refused on a client), a use
+// (actionOptionIndex) and an insert (playerUsedOn).
+struct WatchRows {
+    const ue_wrap::facts::Function* roll;
+    const ue_wrap::facts::Function* judge;
+    const ue_wrap::facts::Function* use;
+    const ue_wrap::facts::Function* insert;
+};
+const WatchRows& WatchesOf(Kind kind);
 
 }  // namespace coop::fuse_tower_kind

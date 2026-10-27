@@ -76,11 +76,15 @@ const char* OpName(uint8_t op) {
     case coop::net::kFuseTowerOpButton:  return "button press";
     case coop::net::kFuseTowerOpLever:   return "lever";
     case coop::net::kFuseTowerOpRetract: return "panel retract";
+    case coop::net::kFuseTowerOpReset:   return "reset lever";
     case coop::net::kFuseTowerOpPull:    return "fuse pull";
     case coop::net::kFuseTowerOpInsert:  return "fuse insert";
     default:                              return "?";
     }
 }
+
+// The tower kind of an op, which HostOffer has admitted.
+FK::Kind KindOf(const FuseTowerPayload& p) { return static_cast<FK::Kind>(p.kind); }
 
 uint64_t g_rollsRefused = 0;
 
@@ -91,7 +95,8 @@ coop::roster_ledger::PerSlotState<uint16_t> g_refused;
 struct Waiting { FuseTowerPayload p; uint64_t arrivedMs; };
 std::deque<Waiting> g_waiting[coop::net::kMaxPeers];
 coop::net::IntentBucket g_rate[coop::net::kMaxPeers];
-struct Spend { int32_t tower = -1; uint64_t ms = 0; };  // -1 an empty place
+// A spend at the tower (kind, id); tower -1 is an empty place.
+struct Spend { int32_t tower = -1; FK::Kind kind = FK::Kind::Coordinate; uint64_t ms = 0; };
 struct Spends { Spend ring[kSpendsPerSlot]; uint8_t next = 0; };
 coop::roster_ledger::PerSlotState<Spends> g_spends;
 uint64_t g_taken = 0, g_refusedCount = 0, g_refunds = 0, g_queuesFull = 0, g_outOfReach = 0;
@@ -112,7 +117,7 @@ void OnDestroyHeard(int senderSlot, void* actor) {
         const EL::IntentSubject reach = target.AuthorizeSegment(at, at);
         if (!reach) continue;
         Spends& sp = g_spends[sender];
-        sp.ring[sp.next] = {towers[i].id, NowMs()};
+        sp.ring[sp.next] = {towers[i].id, towers[i].kind, NowMs()};
         sp.next = static_cast<uint8_t>((sp.next + 1) % kSpendsPerSlot);
         UE_LOGI("fuse_tower: slot %u spent a fuse at tower %d (%.0f uu, allowed %.0f)", sender, towers[i].id,
                 reach.distUU, reach.reachUU);
@@ -120,12 +125,12 @@ void OnDestroyHeard(int senderSlot, void* actor) {
     }
 }
 
-// The newest spend `slot` made at tower `id`, burnt. False when there is none.
-bool TakeSpend(uint8_t slot, int32_t id) {
+// The newest spend `slot` made at the tower (kind, id), burnt. False when there is none.
+bool TakeSpend(uint8_t slot, FK::Kind kind, int32_t id) {
     Spends& sp = g_spends[slot];
     Spend* newest = nullptr;
     for (Spend& e : sp.ring)
-        if (e.tower == id && (!newest || e.ms > newest->ms)) newest = &e;
+        if (e.tower == id && e.kind == kind && (!newest || e.ms > newest->ms)) newest = &e;
     if (!newest) return false;
     *newest = Spend{};
     return true;
@@ -148,12 +153,23 @@ void Refund(uint8_t slot, FK::Kind kind, void* tower) {
             fuse ? "a fuse spawned where it stands" : "NOT spawned (the fuse is lost)");
 }
 
+// The faults in an op that no client sends: each is warned once, however many ops carry it.
+enum class Fault : uint8_t { Op, Kind, OpKind, Button, Fuse, Count };
+bool g_faultSeen[static_cast<int>(Fault::Count)] = {};
+
+bool FirstOfFault(Fault f) {
+    bool& seen = g_faultSeen[static_cast<int>(f)];
+    if (seen) return false;
+    seen = true;
+    return true;
+}
+
 enum class Take : uint8_t { Done, Wait };
 
 Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     const FuseTowerPayload& p = wt.p;
     const bool waited = NowMs() - wt.arrivedMs >= kWaitMs;
-    const FK::Kind kind = FK::Kind::Coordinate;
+    const FK::Kind kind = KindOf(p);
     if (!FK::Resolved(kind) && !waited) return Take::Wait;
     if (!SeqAfter(p.seq, g_ack[sender])) {
         UE_LOGW("fuse_tower: host dropped slot %u's %s seq %u (last taken %u)", sender, OpName(p.op), p.seq,
@@ -170,13 +186,20 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     // whatever the outcome, so one spend answers one insert. None yet waits for the destroy behind it.
     bool spent = false;
     if (located && p.op == coop::net::kFuseTowerOpInsert) {
-        spent = TakeSpend(sender, p.tower);
+        spent = TakeSpend(sender, kind, p.tower);
         if (!spent && !waited) return Take::Wait;
     }
     FK::View st;
-    const char* refusal = !tower ? "no tower of that id" : !located ? "that part is not there"
-                        : !reach ? EL::OutcomeName(reach.outcome) : !FK::ReadView(kind, tower, st)
-                        ? "the tower does not read" : nullptr;
+    const bool viewed = tower && FK::ReadView(kind, tower, st);
+    // A button or a fuse the host's copy of the tower does not have: one warning for the kind of fault, however
+    // many ops carry it.
+    const bool badButton = viewed && p.op == coop::net::kFuseTowerOpButton && p.index >= st.lightCount;
+    const bool badFuse = viewed && IsClaim(p.op) && p.index >= st.fuseCount;
+    const char* refusal = !tower ? "no tower of that id"
+                        : badButton ? "that button is outside the puzzle"
+                        : badFuse ? "that fuse is outside the tower's fuses"
+                        : !located ? "that part is not there"
+                        : !reach ? EL::OutcomeName(reach.outcome) : !viewed ? "the tower does not read" : nullptr;
     if (!refusal && p.op == coop::net::kFuseTowerOpPull) {
         refusal = FK::CanPull(kind, tower, st, p.index);
     } else if (!refusal && p.op == coop::net::kFuseTowerOpInsert) {
@@ -186,8 +209,8 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     if (refusal) {
         ++g_refusedCount;
         // A client standing out of reach presses often: said at first and then now and then.
-        const bool quiet =
-            reach.outcome == EL::IntentOutcome::OutOfReach && ++g_outOfReach > 3 && g_outOfReach % 20 != 0;
+        bool quiet = reach.outcome == EL::IntentOutcome::OutOfReach && ++g_outOfReach > 3 && g_outOfReach % 20 != 0;
+        if (badButton || badFuse) quiet = !FirstOfFault(badButton ? Fault::Button : Fault::Fuse);
         if (!quiet)
             UE_LOGW("fuse_tower: host refused slot %u's %s of tower %d (seq %u) -- %s (%.0f uu, allowed %.0f)",
                     sender, OpName(p.op), p.tower, p.seq, refusal, reach.distUU, reach.reachUU);
@@ -202,6 +225,7 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
     case coop::net::kFuseTowerOpButton:
     case coop::net::kFuseTowerOpLever:
     case coop::net::kFuseTowerOpRetract:
+    case coop::net::kFuseTowerOpReset:
         // The tower's own use, on its own gates: the panel open, the lever at rest, the tower broken.
         FK::Use(kind, tower, puppet, p.op, p.index);
         break;
@@ -221,9 +245,25 @@ Take HostTakeOp(coop::net::Session* s, const Waiting& wt, uint8_t sender) {
 }
 
 void HostOffer(coop::net::Session* s, const FuseTowerPayload& p, uint8_t sender) {
-    if (sender == 0 || sender >= coop::net::kMaxPeers || p.op == coop::net::kFuseTowerOpRows ||
-        p.op > coop::net::kFuseTowerOpInsert)
+    if (sender == 0 || sender >= coop::net::kMaxPeers || p.op == coop::net::kFuseTowerOpRows) return;
+    // The receive boundary: an op no client sends is dropped here, with one warning for each kind of fault.
+    const char* fault = nullptr;
+    Fault which = Fault::Op;
+    if (p.op > coop::net::kFuseTowerOpReset) {
+        fault = "an op outside 1..6";
+    } else if (p.kind >= coop::net::kFuseTowerKinds) {
+        which = Fault::Kind;
+        fault = "a tower kind that is neither tower";
+    } else if ((p.op == coop::net::kFuseTowerOpRetract && p.kind == coop::net::kFuseTowerKindRadio) ||
+               (p.op == coop::net::kFuseTowerOpReset && p.kind == coop::net::kFuseTowerKindCoordinate)) {
+        which = Fault::OpKind;
+        fault = "an op its tower kind does not have (the panel retract is the coordinate towers', the reset lever "
+                "the radio tower's)";
+    }
+    if (fault) {
+        if (FirstOfFault(which)) UE_LOGW("fuse_tower: host dropped slot %u's op %u -- %s", sender, p.op, fault);
         return;
+    }
     auto& q = g_waiting[sender];
     const Waiting w{p, NowMs()};
     if (q.empty() && g_rate[sender].Take(kOpBudget, NowMs())) {
@@ -239,9 +279,9 @@ void HostOffer(coop::net::Session* s, const FuseTowerPayload& p, uint8_t sender)
             if (SeqAfter(r.p.seq, g_ack[sender])) g_ack[sender] = r.p.seq;
             if (!IsClaim(r.p.op)) continue;
             g_refused[sender] = r.p.seq;
-            if (r.p.op == coop::net::kFuseTowerOpInsert && TakeSpend(sender, r.p.tower))
-                if (void* tower = FK::Find(FK::Kind::Coordinate, r.p.tower))
-                    Refund(sender, FK::Kind::Coordinate, tower);
+            if (r.p.op == coop::net::kFuseTowerOpInsert && TakeSpend(sender, KindOf(r.p), r.p.tower))
+                if (void* tower = FK::Find(KindOf(r.p), r.p.tower))
+                    Refund(sender, KindOf(r.p), tower);
             coop::fuse_tower_rows::HostSendNow();
         }
         q.clear();
@@ -271,7 +311,7 @@ void HostDrainWaiting(coop::net::Session* s) {
 // ---- a client ------------------------------------------------------------------------------------------------
 
 // My claims the host has not answered, oldest first.
-struct Claim { uint16_t seq; uint8_t op; int32_t tower; uint8_t slot; bool solved; };
+struct Claim { uint16_t seq; uint8_t op; FK::Kind kind; int32_t tower; uint8_t slot; bool solved; };
 std::vector<Claim> g_claims;
 uint16_t g_seq = 0;
 uint16_t g_lastAck = 0;
@@ -283,13 +323,14 @@ void*   g_insertTower = nullptr;
 int32_t g_insertSlot = -1;
 bool    g_insertWasBroken = false;
 
-void ClientSend(coop::net::Session* s, uint8_t op, int32_t tower, int32_t index, bool solved = false) {
+void ClientSend(coop::net::Session* s, uint8_t op, FK::Kind kind, int32_t tower, int32_t index, bool solved = false) {
     FuseTowerPayload p{};
     p.op = op;
+    p.kind = static_cast<uint8_t>(kind);
     p.tower = tower;
     p.index = static_cast<uint8_t>(std::max(index, 0));
     p.seq = ++g_seq;
-    if (IsClaim(op)) g_claims.push_back({p.seq, op, tower, p.index, solved});
+    if (IsClaim(op)) g_claims.push_back({p.seq, op, kind, tower, p.index, solved});
     s->SendReliableToSlot(0, coop::net::ReliableKind::FuseTowerState, &p, sizeof(p));
     ++g_sent;
     UE_LOGI("fuse_tower: local %s of tower %d (index %d, seq %u) -- sent to the host", OpName(op), tower, index,
@@ -331,7 +372,7 @@ sg::Verdict OnRollPre(const sg::Call&) {
     return sg::Verdict::Cancel;
 }
 
-// A client's use: a press of a button, the lever or the retract goes to the host, which runs it; a pull runs here
+// A client's use: a press of a button, a lever or the retract goes to the host, which runs it; a pull runs here
 // and its move is claimed as the use ends.
 int32_t g_actionOff = -1;
 void* g_actionFn = nullptr;
@@ -350,7 +391,7 @@ sg::Verdict OnUsePre(const sg::Call& call) {
     if (!FK::Identify(call.object, kind, id)) return sg::Verdict::Run;
     switch (FK::ReadUse(kind, call.object, op, index)) {
     case FK::Look::Send:
-        ClientSend(Connected(), op, id, index);
+        ClientSend(Connected(), op, kind, id, index);
         return sg::Verdict::Cancel;
     case FK::Look::Pull:
         g_pullTower = call.object;
@@ -371,7 +412,7 @@ void OnUsePost(const sg::Call& call) {
     if (!IsClient(s) || !FK::Identify(call.object, kind, id) || !FK::ReadView(kind, call.object, st) ||
         g_pullSlot >= st.fuseCount || st.fuses[g_pullSlot] != 0)
         return;
-    ClientSend(s, coop::net::kFuseTowerOpPull, id, g_pullSlot);
+    ClientSend(s, coop::net::kFuseTowerOpPull, kind, id, g_pullSlot);
 }
 
 // A client's insert runs here, and its move is claimed as it ends.
@@ -409,29 +450,34 @@ void OnInsertPost(const sg::Call& call) {
     if (!IsClient(s) || !FK::Identify(call.object, kind, id) || !FK::ReadView(kind, call.object, st) ||
         g_insertSlot >= st.fuseCount || st.fuses[g_insertSlot] != 1)
         return;
-    ClientSend(s, coop::net::kFuseTowerOpInsert, id, g_insertSlot, g_insertWasBroken && !st.broken);
+    ClientSend(s, coop::net::kFuseTowerOpInsert, kind, id, g_insertSlot, g_insertWasBroken && !st.broken);
 }
 
-UE_FACT_FN(kRowScrambleRadarDish, "fuse_tower_ops", L"coordRadarDish_C", L"Scramble Radar Dish", Declared);
-UE_FACT_FN(kRowLeverTlFinished, "fuse_tower_ops", L"coordRadarDish_C", L"leverTL__FinishedFunc", Declared);
-UE_FACT_FN(kRowActionOptionIndex, "fuse_tower_ops", L"coordRadarDish_C", L"actionOptionIndex", Declared);
-UE_FACT_FN(kRowPlayerUsedOn, "fuse_tower_ops", L"coordRadarDish_C", L"playerUsedOn", Declared);
-
+// Each kind's four bodies (coop/world/fuse_tower_kind), under one tag a kind and a role.
 struct WatchDef {
     const ue_wrap::facts::Function* row;
     int tag;
     sg::PreFn pre;
     sg::PostFn post;
 };
-constexpr WatchDef kWatches[] = {
-    { &kRowScrambleRadarDish, 0x43545352 /*'CTSR'*/, &OnRollPre,   nullptr },
-    { &kRowLeverTlFinished,   0x4354464E /*'CTFN'*/, &OnRollPre,   nullptr },
-    { &kRowActionOptionIndex, 0x4354414F /*'CTAO'*/, &OnUsePre,    &OnUsePost },
-    { &kRowPlayerUsedOn,      0x43545555 /*'CTUU'*/, &OnInsertPre, &OnInsertPost },
+constexpr int kWatchCount = FK::kKinds * 4;
+constexpr int kTags[FK::kKinds][4] = {
+    { 0x43545352 /*'CTSR'*/, 0x4354464E /*'CTFN'*/, 0x4354414F /*'CTAO'*/, 0x43545555 /*'CTUU'*/ },
+    { 0x52545352 /*'RTSR'*/, 0x5254464E /*'RTFN'*/, 0x5254414F /*'RTAO'*/, 0x52545555 /*'RTUU'*/ },
 };
-constexpr int kWatchCount = static_cast<int>(sizeof(kWatches) / sizeof(kWatches[0]));
+WatchDef g_watches[kWatchCount];
 bool g_registered = false;
 bool g_settled = false;
+
+void BuildWatches() {
+    for (int k = 0; k < FK::kKinds; ++k) {
+        const FK::WatchRows& r = FK::WatchesOf(static_cast<FK::Kind>(k));
+        g_watches[k * 4 + 0] = { r.roll,   kTags[k][0], &OnRollPre,   nullptr };
+        g_watches[k * 4 + 1] = { r.judge,  kTags[k][1], &OnRollPre,   nullptr };
+        g_watches[k * 4 + 2] = { r.use,    kTags[k][2], &OnUsePre,    &OnUsePost };
+        g_watches[k * 4 + 3] = { r.insert, kTags[k][3], &OnInsertPre, &OnInsertPost };
+    }
+}
 
 }  // namespace
 
@@ -440,7 +486,8 @@ void Install(coop::net::Session* session) {
     if (g_registered) return;
     g_registered = true;
     coop::remote_prop::AddDestroyListener(&OnDestroyHeard);
-    for (const WatchDef& w : kWatches)
+    BuildWatches();
+    for (const WatchDef& w : g_watches)
         if (!sg::WatchName(*w.row, w.tag, w.pre, w.post))
             UE_LOGE("fuse_tower: the script-body gate refused the watch on %ls::%ls -- that act stays each peer's own",
                     w.row->Class(), w.row->Name());
@@ -451,7 +498,7 @@ void Tick() {
     if (g_settled || !g_registered) return;
     sg::ResolvePendingNames();
     int live = 0, settled = 0;
-    for (const WatchDef& w : kWatches) {
+    for (const WatchDef& w : g_watches) {
         if (sg::NameWatchLive(*w.row, w.tag)) ++live;
         if (sg::NameWatchSettled(*w.row, w.tag)) ++settled;
     }
@@ -497,7 +544,7 @@ void OnAcks(uint16_t ack, uint16_t refused) {
 
 void Overlay(coop::net::FuseTowerRow& row) {
     for (const Claim& c : g_claims) {
-        if (c.tower != row.id || c.slot >= row.fuseCount) continue;
+        if (static_cast<uint8_t>(c.kind) != row.kind || c.tower != row.id || c.slot >= row.fuseCount) continue;
         if (c.op == coop::net::kFuseTowerOpPull) {
             row.fuses[c.slot] = 0;
         } else {
@@ -505,7 +552,7 @@ void Overlay(coop::net::FuseTowerRow& row) {
             if (c.solved) {
                 // The insert solved the puzzle here, as the host's copy will once it takes the claim.
                 row.flags = static_cast<uint8_t>(row.flags & ~coop::net::kFuseTowerBroken);
-                row.lights = static_cast<uint16_t>((1u << row.lightCount) - 1u);
+                row.lights = (1u << row.lightCount) - 1u;
             }
         }
     }

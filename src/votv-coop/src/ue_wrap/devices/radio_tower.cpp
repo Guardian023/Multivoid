@@ -8,15 +8,12 @@
 
 #include "ue_wrap/devices/radio_tower.h"
 
-#include "ue_wrap/actors/prop.h"  // GetPropNameString
 #include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/call.h"
 #include "ue_wrap/core/component_calls.h"
 #include "ue_wrap/core/field_io.h"
 #include "ue_wrap/core/log.h"
-#include "ue_wrap/core/object_index.h"
 #include "ue_wrap/core/reflection.h"
-#include "ue_wrap/engine/engine.h"            // SpawnActor
 #include "ue_wrap/engine/engine_component.h"  // GetComponentLocation, PlayAudioComponent
 #include "ue_wrap/engine/engine_timeline.h"
 #include "ue_wrap/engine/hit_result.h"
@@ -234,12 +231,6 @@ bool Read(void* tower, State& out) {
     return true;
 }
 
-bool WriteBroken(void* tower, bool broken) {
-    if (!Usable(tower)) return false;
-    WriteBit(tower, g_broken, broken);
-    return true;
-}
-
 bool WriteAnimation(void* tower, bool animation) {
     if (!Usable(tower)) return false;
     WriteBit(tower, g_anim, animation);
@@ -290,6 +281,16 @@ bool Play(void* tower, Sound sound) {
     return engine::PlayAudioComponent(ObjectAt(tower, g_offSound[i]));
 }
 
+bool Alert(void* tower, bool damagedHealth) {
+    if (!Usable(tower)) return false;
+    void* console = world_singleton::Find(L"ui_console_C");
+    void* fn = console ? R::FindDispatchFunctionCached(R::ClassOf(console), L"radioTowerBroken") : nullptr;
+    if (!fn) return false;
+    ParamFrame f(fn);
+    return f.valid() && f.Set<void*>(L"radiotower", tower) && f.Set<bool>(L"damagedHealth", damagedHealth) &&
+           Call(console, f);
+}
+
 bool ReadLookAt(void* tower, LookAt& out) {
     if (!Usable(tower)) return false;
     out = LookAt{};
@@ -329,37 +330,6 @@ bool PartLocation(void* tower, const LookAt& at, FVector& out) {
     if (!part) return false;
     out = engine::GetComponentLocation(part);
     return true;
-}
-
-bool IsFuse(void* actor) {
-    if (!actor || !R::IsLive(actor)) return false;
-    void* cls = object_index::ClassByName(L"prop_fuse_C");
-    return cls && R::ClassOf(actor) == cls;
-}
-
-void* SpawnFuse(const FVector& at) {
-    void* cls = object_index::ClassByName(L"prop_fuse_C");
-    return cls ? engine::SpawnActor(cls, at) : nullptr;
-}
-
-bool IsPulledFuse(void* actor) {
-    return actor && R::IsLive(actor) && prop::GetPropNameString(actor) == L"fuse_0";
-}
-
-bool InsertFuse(void* tower, void* player, int32_t slot, void* fuse) {
-    if (!Usable(tower) || !player || !fuse) return false;
-    const LookAt at{Part::Fuse, slot};
-    void* part = PartComponent(tower, at);
-    void* fn = R::FindDispatchFunctionCached(R::ClassOf(tower), L"playerUsedOn");
-    if (!part || !fn) return false;
-    const SavedLook saved = SaveLook(tower);
-    WriteLook(tower, at);
-    const FVector where = engine::GetComponentLocation(part);
-    ParamFrame f(fn);
-    const bool ok = f.valid() && f.Set<void*>(L"player", player) && hit_result::Write(f, L"hit", tower, part, where) &&
-                    f.Set<void*>(L"lookAtComponent", part) && f.Set<void*>(L"holdObject", fuse) && Call(tower, f);
-    if (R::IsLive(tower)) RestoreLook(tower, saved);
-    return ok;
 }
 
 }  // namespace ue_wrap::radio_tower

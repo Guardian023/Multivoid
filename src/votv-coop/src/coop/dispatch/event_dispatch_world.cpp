@@ -206,8 +206,9 @@ bool HandleWorldEvent(const net::Session::ReliableMessage& msg) {
         break;
     }
     case net::ReliableKind::FuseTowerState: {
-        // The coordinate towers: the host's rows (host to all) or a client's op on one, a press or a fuse it moved
-        // (client to host). Role, reach and trust gates live in the two modules.
+        // The fuse towers, coordinate and radio: the host's rows (host to all) or a client's op on one, a press or
+        // a fuse it moved (client to host). Role, reach and trust gates live in the two modules; the rows are
+        // admitted here (a row no tower sends is dropped), and an op's kind, op and index are judged at the host.
         if (msg.payloadLen < sizeof(net::FuseTowerPayload)) {
             UE_LOGW("event_feed: FuseTowerState payload too short (%zu < %zu)",
                     static_cast<size_t>(msg.payloadLen), sizeof(net::FuseTowerPayload));
@@ -218,7 +219,10 @@ bool HandleWorldEvent(const net::Session::ReliableMessage& msg) {
         if (msg.senderPeerSlot < 0 || msg.senderPeerSlot >= net::kMaxPeers) break;
         const auto tslot = static_cast<uint8_t>(msg.senderPeerSlot);
         if (tp.op == net::kFuseTowerOpRows) {
-            if (tslot == 0) coop::fuse_tower_rows::OnRows(tp);  // the host's alone
+            if (tslot == 0) {  // the host's alone
+                coop::fuse_tower_rows::AdmitRows(tp);
+                coop::fuse_tower_rows::OnRows(tp);
+            }
         } else {
             coop::fuse_tower_ops::OnOp(tp, tslot);
         }

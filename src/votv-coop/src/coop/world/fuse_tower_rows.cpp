@@ -44,15 +44,34 @@ uint64_t NowMs() {
         std::chrono::steady_clock::now().time_since_epoch()).count());
 }
 
-// This world's towers, by id; re-read when one dies or the class set moves.
+// A tower that was not there, or a kept row's tower that has not resolved, is looked for again at most this often:
+// the radio tower is the gamemode's, which no class-set move announces.
+constexpr uint64_t kLookupMs = 1000;
+
+// This world's towers, by (kind, id); re-read when one dies or the class set moves, and when the radio tower is
+// missing, once a second.
 FK::Tower g_towers[kFuseTowers] = {};
 int32_t   g_towerCount = 0;
 uint64_t  g_classVersion = ~0ull;
+uint64_t  g_radioLookMs = 0;
 
-bool Towers() {
+bool HaveRadio() {
+    for (int32_t i = 0; i < g_towerCount; ++i)
+        if (g_towers[i].kind == FK::Kind::Radio) return true;
+    return false;
+}
+
+bool Towers(bool force = false) {
     const uint64_t v = ue_wrap::object_index::ClassSetVersion();
-    bool stale = v != g_classVersion || g_towerCount <= 0;
+    bool stale = force || v != g_classVersion || g_towerCount <= 0;
     for (int32_t i = 0; !stale && i < g_towerCount; ++i) stale = !R::IsLive(g_towers[i].obj);
+    if (!stale && !HaveRadio()) {
+        const uint64_t now = NowMs();
+        if (now - g_radioLookMs >= kLookupMs) {
+            g_radioLookMs = now;
+            stale = true;
+        }
+    }
     if (stale) {
         const int32_t n = FK::ReadAll(g_towers, kFuseTowers);
         g_towerCount = n < 0 ? 0 : n;
@@ -126,30 +145,68 @@ bool     g_applying = false;
 bool     g_sizeWarned = false;
 uint64_t g_applied = 0;
 uint64_t g_panelAskedMs[kFuseTowers] = {};
+uint64_t g_waitLookMs = 0;
 Edges    g_edges;
 
+// The host's last row of each tower, by (kind, id), kept until its tower resolves and applied then: a tower may
+// resolve long after the rows came (the radio tower is the gamemode's), and each is applied on its own. A tower's
+// first applied row is its state, not a player's act, so its changes make no sound of their own.
+struct Kept {
+    bool         used = false;
+    bool         pending = false;   // a row the tower has not taken yet
+    bool         applied = false;   // a row has been applied to this tower
+    uint8_t      appliedFlags = 0;  // the flags of the row last applied
+    FuseTowerRow row{};
+};
+Kept g_kept[kFuseTowers];
+
+Kept* KeptFor(const FuseTowerRow& r) {
+    Kept* spare = nullptr;
+    for (Kept& k : g_kept) {
+        if (k.used && k.row.kind == r.kind && k.row.id == r.id) return &k;
+        if (!k.used && !spare) spare = &k;
+    }
+    if (!spare) return nullptr;
+    *spare = Kept{};
+    spare->used = true;
+    spare->row = r;
+    return spare;
+}
+
 // One tower brought to the host's row with my untaken claims on it, each change made as the tower's own graph
-// makes it, so it paints, sounds and animates as the host's did. The first rows a world takes are its state, not a
-// player's act: their changes make no sound of their own.
-void ApplyOne(FK::Kind kind, void* tower, const FuseTowerRow& host, bool live) {
-    FuseTowerRow c = host;
+// makes it, so it paints, sounds and animates as the host's did.
+void ApplyOne(FK::Kind kind, void* tower, Kept& k) {
+    FuseTowerRow c = k.row;
     coop::fuse_tower_ops::Overlay(c);
-    FK::ApplyRow(kind, tower, c, live, g_edges, g_sizeWarned);
+    FK::ApplyCtx ctx;
+    ctx.live = k.applied;
+    ctx.prevFlags = k.appliedFlags;
+    ctx.edges = &g_edges;
+    ctx.sizeWarned = &g_sizeWarned;
+    FK::ApplyRow(kind, tower, c, ctx);
+    k.applied = true;
+    k.pending = false;
+    k.appliedFlags = c.flags;
 }
 
 void ApplyAll() {
-    if (!Towers()) {
-        g_rowsWaiting = true;
-        return;
-    }
-    g_rowsWaiting = false;
+    Towers();
+    bool waiting = false, any = false;
     g_applying = true;
-    const bool live = g_applied > 0;
-    for (int i = 0; i < g_rows.count && i < kFuseTowers; ++i)
-        if (void* t = TowerById(FK::Kind::Coordinate, g_rows.rows[i].id))
-            ApplyOne(FK::Kind::Coordinate, t, g_rows.rows[i], live);
+    for (Kept& k : g_kept) {
+        if (!k.used || !k.pending) continue;
+        const auto kind = static_cast<FK::Kind>(k.row.kind);
+        void* t = TowerById(kind, k.row.id);
+        if (!t) {
+            waiting = true;
+            continue;
+        }
+        ApplyOne(kind, t, k);
+        any = true;
+    }
     g_applying = false;
-    ++g_applied;
+    g_rowsWaiting = waiting;
+    if (any) ++g_applied;
 }
 
 // Each panel toward the host's: open, closed, or where its montage heads. A client's own montage runs to its end,
@@ -161,6 +218,7 @@ void ConvergePanels() {
     const uint64_t now = NowMs();
     for (int i = 0; i < g_rows.count && i < kFuseTowers; ++i) {
         const FuseTowerRow& w = g_rows.rows[i];
+        if (w.kind != coop::net::kFuseTowerKindCoordinate) continue;  // the radio tower has no panel
         void* t = TowerById(FK::Kind::Coordinate, w.id);
         if (!t || now - g_panelAskedMs[i] < kPanelRetryMs) continue;
         g_applying = true;
@@ -188,7 +246,15 @@ void Tick() {
         return;
     }
     if (!g_haveRows || coop::fuse_tower_ops::RedOpen()) return;
-    if (g_rowsWaiting) ApplyAll();
+    if (g_rowsWaiting) {
+        // A kept row whose tower has not resolved: the towers are looked up again, once a second.
+        const uint64_t now = NowMs();
+        if (now - g_waitLookMs >= kLookupMs) {
+            g_waitLookMs = now;
+            Towers(true);
+            ApplyAll();
+        }
+    }
     ConvergePanels();
 }
 
@@ -198,8 +264,43 @@ void OnRows(const FuseTowerPayload& p) {
     g_rows = p;
     g_rows.count = static_cast<uint8_t>(std::min<int>(p.count, kFuseTowers));
     g_haveRows = true;
+    for (int i = 0; i < g_rows.count; ++i)
+        if (Kept* k = KeptFor(g_rows.rows[i])) {
+            k->row = g_rows.rows[i];
+            k->pending = true;
+        }
     if (coop::fuse_tower_ops::RedOpen()) return;  // [dev] the control: kept for the drill's read, never applied
     ApplyAll();
+}
+
+void AdmitRows(FuseTowerPayload& p) {
+    // One warning per kind of fault: a host that sends one sends it every tick.
+    static bool warned[4] = {};
+    int kept = 0;
+    const int n = std::min<int>(p.count, kFuseTowers);
+    for (int i = 0; i < n; ++i) {
+        const FuseTowerRow& r = p.rows[i];
+        int fault = -1;
+        const char* what = nullptr;
+        if (r.kind >= coop::net::kFuseTowerKinds) { fault = 0; what = "a kind that is neither tower"; }
+        else if (r.lightCount > coop::net::kFuseTowerMaxLights) { fault = 1; what = "more lights than a puzzle has"; }
+        else if (r.fuseCount > coop::net::kFuseTowerMaxFuses) { fault = 2; what = "more fuses than a row holds"; }
+        else if (r.kind == coop::net::kFuseTowerKindRadio &&
+                 (r.flags & (coop::net::kFuseTowerOpened | coop::net::kFuseTowerAnim))) {
+            fault = 3;
+            what = "panel flags on the radio tower's row";
+        }
+        if (fault >= 0) {
+            if (!warned[fault]) {
+                warned[fault] = true;
+                UE_LOGW("fuse_tower: the host's rows carry %s -- that row is dropped", what);
+            }
+            continue;
+        }
+        if (kept != i) p.rows[kept] = r;
+        ++kept;
+    }
+    p.count = static_cast<uint8_t>(kept);
 }
 
 void QueueConnectBroadcastForSlot(int slot) {
@@ -236,6 +337,8 @@ void OnDisconnect() {
     g_broadcasts = g_applied = 0;
     g_edges = Edges{};
     for (auto& t : g_panelAskedMs) t = 0;
+    for (Kept& k : g_kept) k = Kept{};
+    g_waitLookMs = g_radioLookMs = 0;
     g_towerCount = 0;
     g_classVersion = ~0ull;
 }

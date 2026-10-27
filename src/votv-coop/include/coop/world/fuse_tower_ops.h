@@ -1,14 +1,16 @@
-// coop/world/fuse_tower_ops.h -- what a player does at a coordinate tower, and the one roll a tower makes. A
-// client never rolls a tower: its Scramble Radar Dish and its lever's judgement are refused at the script gate on
-// every route (the fuckuper's timer, an explosion, its own load), so the host's world is the towers' author and
-// its rows (coop/world/fuse_tower_rows) the client's. A client's press of a puzzle button, the lever or the
-// panel's retract is refused there too and sent to the host, which runs the tower's own use with the look-at
-// answered. A pull or an insert moves a fuse into or out of the player's own hand, so the client's own game makes
-// it and claims the slot; the host takes the claim when its own copy allows the move, and refuses it otherwise:
-// a refused pull's fuse is reaped from the puller's hand (coop/interactables/floppybox_sync's pop), a refused
-// insert's fuse given back where the inserter stands (coop/world/power_upgrade's refund), an insert taken only
-// against a fuse the host saw the inserter spend at that tower. The host runs a sender's ops in its order, within
-// reach, at a bounded rate. Game thread throughout.
+// coop/world/fuse_tower_ops.h -- what a player does at a fuse tower (a coordinate tower or the radio tower), and the
+// one roll a tower makes. A client never rolls a tower: its scramble (the dish's Scramble Radar Dish) and its
+// lever's judgement are refused at the script gate on every route (the fuckuper's timer, an explosion, the radio
+// tower's decay timer and reset lever, a coordinate tower's own load), so the host's world is the towers' author and
+// its rows (coop/world/fuse_tower_rows) the client's. A client's press of a puzzle button, a lever (the radio
+// tower's reset lever included) or the panel's retract is refused there too and sent to the host, which runs the
+// tower's own use with the look-at answered. A pull or an insert moves a fuse into or out of the player's own hand,
+// so the client's own game makes it and claims the slot; the host takes the claim when its own copy allows the
+// move, and refuses it otherwise: a refused pull's fuse is reaped from the puller's hand
+// (coop/interactables/floppybox_sync's pop), a refused insert's fuse given back where the inserter stands
+// (coop/world/power_upgrade's refund), an insert taken only against a fuse the host saw the inserter spend at that
+// tower. A tower is named by (kind, id). The host runs a sender's ops in its order, within reach, at a bounded
+// rate. What differs by kind is coop/world/fuse_tower_kind's. Game thread throughout.
 
 #pragma once
 

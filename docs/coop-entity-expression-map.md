@@ -58,6 +58,7 @@ are peer-gated. `[V]`
 | a remote player's puppet (`mainPlayer_C`, unpossessed) | `RemotePlayer::Spawn` -> `engine::SpawnActor` | registered between its deferred spawn and its `FinishSpawning`, by the before-finish callback; unregistered after its destroy (`DestroySlot`) | the peer's slot in `players::Registry` |
 | an ATV (`ATV_C` and its descendants, the witch car included) | the save; a runtime spawn | the object scan's ATV lane (`atv_index`); the host announces each by key (`AtvSpawn`); the seat and the syncer are the host's table (`atv_authority`) | the game's own key, which the save carries; a runtime one gets a synthetic key at its host birth |
 | status effects (effect_C) | each peer's own, from its gamemode's addEffect; never sent | -- | none: a per-process actor; at a join the host's effect records are reset out of the joiner's save at the join |
+| a fuse tower (the three `coordRadarDish_C` and the one `radiotower_C`) | placed in the level; no runtime birth (the gamemode's `radiotower` is its one `GetActorOfClass`) | not caught: the host reads each tower every tick; a client keeps the host's last row of each tower and applies it when the tower resolves (the dish by the object index, the radio tower by the gamemode's field), looking up again once a second while a row waits | the pair (kind, id): a dish's own `id` 0..2, the radio tower's 0; its state, not its life, is what crosses (`coop/world/fuse_tower_rows`) |
 
 ## Keyed props
 
