@@ -91,6 +91,11 @@ std::atomic<std::uint32_t> g_presTid{0};
 std::atomic<std::uint64_t> g_presQueueBad{0};
 std::atomic<std::uint64_t> g_presSwapBad{0};
 std::atomic<std::uint64_t> g_submitCount{0};
+// Calls on the present queue in flight right now (presents and submits), and the entries that found another
+// already inside: the queue is externally synchronized (Vulkan spec), so a non-zero overlap is a race.
+std::atomic<int>           g_queueInside{0};
+std::atomic<std::uint64_t> g_queueOverlap{0};
+std::atomic<std::uint64_t> g_foreignSubmits{0};  // present-queue submits from a thread other than the presenter
 
 struct SubmitRow {
     std::atomic<std::uint32_t> tid{0};
@@ -180,10 +185,14 @@ VkResult OnQueuePresent(Handle queue, const PresentInfo* info) {
                          info->pSwapchains[0] == g_readSwapchain.load(std::memory_order_relaxed);
     if (!queueOk) g_presQueueBad.fetch_add(1, std::memory_order_relaxed);
     if (!swapOk) g_presSwapBad.fetch_add(1, std::memory_order_relaxed);
+    if (queueOk && g_queueInside.fetch_add(1, std::memory_order_acq_rel) > 0)
+        g_queueOverlap.fetch_add(1, std::memory_order_relaxed);
     if (Logged(n))
         UE_LOGI("[VK-PATH] vkQueuePresentKHR n=%llu tid=%lu queue=0x%llx queueIsPresentQueue=%d swapchain0IsRead=%d",
                 U(n), static_cast<unsigned long>(tid), U(queue), queueOk ? 1 : 0, swapOk ? 1 : 0);
-    return reinterpret_cast<QueuePresentFn>(g_saved[kSlotPresent])(queue, info);
+    const VkResult r = reinterpret_cast<QueuePresentFn>(g_saved[kSlotPresent])(queue, info);
+    if (queueOk) g_queueInside.fetch_sub(1, std::memory_order_acq_rel);
+    return r;
 }
 
 // The row of (thread, queue), claimed on first sight. A row's thread is set by that thread alone.
@@ -204,7 +213,20 @@ VkResult OnQueueSubmit(Handle queue, std::uint32_t count, const void* submits, H
     g_submitCount.fetch_add(1, std::memory_order_relaxed);
     if (SubmitRow* row = SubmitRowOf(Tid(), queue)) row->count.fetch_add(1, std::memory_order_relaxed);
     else g_submitOverflow.fetch_add(1, std::memory_order_relaxed);
-    return reinterpret_cast<QueueSubmitFn>(g_saved[kSlotSubmit])(queue, count, submits, fence);
+    const bool onPresentQueue = queue != 0 && queue == g_readQueue.load(std::memory_order_relaxed);
+    if (!onPresentQueue) return reinterpret_cast<QueueSubmitFn>(g_saved[kSlotSubmit])(queue, count, submits, fence);
+    const std::uint32_t presTid = g_presTid.load(std::memory_order_relaxed);
+    if (presTid != 0 && Tid() != presTid) {
+        const std::uint64_t f = g_foreignSubmits.fetch_add(1, std::memory_order_relaxed) + 1;
+        if (Logged(f))
+            UE_LOGI("[VK-PATH] foreign submit n=%llu tid=%lu at present n=%llu", U(f), static_cast<unsigned long>(Tid()),
+                    U(g_presCount.load(std::memory_order_relaxed)));
+    }
+    if (g_queueInside.fetch_add(1, std::memory_order_acq_rel) > 0)
+        g_queueOverlap.fetch_add(1, std::memory_order_relaxed);
+    const VkResult r = reinterpret_cast<QueueSubmitFn>(g_saved[kSlotSubmit])(queue, count, submits, fence);
+    g_queueInside.fetch_sub(1, std::memory_order_acq_rel);
+    return r;
 }
 
 // ---- setup, slot swap, summary ------------------------------------------------------------------
@@ -310,10 +332,10 @@ void PrintDone() {
     const double seconds = std::chrono::duration<double>(Clock::now() - g_start).count();
     const double perSecond = seconds > 0.0 ? static_cast<double>(g_presCount.load()) / seconds : 0.0;
     UE_LOGI("[VK-PATH] RHI DONE presents/s=%.1f submitThreads=%s presentTid=%lu sameThread=%d fmt=%d imgs=%d "
-            "fmtOk=%d imgOk=%d",
+            "fmtOk=%d imgOk=%d queueOverlap=%llu foreignSubmits=%llu",
             perSecond, at ? threads : "none", static_cast<unsigned long>(presentTid),
             (onQueue > 0 && onQueue == onPresentTid) ? 1 : 0, g_fmt.load(), g_imgs.load(), g_fmtOk.load(),
-            g_imgOk.load());
+            g_imgOk.load(), U(g_queueOverlap.load()), U(g_foreignSubmits.load()));
 }
 
 }  // namespace
@@ -336,9 +358,15 @@ void Tick() {
             PrintSecond();
             if (++g_printed < kSeconds) return;
             PrintDone();
+            g_next = Clock::now() + std::chrono::seconds(30);
             g_stage = Stage::Idle;
             return;
         case Stage::Idle:
+            // The engine's foreign submits come late (a save), so the race counters keep reporting after DONE.
+            if (Clock::now() < g_next) return;
+            g_next += std::chrono::seconds(30);
+            UE_LOGI("[VK-PATH] RHI totals presents=%llu queueOverlap=%llu foreignSubmits=%llu",
+                    U(g_presCount.load()), U(g_queueOverlap.load()), U(g_foreignSubmits.load()));
             return;
     }
 }
