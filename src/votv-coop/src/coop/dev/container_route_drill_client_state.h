@@ -15,7 +15,7 @@ inline constexpr uint64_t kHostBoundMs = 60000;   // the host's raw write, its r
 enum class Step : uint8_t {
     Arm, Find, Settle, Open, OpenWait, R1, R1Wait, R1Done, R2Refill, R2, R2Call, R2Wait, R3, R3Use, R3Wait,
     R4Close, R4, R4HoldWait, R4Settle, R4Armed, R4Aim, R4Wait,
-    ViewOpen, ViewOpenWait, ViewWait, BeforeReady, BeforeWait, BeforeTake, BeforeSettle, DoneWait, Done
+    ViewOpen, ViewOpenWait, ViewWait, BeforeReady, BeforeWait, BeforeTaken, BeforeTake, BeforeSettle, DoneWait, Done
 };
 
 // The fixtures: the backpack, and the loose drive R4 holds and throws.

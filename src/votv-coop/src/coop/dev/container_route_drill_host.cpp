@@ -47,7 +47,7 @@ constexpr uint64_t kViewBoundMs    = 5000;   // the open verb to the screen show
 constexpr uint64_t kJudgeBoundMs   = 15000;  // the client's R1 slice sent to the host judging it
 constexpr const wchar_t* kSecondClass = L"prop_floppyDisc_R_C";   // the second class of read 7; no drill puts a disc into a container, so the capture check below is its guard
 constexpr const wchar_t* kSecondPath  = L"/Game/objects/prop_floppyDisc_R.prop_floppyDisc_R_C";
-constexpr uint64_t kRoutesBoundMs  = 180000; // the routes phase: the client's R4 and the host's answers
+constexpr uint64_t kRoutesBoundMs  = 300000; // the routes phase: above the client's worst chain of independent bounds (about 230 s)
 constexpr uint64_t kBeforeBoundMs  = 60000;  // the unpublished write to the client's take reported
 constexpr uint64_t kThrownBoundMs  = 30000;  // r4-start to the host holding a drive made by the throw
 
@@ -149,8 +149,8 @@ void StepArm(coop::net::Session* s) {
     if (!pack || !ci::IsContainer(pack)) { Fail("the backpack did not spawn as a container"); return; }
     g_pack.Set(pack);
     if (!cen::IsBeforeOnly()) {
-        // One loose drive to the side, which the client holds and throws into the backpack (R4); the drive its vacuum
-        // gathers (R5) is spawned later, at the intake the client reads. The client's mirror arrives where the host put it.
+        // One loose drive to the side, which the client holds and throws into the backpack (R4). The client's mirror
+        // arrives where the host put it.
         void* driveCls = R::FindClass(kDriveClass);
         void* b = driveCls ? E::SpawnActor(driveCls, Offset(at, fwd, kSideAheadCm, -kSideCm)) : nullptr;
         if (!b) { Fail("the loose drive did not spawn"); return; }
@@ -193,10 +193,16 @@ void StepPublish() {
 void StepWaitR1() {
     std::string rest;
     int sent = 0;
-    if (!coop::dev::drill_chat::PollDue() || !coop::dev::drill_chat::LiveRestOf(kPrefixR1Done, &rest)) return;
-    if (!IntAfter(rest, "sent", sent)) return;
-    g_r1Sent = sent;
-    Next(Step::WaitJudge);
+    if (coop::dev::drill_chat::PollDue() && coop::dev::drill_chat::LiveRestOf(kPrefixR1Done, &rest) &&
+        IntAfter(rest, "sent", sent)) {
+        g_r1Sent = sent;
+        Next(Step::WaitJudge);
+        return;
+    }
+    if (Expired(kRoutesBoundMs)) {
+        RouteFail("R1 the client never reported its R1 done");
+        Next(Step::WaitRoutes);
+    }
 }
 
 void StepWaitJudge() {
@@ -209,6 +215,7 @@ void StepWaitJudge() {
     if (!pack) { Fail("the backpack died"); return; }
     if (AddDrives(pack) != kItems) {
         RouteFail("R2 the backpack did not take the two fresh drives");
+        coop::dev::drill_chat::Say(kLineRefillRefused);   // the client's R2 ends with it
         Next(Step::WaitRoutes);
         return;
     }
@@ -279,7 +286,7 @@ void StepWaitRoutes() {
         UE_LOGI("[CI-CENSUS] drill host: r4-start, the client holds eid=%d", held);
     }
     if (g_r4Started && g_r4Armed && !g_r4Eid && !g_r4Failed && !FindThrownDrive() &&
-        (::GetTickCount64() - g_r4StartMs > kThrownBoundMs || coop::dev::drill_chat::ChatHasLive(kLineR4Done))) {
+        ::GetTickCount64() - g_r4StartMs > kThrownBoundMs) {
         RouteFail("R4 the host made no drive for the throw");
         g_r4Failed = true;
     }
@@ -287,11 +294,12 @@ void StepWaitRoutes() {
         if (coop::dev::drill_chat::ChatHasLive(kLineR4Done)) {
             g_r4Over = true;
             UE_LOGI("[CI-CENSUS] drill host: R4 overlap n=%llu", static_cast<unsigned long long>(cen::R4Overlaps() - g_ov0));
+            if (!g_r4Eid) UE_LOGI("[CI-CENSUS] drill host: R4 ended by the client, no drive found");   // the find goes on to its bound
         } else if (g_r4Eid) {
             TraceR4();
         }
     }
-    if ((!g_r4Started || g_r4Eid || g_r4Failed) && coop::dev::drill_chat::ChatHasLive(kLineRoutesDone)) {
+    if ((!g_r4Started || g_r4Eid || g_r4Failed || g_r4Over) && coop::dev::drill_chat::ChatHasLive(kLineRoutesDone)) {
         Next(Step::ViewOpen);
     } else if (Expired(kRoutesBoundMs)) {
         RouteFail("the client never reported its routes done");
@@ -367,6 +375,11 @@ void StepViewRegen() {
 }
 
 void StepWaitBefore() {
+    if (coop::dev::drill_chat::ChatHasLive(kLineBeforeFailed)) {
+        UE_LOGI("[CI-CENSUS] drill host: the client ended the take route before it was ready");
+        HostDone();
+        return;
+    }
     if (!Said(kLineBeforeReady)) {
         if (Expired(kRoutesBoundMs)) { RouteFail("before the client never got ready for the take"); HostDone(); }
         return;
@@ -382,11 +395,16 @@ void StepWaitBefore() {
 void StepWaitDone() {
     std::string rest;
     int rb = 0, ic = 0;
-    if (!coop::dev::drill_chat::PollDue() || !coop::dev::drill_chat::LiveRestOf(kPrefixClientDone, &rest)) {
+    if (coop::dev::drill_chat::ChatHasLive(kLineBeforeFailed)) {
+        UE_LOGI("[CI-CENSUS] drill host: the client ended the take route");
+        HostDone();
+        return;
+    }
+    if (!coop::dev::drill_chat::PollDue() || !coop::dev::drill_chat::LiveRestOf(kPrefixClientDone, &rest) ||
+        !IntAfter(rest, "rb", rb) || !IntAfter(rest, "ic", ic)) {
         if (Expired(kBeforeBoundMs)) { RouteFail("before the client never reported the take"); HostDone(); }
         return;
     }
-    if (!IntAfter(rest, "rb", rb) || !IntAfter(rest, "ic", ic)) return;
     const int ih = LiveDrives() > g_drives0 ? 1 : 0;
     char say[48];
     std::snprintf(say, sizeof(say), "%sih=%d", kPrefixHostDone, ih);

@@ -22,7 +22,7 @@ inline constexpr float    kNearCm       = 400.f;  // CLIENT: the fixtures' mirro
 inline constexpr uint64_t kCheckEveryMs = 250;
 inline constexpr uint64_t kSeamBoundMs  = 30000;  // the census's six watches to settle
 inline constexpr uint64_t kRegenWindowMs = 1000;  // a write's applying to the open screen's rebuild
-inline constexpr uint64_t kHandBoundMs  = 10000;  // CLIENT: a hold, or the vacuum's intake, settling in the hand
+inline constexpr uint64_t kHandBoundMs  = 10000;  // CLIENT: a hold settling in the hand, the screen closing
 
 // The lines the peers say to each other (drill_chat).
 inline constexpr const char* kLineRoutesDone    = "ci-census client routes-done";
@@ -30,6 +30,8 @@ inline constexpr const char* kLineR4Done        = "ci-census client r4-done";
 inline constexpr const char* kLineBeforeReady   = "ci-census client before-ready";
 inline constexpr const char* kLineBeforeWritten = "ci-census host before-written";
 inline constexpr const char* kLineRefilled      = "ci-census host refilled";
+inline constexpr const char* kLineRefillRefused = "ci-census host refilled ok=0";   // the refill the backpack refused
+inline constexpr const char* kLineBeforeFailed  = "ci-census client before-failed";   // the client ended the take route
 inline constexpr const char* kPrefixR1Done      = "ci-census client r1-done ";   // + "sent=<slices sent so far>"
 inline constexpr const char* kPrefixR4Start     = "ci-census client r4-start ";  // + "eid=<the held prop, or 0>"
 inline constexpr const char* kPrefixR4Thrown    = "ci-census host r4-thrown ";   // + "eid=<the host's drive for the throw>"

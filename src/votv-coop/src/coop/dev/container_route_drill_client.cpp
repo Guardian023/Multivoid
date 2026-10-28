@@ -98,6 +98,7 @@ bool     g_refilled = false;     // the host said it handed the backpack its fre
 uint64_t g_r2Add0 = 0, g_r1Add0 = 0;   // the add verbs counted under R2 / R1 before the R2 calls
 std::vector<uint64_t> g_hashes;  // the backpack's record hashes at the last baseline (R1, then R2)
 uint64_t g_r1Took = 0;           // the record R1's press took, by hash
+uint64_t g_pressMs = 0, g_pressToSliceMs = 0;   // the take's press, and its press-to-slice time
 
 bool Due() {
     const uint64_t now = ::GetTickCount64();
@@ -292,6 +293,10 @@ void StepR2Refill() {
             return;
         }
         g_refilled = true;
+        if (coop::dev::drill_chat::ChatHasLive(kLineRefillRefused)) {
+            RouteFailTo("R2 the host's backpack refused the fresh records", Step::R3);
+            return;
+        }
     }
     if (RecordCount(g_eid) < g_count0 + kItems) {
         if (Expired(kHostBoundMs)) RouteFailTo("R2 the fresh records never reached this peer's backpack", Step::R3);
@@ -346,15 +351,21 @@ void StepR2Wait() {
     Finish("R2", Step::R3);
 }
 
+// R3 failed: its FAIL line, the hand emptied as R3's own end empties it, and on to R4.
+void R3Fail(const char* phase) {
+    coop::dev::drill_hand::TakeIntoHandNow(L"None", nullptr);
+    RouteFailTo(phase, Step::R4Close);
+}
+
 void StepR3() {
-    if (!coop::dev::drill_hand::TakeIntoHandNow(L"drive", kDriveClass)) { RouteFailTo("R3 the drive could not be taken into the hand", Step::R4Close); return; }
+    if (!coop::dev::drill_hand::TakeIntoHandNow(L"drive", kDriveClass)) { R3Fail("R3 the drive could not be taken into the hand"); return; }
     Next(Step::R3Use);   // the hand's actor is read a tick later
 }
 
 void StepR3Use(void* player) {
     void* hand = HeldActor(player);
     g_slice0 = cen::SlicesSent();
-    if (!hand || !UseWithRun(player, g_pack.Get(), hand)) { RouteFailTo("R3 no hand actor, or playerUsedOn did not dispatch", Step::R4Close); return; }
+    if (!hand || !UseWithRun(player, g_pack.Get(), hand)) { R3Fail("R3 no hand actor, or playerUsedOn did not dispatch"); return; }
     UE_LOGI("[CI-CENSUS] drill client: R3 hold+run used on the backpack (route entries %llu)",
             static_cast<unsigned long long>(cen::RouteEntries(2)));
     Next(Step::R3Wait);
@@ -429,10 +440,17 @@ void StepViewWait() {
     Finish("view", Step::BeforeReady);
 }
 
+// The take route failed: its FAIL line, the host told (its wait ends with the client's), and the run's last lines.
+void BeforeFailed(const char* phase) {
+    RouteFail(phase);
+    coop::dev::drill_chat::Say(kLineBeforeFailed);
+    ClientDone();
+}
+
 void StepBeforeReady() {
     void* pack = g_pack.Get();
     if (CV::Viewed() != pack) {
-        if (!CV::Open(pack) || Expired(kHostBoundMs)) { RouteFail("before the screen could not be opened for the take"); ClientDone(); }
+        if (!CV::Open(pack) || Expired(kHostBoundMs)) BeforeFailed("before the screen could not be opened for the take");
         return;
     }
     coop::dev::drill_chat::Say(kLineBeforeReady);
@@ -441,20 +459,28 @@ void StepBeforeReady() {
 
 void StepBeforeWait() {
     if (!Said(kLineBeforeWritten)) {
-        if (Expired(kHostBoundMs)) { RouteFail("before the host never wrote the unpublished change"); ClientDone(); }
+        if (Expired(kHostBoundMs)) BeforeFailed("before the host never wrote the unpublished change");
         return;
     }
     g_count0 = RecordCount(g_eid);
     g_inv0 = ue_wrap::inventory::LivePersonalStoreCount();
     g_slice0 = cen::SlicesSent();
-    if (!PressSlot(Screen(), 0)) { RouteFail("before the take's slot press did not dispatch"); ClientDone(); return; }
+    if (!PressSlot(Screen(), 0)) { BeforeFailed("before the take's slot press did not dispatch"); return; }
+    g_pressMs = ::GetTickCount64();
     UE_LOGI("[CI-CENSUS] drill client: the take pressed on a base the host has moved past (%d record(s) here)", g_count0);
+    Next(Step::BeforeTaken);
+}
+
+// The press's own local apply has run by the next check: the count the take left here, read before the slice can leave
+// and before the host's truth can come back.
+void StepBeforeTaken() {
+    g_countTaken = RecordCount(g_eid);
     Next(Step::BeforeTake);
 }
 
 void StepBeforeTake() {
     if (!SliceSent("the take")) return;
-    g_countTaken = RecordCount(g_eid);
+    g_pressToSliceMs = ::GetTickCount64() - g_pressMs;
     Next(Step::BeforeSettle);
 }
 
@@ -474,12 +500,13 @@ void StepBeforeSettle() {
 void StepDoneWait() {
     std::string rest;
     int ih = 0;
-    if (!coop::dev::drill_chat::PollDue() || !coop::dev::drill_chat::LiveRestOf(kPrefixHostDone, &rest)) {
+    if (!coop::dev::drill_chat::PollDue() || !coop::dev::drill_chat::LiveRestOf(kPrefixHostDone, &rest) ||
+        !IntAfter(rest, "ih", ih)) {
         if (Expired(kHostBoundMs)) { RouteFail("before the host never answered the take"); ClientDone(); }
         return;
     }
-    if (!IntAfter(rest, "ih", ih)) return;
-    UE_LOGI("[CI-CENSUS] before record-back=%d item-client=%d item-host=%d", g_rb, g_ic, ih);
+    UE_LOGI("[CI-CENSUS] before record-back=%d item-client=%d item-host=%d press->slice %llu ms", g_rb, g_ic, ih,
+            static_cast<unsigned long long>(g_pressToSliceMs));
     ClientDone();
 }
 
@@ -527,6 +554,7 @@ void ClientTick(coop::net::Session*) {
     case Step::ViewWait:     StepViewWait(); return;
     case Step::BeforeReady:  StepBeforeReady(); return;
     case Step::BeforeWait:   StepBeforeWait(); return;
+    case Step::BeforeTaken:  StepBeforeTaken(); return;
     case Step::BeforeTake:   StepBeforeTake(); return;
     case Step::BeforeSettle: StepBeforeSettle(); return;
     case Step::DoneWait:     StepDoneWait(); return;
@@ -548,7 +576,7 @@ void ClientReset() {
     g_count0 = g_countTaken = 0;
     g_slot0 = nullptr;
     g_slotText0.clear();
-    g_r2Add0 = g_r1Add0 = g_r1Took = 0;
+    g_r2Add0 = g_r1Add0 = g_r1Took = g_pressMs = g_pressToSliceMs = 0;
     g_hashes.clear();
 }
 

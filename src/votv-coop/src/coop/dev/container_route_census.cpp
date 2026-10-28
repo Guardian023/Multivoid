@@ -375,6 +375,8 @@ void Tick(coop::net::Session* s) {
         RegisterWatches();
         g_nextReport = NowMs() + kReportMs;
         UE_LOGI("[CI-CENSUS] armed on the %s (%s)", Role(), Mode().c_str());
+        if (Mode() != "1" && !IsDrill())
+            UE_LOGW("[CI-CENSUS] unknown value '%s': the census runs alone", Mode().c_str());
     }
     SaySeams();
     if (NowMs() >= g_nextReport) {

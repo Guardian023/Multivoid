@@ -184,6 +184,8 @@ void TraceR4() {
 }
 }  // namespace
 
+// The throw to the prop entering the overlap: the bound passing here is a RESULT (the line says "did NOT enter", which
+// answers read 4), not a failed step, so it prints no FAIL.
 void StepR4Wait() {
     TraceR4();
     if (cen::R4Overlaps() <= g_ov0 && !Expired(kOverlapBoundMs)) return;
