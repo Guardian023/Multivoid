@@ -61,7 +61,6 @@ bool g_registered = false;
 bool g_said[6] = {};              // each seam's state said once
 uint64_t g_nextReport = 0;
 int g_quiet = 0;
-int g_gather = 0;                // the drill's own gather call is running
 
 uint8_t g_stack[kStack] = {};     // route ids of the open scopes, innermost last
 int g_depth = 0;
@@ -75,7 +74,6 @@ uint64_t g_slices[kRoutes][2] = {};
 uint64_t g_unattributed = 0;
 uint64_t g_slicesSent = 0;
 uint64_t g_gen = 0;
-uint64_t g_cancelled = 0;
 uint64_t g_hostSlice[coop::net::kMaxPeers][2] = {};   // [slot][accepted=0, refused=1]
 
 struct Last { uint32_t eid; int8_t route; int8_t verb; };
@@ -262,7 +260,7 @@ void Reset() {
     for (Last& l : g_last) l.route = -1;
     std::memset(g_callers, 0, sizeof(g_callers));
     std::memset(g_r4Classes, 0, sizeof(g_r4Classes));
-    g_unattributed = g_slicesSent = g_gen = g_cancelled = 0;
+    g_unattributed = g_slicesSent = g_gen = 0;
     g_lastNext = g_callerCount = g_r4ClassCount = g_r4Lines = 0;
     g_callerOther = g_r4Sim = g_r4Overlaps = 0;
     for (bool& b : g_said) b = false;
@@ -280,21 +278,16 @@ uint64_t UnixMs() {
 }
 
 bool IsEnabled() { return !Mode().empty(); }
-bool IsDrill() { return Mode().compare(0, 5, "drill") == 0; }
-bool IsVacuumCancel() { return Mode() == "drill-vacuumcancel"; }
+bool IsDrill() { return Mode() == "drill" || Mode() == "drill-before"; }
 bool IsBeforeOnly() { return Mode() == "drill-before"; }
 
 Quiet::Quiet() { ++g_quiet; }
 Quiet::~Quiet() { --g_quiet; }
 
-GatherScope::GatherScope() { ++g_gather; }
-GatherScope::~GatherScope() { --g_gather; }
 
-sg::Verdict OnVerb(const sg::Call& c, bool take) {
-    if (!IsEnabled() || g_quiet > 0) return sg::Verdict::Run;
+void OnVerb(const sg::Call& c, bool take) {
+    if (!IsEnabled() || g_quiet > 0) return;
     const int open = Innermost();
-    // The only cancel: a client's addObject inside the drill's own gather call, on the vacuum value alone.
-    const bool cancel = IsVacuumCancel() && !g_host && !take && g_gather > 0;
     void* inv = c.object;
     void* owner = inv ? ci::OwnerOf(inv) : nullptr;
     const uint32_t eid = (owner && ci::IsWorldInventory(inv))
@@ -308,11 +301,6 @@ sg::Verdict OnVerb(const sg::Call& c, bool take) {
         RememberWriter(eid, route, take ? 1 : 0);
         if (route == kNone) NoteR6Caller(c);
     }
-    if (!cancel) return sg::Verdict::Run;
-    ++g_cancelled;
-    UE_LOGI("[CI-CENSUS] client addObject CANCELLED under the vacuum scope (inventory %p, shared container %d)", inv,
-            eid != static_cast<uint32_t>(coop::element::kInvalidId) ? 1 : 0);
-    return sg::Verdict::Cancel;
 }
 
 void NoteSliceSent(uint32_t eid) {
@@ -405,7 +393,6 @@ uint64_t SlicesSent() { return g_slicesSent; }
 uint64_t RouteEntries(int route) { return route >= 0 && route < 5 ? g_entries[route] : 0; }
 uint64_t R4Overlaps() { return g_r4Overlaps; }
 uint64_t GenCalls() { return g_gen; }
-uint64_t VacuumCancelled() { return g_cancelled; }
 uint64_t HostSlices(int slot, bool accepted) {
     return slot >= 0 && slot < coop::net::kMaxPeers ? g_hostSlice[slot][accepted ? 0 : 1] : 0;
 }

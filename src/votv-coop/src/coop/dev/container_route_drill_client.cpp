@@ -46,14 +46,13 @@ uint64_t g_stepMs = 0;
 Step     g_step = Step::Arm;   // Done ends the drill
 }
 
-
-ue_wrap::CachedObjRef g_pack, g_drive[2];
+ue_wrap::CachedObjRef g_pack, g_drive;   // g_drive: the loose drive R4 holds and throws
 
 void Next(Step s) { g_step = s; g_stepMs = ::GetTickCount64(); }
 bool Expired(uint64_t bound) { return ::GetTickCount64() - g_stepMs > bound; }
-void FailAt(const char* phase) {
-    FailPhase("client", phase);
-    g_step = Step::Done;
+void RouteFailTo(const char* phase, Step next) {
+    RouteFail(phase);
+    Next(next);
 }
 void Finish(const char* label, Step next) {
     cen::ReportNow(label);
@@ -113,16 +112,13 @@ void Fail(const char* why) {
     Abandon("client", why);
     g_step = Step::Done;
 }
-// A step the game would not let the drill make: said, and the drill goes on to the next route.
-void Skip(const char* route, const char* why, Step next) {
-    UE_LOGW("[CI-CENSUS] drill client: %s not driven -- %s", route, why);
-    Next(next);
-}
 // The write is sent as a slice within the lane's sweep, or the step says it was not.
 bool SliceSent(const char* route) {
     if (cen::SlicesSent() > g_slice0) return true;
     if (!Expired(kSliceBoundMs)) return false;
-    UE_LOGW("[CI-CENSUS] drill client: %s sent no slice within %llu ms", route, static_cast<unsigned long long>(kSliceBoundMs));
+    char phase[96];
+    std::snprintf(phase, sizeof(phase), "%s sent no slice within %llu ms", route, static_cast<unsigned long long>(kSliceBoundMs));
+    RouteFail(phase);
     return true;
 }
 
@@ -213,7 +209,7 @@ void StepFind(void* player) {
     if (g.pack && (cen::IsBeforeOnly() || g.nDrives == 1)) {
         g_pack.Set(g.pack);
         g_eid = EidOf(g.pack);
-        if (!cen::IsBeforeOnly()) g_drive[1].Set(g.drives[0]);   // R4's; the vacuum's is placed once its intake settles
+        if (!cen::IsBeforeOnly()) g_drive.Set(g.drives[0]);
         g_rest = 0;
         UE_LOGI("[CI-CENSUS] drill client: the backpack's mirror holds the host's %d records, eid=%u", kItems, g_eid);
         LogHashes("client", g_eid, "published");
@@ -225,7 +221,7 @@ void StepFind(void* player) {
 }
 
 void StepSettle() {
-    void* actors[2] = {g_pack.Get(), g_drive[1].Get()};
+    void* actors[2] = {g_pack.Get(), g_drive.Get()};
     const int n = cen::IsBeforeOnly() ? 1 : 2;
     bool still = true, parked = false;
     for (int i = 0; i < n; ++i) {
@@ -262,7 +258,7 @@ void StepR1() {
     g_inv0 = ue_wrap::inventory::LivePersonalStoreCount();
     uint64_t whole = 0;
     cs::DevRecordHashes(g_eid, g_hashes, whole);
-    if (!PressSlot(Screen(), 0)) { Skip("R1", "the slot press did not dispatch", Step::R1Done); return; }
+    if (!PressSlot(Screen(), 0)) { RouteFailTo("R1 the slot press did not dispatch", Step::R1Done); return; }
     UE_LOGI("[CI-CENSUS] drill client: R1 slot pressed (route entries %llu)", static_cast<unsigned long long>(cen::RouteEntries(0)));
     Next(Step::R1Wait);
 }
@@ -292,13 +288,13 @@ void StepR1Done() {
 void StepR2Refill() {
     if (!g_refilled) {
         if (!Said(kLineRefilled)) {
-            if (Expired(kHostBoundMs)) Fail("the host never handed the backpack its fresh records");
+            if (Expired(kHostBoundMs)) RouteFailTo("R2 the host never handed the backpack its fresh records", Step::R3);
             return;
         }
         g_refilled = true;
     }
     if (RecordCount(g_eid) < g_count0 + kItems) {
-        if (Expired(kHostBoundMs)) Fail("the fresh records never reached this peer's backpack");
+        if (Expired(kHostBoundMs)) RouteFailTo("R2 the fresh records never reached this peer's backpack", Step::R3);
         return;
     }
     UE_LOGI("[CI-CENSUS] drill client: the backpack holds %d record(s) with the host's fresh ones", RecordCount(g_eid));
@@ -309,8 +305,8 @@ void StepR2() {
     void* ui = Screen();
     const int inv = ue_wrap::inventory::LivePersonalStoreCount();
     const int32_t off = ui ? R::FindPropertyOffset(R::ClassOf(ui), L"selected") : -1;
-    if (inv <= 0 || off < 0) { Skip("R2", "the player's inventory is empty or the screen has no selection", Step::R3); return; }
-    if (!ClearHover(ui)) { Skip("R2", "the screen's hovered container slot would not clear", Step::R3); return; }
+    if (inv <= 0 || off < 0) { RouteFailTo("R2 the player's inventory is empty or the screen has no selection", Step::R3); return; }
+    if (!ClearHover(ui)) { RouteFailTo("R2 the screen's hovered container slot would not clear", Step::R3); return; }
     const int32_t sel = inv - 1;   // the item R1 took is the last one
     std::memcpy(static_cast<uint8_t*>(ui) + off, &sel, sizeof(sel));
     CallNoArg(ui, L"updSelect");
@@ -328,7 +324,7 @@ void StepR2() {
 
 void StepR2Call() {
     if (ue_wrap::inventory::LivePersonalStoreCount() < g_inv0) { Next(Step::R2Wait); return; }
-    if (g_calls >= kEmTakeCalls) { Skip("R2", "four em_take calls put nothing back", Step::R3); return; }
+    if (g_calls >= kEmTakeCalls) { RouteFailTo("R2 four em_take calls put nothing back", Step::R3); return; }
     ++g_calls;
     CallNoArg(Screen(), L"em_take");
 }
@@ -351,14 +347,14 @@ void StepR2Wait() {
 }
 
 void StepR3() {
-    if (!coop::dev::drill_hand::TakeIntoHandNow(L"drive", kDriveClass)) { Skip("R3", "the drive could not be taken into the hand", Step::R5Close); return; }
+    if (!coop::dev::drill_hand::TakeIntoHandNow(L"drive", kDriveClass)) { RouteFailTo("R3 the drive could not be taken into the hand", Step::R4Close); return; }
     Next(Step::R3Use);   // the hand's actor is read a tick later
 }
 
 void StepR3Use(void* player) {
     void* hand = HeldActor(player);
     g_slice0 = cen::SlicesSent();
-    if (!hand || !UseWithRun(player, g_pack.Get(), hand)) { Skip("R3", "no hand actor, or playerUsedOn did not dispatch", Step::R5Close); return; }
+    if (!hand || !UseWithRun(player, g_pack.Get(), hand)) { RouteFailTo("R3 no hand actor, or playerUsedOn did not dispatch", Step::R4Close); return; }
     UE_LOGI("[CI-CENSUS] drill client: R3 hold+run used on the backpack (route entries %llu)",
             static_cast<unsigned long long>(cen::RouteEntries(2)));
     Next(Step::R3Wait);
@@ -368,20 +364,36 @@ void StepR3Wait() {
     if (!SliceSent("R3")) return;
     LogSizes("client", "after R3", g_pack.Get());
     coop::dev::drill_hand::TakeIntoHandNow(L"None", nullptr);
-    Finish("R3", Step::R5Close);
+    Finish("R3", Step::R4Close);
 }
 
 // ---- the open screen, then the take the host refuses ----------------------------------------------------------
 
+// The view route failed: its FAIL line, the host told the routes are over (its wait ends with the client's), and on to
+// the take.
+void ViewFailed(const char* phase) {
+    RouteFail(phase);
+    coop::dev::drill_chat::Say(kLineRoutesDone);
+    Next(Step::BeforeReady);
+}
+
+// Every route was tried: the run's last lines and the done marker.
+void ClientDone() {
+    LogLargest("client");
+    cen::ReportNow("client end");
+    UE_LOGI("[CI-CENSUS] drill client DONE");
+    Next(Step::Done);
+}
+
 void StepViewOpen() {
     void* pack = g_pack.Get();
-    if (CV::Viewed() != pack && !CV::Open(pack)) { Fail("the screen could not be opened onto the backpack again"); return; }
+    if (CV::Viewed() != pack && !CV::Open(pack)) { ViewFailed("view the screen could not be opened onto the backpack again"); return; }
     Next(Step::ViewOpenWait);
 }
 
 void StepViewOpenWait() {
     if (CV::Viewed() != g_pack.Get()) {
-        if (Expired(kViewBoundMs)) Fail("the screen never showed the backpack again");
+        if (Expired(kViewBoundMs)) ViewFailed("view the screen never showed the backpack again");
         return;
     }
     g_slots0 = SlotCount(Screen());
@@ -404,7 +416,7 @@ void StepViewWait() {
         g_gen0 = cen::GenCalls();
         g_slot0 = SlotAt(Screen(), 0);
         g_slotText0 = FirstSlotText();
-        if (Expired(kHostBoundMs)) Skip("the open screen", "the host's publication never arrived", Step::BeforeReady);
+        if (Expired(kHostBoundMs)) RouteFailTo("view the host's publication never arrived", Step::BeforeReady);
         return;
     }
     if (!g_changedMs) g_changedMs = ::GetTickCount64();
@@ -420,7 +432,7 @@ void StepViewWait() {
 void StepBeforeReady() {
     void* pack = g_pack.Get();
     if (CV::Viewed() != pack) {
-        if (!CV::Open(pack) || Expired(kHostBoundMs)) Fail("the screen could not be opened for the take");
+        if (!CV::Open(pack) || Expired(kHostBoundMs)) { RouteFail("before the screen could not be opened for the take"); ClientDone(); }
         return;
     }
     coop::dev::drill_chat::Say(kLineBeforeReady);
@@ -429,13 +441,13 @@ void StepBeforeReady() {
 
 void StepBeforeWait() {
     if (!Said(kLineBeforeWritten)) {
-        if (Expired(kHostBoundMs)) Fail("the host never wrote the unpublished change");
+        if (Expired(kHostBoundMs)) { RouteFail("before the host never wrote the unpublished change"); ClientDone(); }
         return;
     }
     g_count0 = RecordCount(g_eid);
     g_inv0 = ue_wrap::inventory::LivePersonalStoreCount();
     g_slice0 = cen::SlicesSent();
-    if (!PressSlot(Screen(), 0)) { Fail("the take's slot press did not dispatch"); return; }
+    if (!PressSlot(Screen(), 0)) { RouteFail("before the take's slot press did not dispatch"); ClientDone(); return; }
     UE_LOGI("[CI-CENSUS] drill client: the take pressed on a base the host has moved past (%d record(s) here)", g_count0);
     Next(Step::BeforeTake);
 }
@@ -463,15 +475,12 @@ void StepDoneWait() {
     std::string rest;
     int ih = 0;
     if (!coop::dev::drill_chat::PollDue() || !coop::dev::drill_chat::LiveRestOf(kPrefixHostDone, &rest)) {
-        if (Expired(kHostBoundMs)) Fail("the host never answered the take");
+        if (Expired(kHostBoundMs)) { RouteFail("before the host never answered the take"); ClientDone(); }
         return;
     }
     if (!IntAfter(rest, "ih", ih)) return;
     UE_LOGI("[CI-CENSUS] before record-back=%d item-client=%d item-host=%d", g_rb, g_ic, ih);
-    LogLargest("client");
-    cen::ReportNow("client end");
-    UE_LOGI("[CI-CENSUS] drill client DONE");
-    Next(Step::Done);
+    ClientDone();
 }
 
 }  // namespace
@@ -506,13 +515,6 @@ void ClientTick(coop::net::Session*) {
     case Step::R3:           StepR3(); return;
     case Step::R3Use:        StepR3Use(player); return;
     case Step::R3Wait:       StepR3Wait(); return;
-    case Step::R5Close:      StepR5Close(); return;
-    case Step::R5:           StepR5(); return;
-    case Step::R5Use:        StepR5Use(player); return;
-    case Step::R5Settle:     StepR5Settle(player); return;
-    case Step::R5Placed:     StepR5Placed(); return;
-    case Step::R5Aim:        StepR5Aim(player); return;
-    case Step::R5Wait:       StepR5Wait(); return;
     case Step::R4Close:      StepR4Close(); return;
     case Step::R4:           StepR4(player); return;
     case Step::R4HoldWait:   StepR4HoldWait(); return;
@@ -536,8 +538,7 @@ void ClientReset() {
     g_step = Step::Arm;
     g_stepMs = g_next = 0;
     g_pack.Reset();
-    g_drive[0].Reset();
-    g_drive[1].Reset();
+    g_drive.Reset();
     HandReset();
     g_eid = static_cast<uint32_t>(coop::element::kInvalidId);
     for (ue_wrap::FVector& v : g_last) v = {};

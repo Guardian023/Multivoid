@@ -32,8 +32,6 @@ inline constexpr const char* kLineBeforeWritten = "ci-census host before-written
 inline constexpr const char* kLineRefilled      = "ci-census host refilled";
 inline constexpr const char* kPrefixR1Done      = "ci-census client r1-done ";   // + "sent=<slices sent so far>"
 inline constexpr const char* kPrefixR4Start     = "ci-census client r4-start ";  // + "eid=<the held prop, or 0>"
-inline constexpr const char* kPrefixR5Intake    = "ci-census client r5-intake "; // + "x=<cm> y=<cm> z=<cm>"
-inline constexpr const char* kPrefixR5Placed    = "ci-census host r5-placed ";   // + "eid=<the drive at the intake>"
 inline constexpr const char* kPrefixR4Thrown    = "ci-census host r4-thrown ";   // + "eid=<the host's drive for the throw>"
 inline constexpr const char* kPrefixR4Hold     = "ci-census client r4-hold ";   // + "eid=<the held prop, or 0>"
 inline constexpr const char* kLineR4Armed       = "ci-census host r4-armed";
@@ -62,8 +60,9 @@ void LogLargest(const char* role);
 // Prints a line of the drill (every one carries the tag the rig reads).
 void Abandon(const char* role, const char* why);
 
-// A bound that passed: a FAIL line naming the row's arm and the phase, then Abandon.
-void FailPhase(const char* role, const char* phase);
+// A route step that failed or whose bound passed: a FAIL line naming the row's arm and the phase. The step ends; the
+// drill goes on to the next route (only a fixture failure Abandons).
+void RouteFail(const char* phase);
 
 // A trace stream's rate: the first 20 lines, then every 10th, at most 200 in all. Take() once per read.
 class TraceRate {

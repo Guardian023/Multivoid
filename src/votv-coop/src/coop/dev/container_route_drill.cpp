@@ -95,11 +95,9 @@ void Abandon(const char* role, const char* why) {
     UE_LOGW("[CI-CENSUS] drill ABANDONED on the %s: %s", role, why);
 }
 
-void FailPhase(const char* role, const char* phase) {
+void RouteFail(const char* phase) {
     namespace cen = coop::dev::container_route_census;
-    const char* arm = cen::IsVacuumCancel() ? "drill-vacuumcancel" : cen::IsBeforeOnly() ? "drill-before" : "drill";
-    UE_LOGE("[CI-CENSUS] %s FAIL: %s", arm, phase);
-    Abandon(role, phase);
+    UE_LOGE("[CI-CENSUS] %s FAIL: %s", cen::IsBeforeOnly() ? "drill-before" : "drill", phase);
 }
 
 void* Screen() {

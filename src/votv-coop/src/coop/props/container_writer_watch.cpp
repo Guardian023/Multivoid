@@ -73,9 +73,8 @@ sg::Verdict OnVerbEntry(const sg::Call& br) {
     // non-propInventory context carrying an addObject would otherwise poison the offset cache for
     // the session.
     if (!ci::IsInventory(br.object)) return sg::Verdict::Run;
-    // Dev: the route census counts the verb by the scope open on the stack (never a cancel but its vacuum arm).
-    if (coop::dev::container_route_census::OnVerb(br, br.tag == kVerbTakeObj) == sg::Verdict::Cancel)
-        return sg::Verdict::Cancel;
+    // Dev: the route census counts the verb by the scope open on the stack (observe-only).
+    coop::dev::container_route_census::OnVerb(br, br.tag == kVerbTakeObj);
     // A takeObj on any inventory component arms the extraction latch; addObject must not.
     if (br.tag == kVerbTakeObj) g_takeObjInFlight.store(true, std::memory_order_relaxed);
     void* owner = ci::OwnerOf(br.object);

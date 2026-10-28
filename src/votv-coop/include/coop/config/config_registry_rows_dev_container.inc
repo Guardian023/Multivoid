@@ -40,5 +40,4 @@ CFG_STRING(container_route_census, "container_route_census", "dev", "", "VOTVCOO
     "slot press, the take key, hold+run, the overlap, the vacuum; none is the game's own logic) and the slices "
     "each route sends, every 30 s and at session end. Lines tagged [CI-CENSUS]. 1 -- the census alone. drill -- "
     "also drives each route once on the client against a container the host places beside it, and reads the "
-    "open screen and the record hashes on both peers. drill-vacuumcancel -- the drill with the client's "
-    "addObject refused while the vacuum gathers (the only cancel). drill-before -- the take the host refuses.")
+    "open screen and the record hashes on both peers. drill-before -- the take the host refuses.")
