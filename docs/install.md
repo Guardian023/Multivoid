@@ -128,10 +128,9 @@ WINEDLLOVERRIDES="dwmapi.dll,main.dll,UE4SS=n,b" %command%
 ```
 
 The names do not change between Multivoid builds, so this line survives updates. Players
-reported it working in [#4](https://github.com/VOTV-MP/Multivoid/issues/4); the overlay is
-not built for the Vulkan renderer yet, so if the chat, the name tags or the F1 menu are
-missing, or you cannot type in Multivoid's text fields, start the game on DirectX 11
-(add `-dx11` after `%command%`).
+reported it working in [#4](https://github.com/VOTV-MP/Multivoid/issues/4). The overlay draws
+on DirectX 11, DirectX 12 and Vulkan; if the chat, the name tags or the F1 menu are still
+missing, start the game on DirectX 11 (add `-dx11` after `%command%`) and tell us in an issue.
 
 ## Upgrading from an old (pre-mod-folder) install
 
