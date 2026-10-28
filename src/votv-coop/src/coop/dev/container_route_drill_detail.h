@@ -35,6 +35,8 @@ inline constexpr const char* kPrefixR4Start     = "ci-census client r4-start "; 
 inline constexpr const char* kPrefixR5Intake    = "ci-census client r5-intake "; // + "x=<cm> y=<cm> z=<cm>"
 inline constexpr const char* kPrefixR5Placed    = "ci-census host r5-placed ";   // + "eid=<the drive at the intake>"
 inline constexpr const char* kPrefixR4Thrown    = "ci-census host r4-thrown ";   // + "eid=<the host's drive for the throw>"
+inline constexpr const char* kPrefixR4Hold     = "ci-census client r4-hold ";   // + "eid=<the held prop, or 0>"
+inline constexpr const char* kLineR4Armed       = "ci-census host r4-armed";
 inline constexpr const char* kPrefixClientDone  = "ci-census client done ";   // + "rb=<0|1> ic=<0|1>"
 inline constexpr const char* kPrefixHostDone    = "ci-census host done ";     // + "ih=<0|1>"
 

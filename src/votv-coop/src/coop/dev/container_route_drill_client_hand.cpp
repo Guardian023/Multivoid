@@ -12,6 +12,8 @@
 #include "coop/dev/drill_hand.h"
 #include "coop/element/registry.h"
 #include "coop/props/prop_act_request.h"
+#include "coop/props/prop_drop_intent.h"
+#include "ue_wrap/actors/container_view.h"
 #include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/log.h"
 #include "ue_wrap/core/reflection.h"
@@ -34,22 +36,37 @@ namespace {
 namespace E   = ue_wrap::engine;
 namespace R   = ue_wrap::reflection;
 namespace DV  = coop::dev::drive_drill_verbs;
+namespace CV  = ue_wrap::container_view;
 namespace cen = coop::dev::container_route_census;
 
 constexpr uint64_t kOverlapBoundMs = 8000;   // the throw to the prop entering the overlap
 
-ue_wrap::CachedObjRef g_vacuum, g_thrown;   // g_drive[0] (the state header) is the drive the host placed at the intake, [1] R4's
+ue_wrap::CachedObjRef g_vacuum, g_thrown, g_world;   // the vacuum; the drive in the hand; the world actor the throw spawned
 int      g_settled = 0;          // consecutive checks that held the step's condition
 float    g_radiusCm = 0.f;       // the vacuum's intake sphere
 uint32_t g_placedEid = 0;        // the host's drive at the intake (0 until the host says)
 uint32_t g_thrownEid = 0;        // the held drive's element id (0 if it has none)
-bool     g_thrownLive = false;   // the client's trace of the held actor still runs
+bool     g_worldLive = false;    // the client's trace of the throw's world actor still runs
+bool     g_handSaid = false;     // the hand actor's one trace line is out
 uint32_t g_mirrorEid = 0;        // the host's drive for the throw (0 until the host says)
 coop::director::AimFan g_fan;
 TraceRate g_trLocal, g_trMirror;
 bool     g_noSpace0 = false;
 uint64_t g_ov0 = 0;
 float    g_intakeCm = 0.f;       // the gathered drive's distance from the vacuum's intake
+
+uint32_t WireEid(void* actor) {   // the element id the host reads: 0 when the actor has none
+    const uint32_t eid = EidOf(actor);
+    return eid == static_cast<uint32_t>(coop::element::kInvalidId) ? 0 : eid;
+}
+
+// The container screen closed the way its close key closes it (the game's own exit), and awaited: a route that aims
+// and acts through the player's own trace runs with no interface up.
+void CloseScreen(const char* phase, Step next) {
+    if (!CV::Viewed()) { Next(next); return; }
+    CV::Close();
+    if (Expired(kHandBoundMs)) FailAt(phase);
+}
 
 bool ReadBoolField(void* obj, const wchar_t* name, bool& out) {
     int32_t off = -1;
@@ -60,6 +77,8 @@ bool ReadBoolField(void* obj, const wchar_t* name, bool& out) {
 }
 
 }  // namespace
+
+void StepR5Close() { CloseScreen("R5 the screen would not close", Step::R5); }
 
 void StepR5() {
     if (!coop::dev::drill_hand::TakeIntoHandNow(L"vacuumC", L"prop_vacuum2_C")) { FailAt("R5 the vacuum could not be taken into the hand"); return; }
@@ -119,41 +138,58 @@ void StepR5Settle(void* player) {
     Next(Step::R5Placed);
 }
 
-// The host spawns the drive AT the settled intake and says its id; the gather is called once that drive's mirror lies
-// within the intake's radius.
+// The host spawns the drive AT the settled intake and says its id; the aim begins once that drive's mirror is here.
 void StepR5Placed() {
-    void* vac = g_vacuum.Get();
-    void* suck = SuckOf(vac);
-    ue_wrap::FVector at{}, d{};
     if (!g_placedEid) {
         std::string rest;
         int eid = 0;
         if (coop::dev::drill_chat::LiveRestOf(kPrefixR5Placed, &rest) && IntAfter(rest, "eid", eid) && eid > 0)
             g_placedEid = static_cast<uint32_t>(eid);
     }
-    void* mirror = g_placedEid ? coop::element::LivePropActor(g_placedEid) : nullptr;
-    if (mirror && suck && E::TryGetComponentLocation(suck, at) && E::TryGetActorLocation(mirror, d)) {
-        const float cm = Dist(d, at);
-        if (cm <= g_radiusCm) {
-            g_drive[0].Set(mirror);
-            g_intakeCm = cm;
-            ReadBoolField(vac, L"noSpace", g_noSpace0);
-            UE_LOGI("[CI-CENSUS] drill client: R5 the placed drive (eid=%u) is %.0f cm from the intake (%.0f,%.0f,%.0f), "
-                    "radius %.0f cm, gather called", g_placedEid, cm, at.X, at.Y, at.Z, g_radiusCm);
-            bool called = false;
-            {
-                cen::GatherScope own;   // the one place drill-vacuumcancel cancels the client's addObject
-                called = CallNoArg(vac, L"gather");
-            }
-            if (!called) { FailAt("R5 gather did not dispatch"); return; }
-            Next(Step::R5Wait);
-            return;
-        }
+    if (void* mirror = g_placedEid ? coop::element::LivePropActor(g_placedEid) : nullptr) {
+        g_drive[0].Set(mirror);
+        g_fan = coop::director::AimFan();
+        Next(Step::R5Aim);
+        return;
     }
     if (Expired(kHostBoundMs)) {
-        UE_LOGW("[CI-CENSUS] drill client: R5 placed eid=%u, mirror %s", g_placedEid, mirror ? "arrived" : "not seen");
-        FailAt("R5 the placed drive never came within the intake's radius");
+        UE_LOGW("[CI-CENSUS] drill client: R5 placed eid=%u, mirror not seen", g_placedEid);
+        FailAt("R5 the placed drive's mirror never arrived");
     }
+}
+
+// Aims like a player: the camera turned through the fan round the placed drive until the intake (which follows the
+// hand) lies within its sphere's radius of it; then the gather.
+void StepR5Aim(void* player) {
+    void* vac = g_vacuum.Get();
+    void* drive = g_drive[0].Get();
+    if (!vac || !drive) { FailAt("R5 the vacuum or the placed drive is gone"); return; }
+    ue_wrap::FVector at{}, d{};
+    if (!E::TryGetComponentLocation(SuckOf(vac), at) || !E::TryGetActorLocation(drive, d)) {
+        if (Expired(kHostBoundMs)) FailAt("R5 the intake never came within reach of the placed drive");
+        return;
+    }
+    const float cm = Dist(d, at);
+    switch (g_fan.Tick(player, d, cm <= g_radiusCm)) {
+        case coop::director::AimFan::State::Working:
+            if (Expired(kHostBoundMs)) FailAt("R5 the intake never came within reach of the placed drive");
+            return;
+        case coop::director::AimFan::State::Failed:
+            FailAt("R5 the intake never came within reach of the placed drive");
+            return;
+        case coop::director::AimFan::State::Aimed: break;
+    }
+    g_intakeCm = cm;
+    ReadBoolField(vac, L"noSpace", g_noSpace0);
+    UE_LOGI("[CI-CENSUS] drill client: R5 the placed drive (eid=%u) is %.0f cm from the intake (%.0f,%.0f,%.0f), "
+            "radius %.0f cm after %d aim pose(s), gather called", g_placedEid, cm, at.X, at.Y, at.Z, g_radiusCm, g_fan.Poses());
+    bool called = false;
+    {
+        cen::GatherScope own;   // the one place drill-vacuumcancel cancels the client's addObject
+        called = CallNoArg(vac, L"gather");
+    }
+    if (!called) { FailAt("R5 gather did not dispatch"); return; }
+    Next(Step::R5Wait);
 }
 
 void StepR5Wait() {
@@ -171,28 +207,35 @@ void StepR5Wait() {
             static_cast<unsigned long long>(cen::R4Overlaps()), static_cast<unsigned long long>(cen::VacuumCancelled()));
     LogSizes("client", "the vacuum after R5", vac);
     coop::dev::drill_hand::TakeIntoHandNow(L"None", nullptr);
-    Finish("R5", Step::R4);
+    Finish("R5", Step::R4Close);
 }
 
 namespace {
-// The aimed throw: the hand's drive is named to the host, then thrown by the game's own throw at the human seam.
+// The aimed throw: the hand's drive is named to the host, then thrown by the game's own throw at the human seam. The
+// world actor the throw spawns is the one the client's place hook caught.
 void ThrowTheHeld(void* player) {
     void* held = g_thrown.Get();
-    g_thrownEid = held && EidOf(held) != static_cast<uint32_t>(coop::element::kInvalidId) ? EidOf(held) : 0;
     const bool sim = held && E::IsActorRootSimulatingPhysics(held);
     char say[48];
     std::snprintf(say, sizeof(say), "%seid=%u", kPrefixR4Start, g_thrownEid);
     coop::dev::drill_chat::Say(say);
     UE_LOGI("[CI-CENSUS] drill client: R4 the held drive eid=%u sim=%d, thrown at the backpack", g_thrownEid, sim ? 1 : 0);
     g_ov0 = cen::R4Overlaps();
-    g_thrownLive = held != nullptr;
+    g_handSaid = false;
     g_mirrorEid = 0;
     g_trLocal.Reset();
     g_trMirror.Reset();
+    void* const before = coop::prop_drop_intent::dev::LastClientPlaceSpawn();
     if (!DV::Throw(player)) { FailAt("R4 the hand's drive could not be thrown"); return; }
+    void* const placed = coop::prop_drop_intent::dev::LastClientPlaceSpawn();
+    g_worldLive = placed && placed != before;
+    if (g_worldLive) g_world.Set(placed);
+    else UE_LOGW("[CI-CENSUS] drill client: R4 the place hook caught no world actor for the throw");
     Next(Step::R4Wait);
 }
 }  // namespace
+
+void StepR4Close() { CloseScreen("R4 the screen would not close", Step::R4); }
 
 void StepR4(void* player) {
     void* drive = g_drive[1].Get();
@@ -208,17 +251,31 @@ void StepR4HoldWait() {
     if (coop::prop_act_request::dev::PendingId() == 0) Next(Step::R4Settle);
 }
 
-// The hold is settled once the hand holds a drive on two consecutive checks.
+// The hold is settled once the hand holds a drive on two consecutive checks; the host is then told, and takes the
+// drives it holds before the throw can make another.
 void StepR4Settle(void* player) {
     void* hand = HeldActor(player);
     g_settled = hand && R::ClassNameOf(hand) == kDriveClass ? g_settled + 1 : 0;
     if (g_settled >= 2) {
         g_thrown.Set(hand);
+        g_thrownEid = WireEid(hand);
+        char say[48];
+        std::snprintf(say, sizeof(say), "%seid=%u", kPrefixR4Hold, g_thrownEid);
+        coop::dev::drill_chat::Say(say);
+        Next(Step::R4Armed);
+        return;
+    }
+    if (Expired(kHandBoundMs)) FailAt("R4 the hold never settled");
+}
+
+// The aim and the throw wait for the host to say it holds its set of drives.
+void StepR4Armed() {
+    if (coop::dev::drill_chat::ChatHasLive(kLineR4Armed)) {
         g_fan = coop::director::AimFan();
         Next(Step::R4Aim);
         return;
     }
-    if (Expired(kHandBoundMs)) FailAt("R4 the hold never settled");
+    if (Expired(kHostBoundMs)) FailAt("R4 the host never armed the throw");
 }
 
 // The camera turned through the fan round the backpack until the player's own interaction trace strikes it (the read
@@ -235,18 +292,22 @@ void StepR4Aim(void* player) {
 }
 
 namespace {
-// From the throw to r4-done, one read of each cached ref per check: the actor the client threw, then the host's copy
-// of the drive its drop path made.
+// From the throw to r4-done, one read of each cached ref per check: the hand actor once, the world actor the throw
+// spawned until it dies, then the host's copy of the drive its drop path made.
 void TraceR4() {
-    if (g_thrownLive) {
-        void* held = g_thrown.Get();
+    const unsigned long long now = static_cast<unsigned long long>(cen::UnixMs());
+    if (!g_handSaid) {
+        g_handSaid = true;
+        UE_LOGI("[CI-CENSUS] r4 client hand live=%d eid=%u t=%llu", g_thrown.Get() ? 1 : 0, g_thrownEid, now);
+    }
+    if (g_worldLive) {
+        void* world = g_world.Get();
         ue_wrap::FVector at{};
-        const bool live = held && E::TryGetActorLocation(held, at);
+        const bool live = world && E::TryGetActorLocation(world, at);
         if (!live || g_trLocal.Take())   // the line that says it is gone always prints
             UE_LOGI("[CI-CENSUS] r4 client local live=%d sim=%d eid=%u t=%llu pos=(%.1f,%.1f,%.1f)", live ? 1 : 0,
-                    live && E::IsActorRootSimulatingPhysics(held) ? 1 : 0, g_thrownEid,
-                    static_cast<unsigned long long>(cen::UnixMs()), at.X, at.Y, at.Z);
-        g_thrownLive = live;
+                    live && E::IsActorRootSimulatingPhysics(world) ? 1 : 0, live ? WireEid(world) : 0u, now, at.X, at.Y, at.Z);
+        g_worldLive = live;
     }
     if (!g_mirrorEid) {
         std::string rest;
@@ -258,7 +319,7 @@ void TraceR4() {
     ue_wrap::FVector at{};
     if (mirror && E::TryGetActorLocation(mirror, at) && g_trMirror.Take())
         UE_LOGI("[CI-CENSUS] r4 client mirror eid=%u sim=%d t=%llu pos=(%.1f,%.1f,%.1f)", g_mirrorEid,
-                E::IsActorRootSimulatingPhysics(mirror) ? 1 : 0, static_cast<unsigned long long>(cen::UnixMs()), at.X, at.Y, at.Z);
+                E::IsActorRootSimulatingPhysics(mirror) ? 1 : 0, now, at.X, at.Y, at.Z);
 }
 }  // namespace
 
@@ -274,13 +335,14 @@ void StepR4Wait() {
 
 void HandReset() {
     g_thrown.Reset();
+    g_world.Reset();
     g_vacuum.Reset();
     g_noSpace0 = false;
     g_ov0 = 0;
     g_intakeCm = g_radiusCm = 0.f;
     g_settled = 0;
     g_placedEid = g_thrownEid = g_mirrorEid = 0;
-    g_thrownLive = false;
+    g_worldLive = g_handSaid = false;
     g_fan = coop::director::AimFan();
     g_trLocal.Reset();
     g_trMirror.Reset();

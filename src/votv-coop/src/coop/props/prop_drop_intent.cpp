@@ -19,6 +19,7 @@
 #include "coop/props/container_birth.h"           // a thrown container's birth slice
 #include "coop/session/world_load_episode.h"  // InEpisode (quiet during the join loadObjects churn)
 #include "ue_wrap/core/call.h"                   // ParamFrame + Call (setKey on the host re-spawn)
+#include "ue_wrap/core/cached_obj_ref.h"          // dev::LastClientPlaceSpawn
 #include "ue_wrap/engine/engine.h"                 // BeginDeferredSpawn/FinishDeferredSpawn/SetActorScale3D
 #include "ue_wrap/core/fname_utils.h"            // StringToFName
 #include "ue_wrap/core/game_thread.h"
@@ -84,6 +85,7 @@ struct PendingPlace {
     bool    playerSpawn = false;
 };
 std::vector<PendingPlace> g_pending;         // GT-only
+ue_wrap::CachedObjRef g_lastPlace;           // GT-only; the most recent pending place spawn's actor (dev read only)
 constexpr size_t kMaxPending  = 32;          // runaway backstop (a settled client rarely has >1 in flight)
 constexpr int    kMaxKeyTries = 8;           // ~8 net-pump ticks (~64 ms) for the Key to restore, then give up
 
@@ -195,6 +197,7 @@ void OnClientFinishSpawn(void* /*context*/, void* /*srcObj*/, void* result) {
             actor, R::ClassNameOf(actor), ue_wrap::prop::GetInteractableKeyString(actor),
             fromContainerExtract);
     }
+    g_lastPlace.Set(actor);
     g_pending.push_back(PendingPlace{actor, R::InternalIndexOf(actor), 0, fromContainerExtract,
                                      playerAuthored});
     if (fromContainerExtract)
@@ -618,6 +621,11 @@ void Reset() {
     g_pending.clear();
     g_parkedKeys.clear();
     g_parkFifo.clear();
+    g_lastPlace.Reset();
 }
+
+namespace dev {
+void* LastClientPlaceSpawn() { return g_lastPlace.Get(); }
+}  // namespace dev
 
 }  // namespace coop::prop_drop_intent

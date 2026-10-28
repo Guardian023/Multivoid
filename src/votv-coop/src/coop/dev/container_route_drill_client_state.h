@@ -14,8 +14,8 @@ inline constexpr uint64_t kHostBoundMs = 60000;   // the host's raw write, its r
 
 enum class Step : uint8_t {
     Arm, Find, Settle, Open, OpenWait, R1, R1Wait, R1Done, R2Refill, R2, R2Call, R2Wait, R3, R3Use, R3Wait,
-    R5, R5Use, R5Settle, R5Placed, R5Wait,
-    R4, R4HoldWait, R4Settle, R4Aim, R4Wait,
+    R5Close, R5, R5Use, R5Settle, R5Placed, R5Aim, R5Wait,
+    R4Close, R4, R4HoldWait, R4Settle, R4Armed, R4Aim, R4Wait,
     ViewOpen, ViewOpenWait, ViewWait, BeforeReady, BeforeWait, BeforeTake, BeforeSettle, DoneWait, Done
 };
 
@@ -31,14 +31,18 @@ void Finish(const char* label, Step next);
 void* HeldActor(void* player);
 
 // The hand routes (the hand file): each is one step of ClientTick's switch; HandReset starts them over.
+void StepR5Close();
 void StepR5();
 void StepR5Use(void* player);
 void StepR5Settle(void* player);
 void StepR5Placed();
+void StepR5Aim(void* player);
 void StepR5Wait();
+void StepR4Close();
 void StepR4(void* player);
 void StepR4HoldWait();
 void StepR4Settle(void* player);
+void StepR4Armed();
 void StepR4Aim(void* player);
 void StepR4Wait();
 void HandReset();

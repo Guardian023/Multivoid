@@ -10,8 +10,10 @@
 #include "coop/player/puppet_drive.h"
 #include "coop/player/remote_player.h"
 #include "coop/props/container_contents_sync.h"
+#include "coop/props/prop_save_data.h"   // Covers
 #include "ue_wrap/actors/container_inventory.h"
 #include "ue_wrap/actors/container_view.h"
+#include "ue_wrap/actors/save_record.h"
 #include "ue_wrap/core/asset_load.h"
 #include "ue_wrap/core/cached_obj_ref.h"
 #include "ue_wrap/core/call.h"
@@ -23,6 +25,7 @@
 
 #include <windows.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <cstdio>
 #include <string>
@@ -65,7 +68,8 @@ bool     g_r5Placed = false, g_r5Said = false;
 bool     g_r4Started = false, g_r4Over = false, g_r4Gone = false;
 uint64_t g_r4StartMs = 0;
 uint64_t g_ov0 = 0;          // the census's R4 overlaps at r4-start
-coop::element::ElementId g_hi = 0;   // the registry's highest live eid at r4-start
+std::vector<uint32_t> g_driveSet, g_now;   // the live drive element ids at r4-hold; the ones live now
+bool     g_r4Armed = false;  // the set is taken
 uint32_t g_r4Eid = 0;        // the drive the throw made here (0 until found)
 std::vector<coop::element::Registry::ActorIdPair> g_snap;
 TraceRate g_trHost;
@@ -231,28 +235,30 @@ void SayR5Placed() {
     g_r5Said = true;
 }
 
-// The highest element id live in the registry now.
-coop::element::ElementId HighestLiveEid() {
+// The live prop_drive_C element ids now, in `out`.
+void LiveDriveEids(std::vector<uint32_t>& out) {
+    out.clear();
+    void* driveCls = R::FindClass(kDriveClass);
     coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, g_snap);
-    coop::element::ElementId hi = 0;
-    for (const auto& p : g_snap) hi = p.id > hi ? p.id : hi;
-    return hi;
+    for (const auto& p : g_snap)
+        if (driveCls && R::ClassOf(coop::element::LivePropActor(p.id)) == driveCls) out.push_back(p.id);
 }
 
-// The drive the host's drop path made for the client's throw: the first prop_drive_C element above the id recorded at
-// r4-start. True once found and named to the client.
+// The drive the host's drop path made for the client's throw: the first prop_drive_C element that is not in the set
+// taken at r4-hold. True once found and named to the client.
 bool FindThrownDrive() {
-    coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, g_snap);
-    coop::element::ElementId best = coop::element::kInvalidId;
-    for (const auto& p : g_snap)
-        if (p.id > g_hi && p.id < best && R::ClassNameOf(coop::element::LivePropActor(p.id)) == kDriveClass) best = p.id;   // null-safe
-    if (best == coop::element::kInvalidId) return false;
+    LiveDriveEids(g_now);
+    uint32_t best = static_cast<uint32_t>(coop::element::kInvalidId);
+    for (uint32_t id : g_now)
+        if (id < best && std::find(g_driveSet.begin(), g_driveSet.end(), id) == g_driveSet.end()) best = id;
+    if (best == static_cast<uint32_t>(coop::element::kInvalidId)) return false;
     g_r4Prop.Set(coop::element::LivePropActor(best));
     g_r4Eid = best;
     char say[48];
     std::snprintf(say, sizeof(say), "%seid=%u", kPrefixR4Thrown, best);
     coop::dev::drill_chat::Say(say);
-    UE_LOGI("[CI-CENSUS] drill host: the throw made a drive here, eid=%u (registry highest at r4-start %u)", best, g_hi);
+    UE_LOGI("[CI-CENSUS] drill host: the throw made a drive here, eid=%u (not among the %zu armed at r4-hold)", best,
+            g_driveSet.size());
     return true;
 }
 
@@ -282,14 +288,19 @@ void StepWaitRoutes() {
     }
     if (g_r5Placed && !g_r5Said) SayR5Placed();
     if (g_step == Step::Done) return;
+    if (!g_r4Armed && coop::dev::drill_chat::LiveRestOf(kPrefixR4Hold, &rest)) {
+        g_r4Armed = true;
+        LiveDriveEids(g_driveSet);
+        coop::dev::drill_chat::Say(kLineR4Armed);
+        UE_LOGI("[CI-CENSUS] drill host: r4-hold, armed with %zu live drive element(s)", g_driveSet.size());
+    }
     if (!g_r4Started && coop::dev::drill_chat::LiveRestOf(kPrefixR4Start, &rest) && IntAfter(rest, "eid", held)) {
         g_r4Started = true;
         g_r4StartMs = ::GetTickCount64();
         g_ov0 = cen::R4Overlaps();
-        g_hi = HighestLiveEid();
-        UE_LOGI("[CI-CENSUS] drill host: r4-start, the client holds eid=%d, registry highest live eid %u", held, g_hi);
+        UE_LOGI("[CI-CENSUS] drill host: r4-start, the client holds eid=%d", held);
     }
-    if (g_r4Started && !g_r4Eid && !FindThrownDrive() && ::GetTickCount64() - g_r4StartMs > kThrownBoundMs) {
+    if (g_r4Started && g_r4Armed && !g_r4Eid && !FindThrownDrive() && ::GetTickCount64() - g_r4StartMs > kThrownBoundMs) {
         FailAt("R4 the host made no drive for the throw");
         return;
     }
@@ -325,6 +336,18 @@ void StepViewOpen() {
         ue_wrap::FVector put{};
         void* item = cls && E::TryGetActorLocation(pack, put) ? E::SpawnActor(cls, {put.X, put.Y, put.Z + 90.f}) : nullptr;
         if (!item) { Fail("the second item did not spawn"); return; }
+        // The record lane admits the class (Covers) and its capture neither refuses nor ejects the class: said, and a
+        // refusal ends the read rather than appending a record the lane could not have made.
+        ue_wrap::save_record::SaveRecord probe;
+        const bool covers = coop::prop_save_data::Covers(item);
+        const bool captured = covers && ue_wrap::save_record::CaptureRecord(item, probe);
+        UE_LOGI("[CI-CENSUS] drill host: the second class %ls covers=%d capture=%d", R::ClassNameOf(item).c_str(), covers ? 1 : 0,
+                captured ? 1 : 0);
+        if (!captured) {
+            E::DestroyActor(item);
+            FailAt("view the second class's record would not capture");
+            return;
+        }
         bool written = false;
         {
             cen::Quiet quiet;
@@ -422,7 +445,8 @@ void HostReset() {
     g_drives0 = 0;
     g_placeMs = g_r4StartMs = g_ov0 = 0;
     g_r5Placed = g_r5Said = g_r4Started = g_r4Over = g_r4Gone = false;
-    g_hi = 0;
+    g_driveSet.clear();
+    g_r4Armed = false;
     g_r4Eid = 0;
     g_trHost.Reset();
     g_opened = false;

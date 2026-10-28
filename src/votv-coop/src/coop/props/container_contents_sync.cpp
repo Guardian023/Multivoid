@@ -696,7 +696,8 @@ bool DevRawAppend(uint32_t eid, bool publish) {
     return ApplyAppended(eid, recs, publish);
 }
 
-// The item's record is the one the game's addObject files: the item's own getData (save_record's CaptureRecord).
+// The item's own getData (save_record's CaptureRecord), which is what addObject files. A raw write is not a put
+// replay: the record lacks the owner's fridge flag that addObject appends to bools[0].
 bool DevRawAppendActor(uint32_t eid, void* item, bool publish) {
     void* actor = LivePropActor(eid);
     void* inv = actor && ci::IsContainer(actor) ? ci::InventoryOf(actor) : nullptr;

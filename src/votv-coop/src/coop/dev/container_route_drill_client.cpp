@@ -351,14 +351,14 @@ void StepR2Wait() {
 }
 
 void StepR3() {
-    if (!coop::dev::drill_hand::TakeIntoHandNow(L"drive", kDriveClass)) { Skip("R3", "the drive could not be taken into the hand", Step::R5); return; }
+    if (!coop::dev::drill_hand::TakeIntoHandNow(L"drive", kDriveClass)) { Skip("R3", "the drive could not be taken into the hand", Step::R5Close); return; }
     Next(Step::R3Use);   // the hand's actor is read a tick later
 }
 
 void StepR3Use(void* player) {
     void* hand = HeldActor(player);
     g_slice0 = cen::SlicesSent();
-    if (!hand || !UseWithRun(player, g_pack.Get(), hand)) { Skip("R3", "no hand actor, or playerUsedOn did not dispatch", Step::R5); return; }
+    if (!hand || !UseWithRun(player, g_pack.Get(), hand)) { Skip("R3", "no hand actor, or playerUsedOn did not dispatch", Step::R5Close); return; }
     UE_LOGI("[CI-CENSUS] drill client: R3 hold+run used on the backpack (route entries %llu)",
             static_cast<unsigned long long>(cen::RouteEntries(2)));
     Next(Step::R3Wait);
@@ -368,7 +368,7 @@ void StepR3Wait() {
     if (!SliceSent("R3")) return;
     LogSizes("client", "after R3", g_pack.Get());
     coop::dev::drill_hand::TakeIntoHandNow(L"None", nullptr);
-    Finish("R3", Step::R5);
+    Finish("R3", Step::R5Close);
 }
 
 // ---- the open screen, then the take the host refuses ----------------------------------------------------------
@@ -506,14 +506,18 @@ void ClientTick(coop::net::Session*) {
     case Step::R3:           StepR3(); return;
     case Step::R3Use:        StepR3Use(player); return;
     case Step::R3Wait:       StepR3Wait(); return;
+    case Step::R5Close:      StepR5Close(); return;
     case Step::R5:           StepR5(); return;
     case Step::R5Use:        StepR5Use(player); return;
     case Step::R5Settle:     StepR5Settle(player); return;
     case Step::R5Placed:     StepR5Placed(); return;
+    case Step::R5Aim:        StepR5Aim(player); return;
     case Step::R5Wait:       StepR5Wait(); return;
+    case Step::R4Close:      StepR4Close(); return;
     case Step::R4:           StepR4(player); return;
     case Step::R4HoldWait:   StepR4HoldWait(); return;
     case Step::R4Settle:     StepR4Settle(player); return;
+    case Step::R4Armed:      StepR4Armed(); return;
     case Step::R4Aim:        StepR4Aim(player); return;
     case Step::R4Wait:       StepR4Wait(); return;
     case Step::ViewOpen:     StepViewOpen(); return;

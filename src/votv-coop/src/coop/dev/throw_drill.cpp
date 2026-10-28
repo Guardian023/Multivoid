@@ -199,7 +199,10 @@ void HostTick(coop::net::Session* s) {
             coop::dev::container_route_census::Quiet quiet;   // the fixture's fill is no route the census counts
             for (int i = 0; i < kItems; ++i) {
                 void* item = E::SpawnActor(itemCls, {put.X, put.Y, put.Z + 60.f + 30.f * i});
-                if (item && AddObject(pack, item)) ++added;
+                if (item && AddObject(pack, item)) {
+                    ++added;
+                    E::DestroyActor(item);   // as every BP caller does after a put that took
+                }
             }
         }
         size_t n = 0;
