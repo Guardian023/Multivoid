@@ -215,11 +215,12 @@ namespace {
 // world actor the throw spawns is the one the client's place hook caught.
 void ThrowTheHeld(void* player) {
     void* held = g_thrown.Get();
-    const bool sim = held && E::IsActorRootSimulatingPhysics(held);
+    char simText[16] = "live=0";   // a hand actor that is gone has no sim to read
+    if (held) std::snprintf(simText, sizeof(simText), "sim=%d", E::IsActorRootSimulatingPhysics(held) ? 1 : 0);
     char say[48];
     std::snprintf(say, sizeof(say), "%seid=%u", kPrefixR4Start, g_thrownEid);
     coop::dev::drill_chat::Say(say);
-    UE_LOGI("[CI-CENSUS] drill client: R4 the held drive eid=%u sim=%d, thrown at the backpack", g_thrownEid, sim ? 1 : 0);
+    UE_LOGI("[CI-CENSUS] drill client: R4 the held drive eid=%u %s, thrown at the backpack", g_thrownEid, simText);
     g_ov0 = cen::R4Overlaps();
     g_handSaid = false;
     g_mirrorEid = 0;
@@ -230,7 +231,7 @@ void ThrowTheHeld(void* player) {
     void* const placed = coop::prop_drop_intent::dev::LastClientPlaceSpawn();
     g_worldLive = placed && placed != before;
     if (g_worldLive) g_world.Set(placed);
-    else UE_LOGW("[CI-CENSUS] drill client: R4 the place hook caught no world actor for the throw");
+    UE_LOGI("[CI-CENSUS] r4 client local caught=%d", g_worldLive ? 1 : 0);
     Next(Step::R4Wait);
 }
 }  // namespace
@@ -248,7 +249,8 @@ void StepR4(void* player) {
 }
 
 void StepR4HoldWait() {
-    if (coop::prop_act_request::dev::PendingId() == 0) Next(Step::R4Settle);
+    if (coop::prop_act_request::dev::PendingId() == 0) { Next(Step::R4Settle); return; }
+    if (Expired(kHandBoundMs)) FailAt("R4 the hold's grant never came");
 }
 
 // The hold is settled once the hand holds a drive on two consecutive checks; the host is then told, and takes the
@@ -285,7 +287,9 @@ void StepR4Aim(void* player) {
     ue_wrap::FVector at{};
     if (!pack || !E::TryGetActorLocation(pack, at)) { FailAt("R4 the backpack's mirror died"); return; }
     switch (g_fan.Tick(player, at, E::ReadMainPlayerHitActor(player) == pack)) {
-        case coop::director::AimFan::State::Working: return;
+        case coop::director::AimFan::State::Working:
+            if (Expired(kHostBoundMs)) FailAt("R4 the aim never struck the backpack");
+            return;
         case coop::director::AimFan::State::Failed:  FailAt("R4 the aim never struck the backpack"); return;
         case coop::director::AimFan::State::Aimed:   ThrowTheHeld(player); return;
     }

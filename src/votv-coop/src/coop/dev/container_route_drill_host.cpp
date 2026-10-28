@@ -45,9 +45,10 @@ constexpr uint64_t kFillBoundMs    = 5000;   // the spawn to the backpack's inve
 constexpr uint64_t kPublishBoundMs = 10000;  // the fill to the first fan-out
 constexpr uint64_t kViewBoundMs    = 5000;   // the open verb to the screen showing the backpack
 constexpr uint64_t kJudgeBoundMs   = 15000;  // the client's R1 slice sent to the host judging it
-constexpr const wchar_t* kSecondClass = L"prop_floppyDisc_R_C";   // the second class of read 7 (kerfur_serve_drill spawns it too)
+constexpr const wchar_t* kSecondClass = L"prop_floppyDisc_R_C";   // the second class of read 7; no drill puts a disc into a container, so the capture check below is its guard
 constexpr const wchar_t* kSecondPath  = L"/Game/objects/prop_floppyDisc_R.prop_floppyDisc_R_C";
 constexpr uint64_t kPlaceBoundMs   = 5000;   // the R5 drive's spawn to its element id
+constexpr uint64_t kRoutesBoundMs  = 180000; // the routes phase: the client's R5 and R4 and the host's answers
 constexpr uint64_t kThrownBoundMs  = 30000;  // r4-start to the host holding a drive made by the throw
 
 enum class Step : uint8_t { Arm, Fill, Publish, WaitR1, WaitJudge, WaitRoutes, ViewOpen, ViewRegen, WaitBefore, WaitDone, Done };
@@ -240,8 +241,10 @@ void LiveDriveEids(std::vector<uint32_t>& out) {
     out.clear();
     void* driveCls = R::FindClass(kDriveClass);
     coop::element::Registry::Get().SnapshotActorsByType(coop::element::ElementType::Prop, g_snap);
-    for (const auto& p : g_snap)
-        if (driveCls && R::ClassOf(coop::element::LivePropActor(p.id)) == driveCls) out.push_back(p.id);
+    for (const auto& p : g_snap) {
+        void* a = coop::element::LivePropActor(p.id);   // null when the element's actor is gone
+        if (a && driveCls && R::ClassOf(a) == driveCls) out.push_back(p.id);
+    }
 }
 
 // The drive the host's drop path made for the client's throw: the first prop_drive_C element that is not in the set
@@ -313,6 +316,7 @@ void StepWaitRoutes() {
         }
     }
     if ((!g_r4Started || g_r4Eid) && coop::dev::drill_chat::ChatHasLive(kLineRoutesDone)) Next(Step::ViewOpen);
+    else if (Expired(kRoutesBoundMs)) FailAt("the client never reported its routes done");
 }
 
 // Read 7: the host's own screen onto the backpack, one raw write the way an accepted client slice is applied, and

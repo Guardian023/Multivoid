@@ -70,8 +70,8 @@ void OnReelEjectIntent(coop::net::Session& session, const coop::net::PropDropInt
 void Reset();
 
 namespace dev {   // called only from src/coop/dev/ (the census drill); read-only, inert unless called
-// The actor of the most recent place spawn the client's FinishSpawn hook enqueued (the world actor a throw spawned),
-// or null when none or it is gone. Game thread.
+// The actor of the most recent place spawn the client's FinishSpawn hook enqueued while the census row is armed (the
+// world actor a throw spawned), or null when none or it is gone. Game thread.
 void* LastClientPlaceSpawn();
 }  // namespace dev
 
